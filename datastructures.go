@@ -25,6 +25,7 @@ type State struct {
 
 type RequestGet struct {
 	Value           string
+	Relation        string
 	MaxAssociations int
 }
 

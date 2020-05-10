@@ -73,10 +73,12 @@ Echo works a lot like print, except it has a child command.`,
 		Long:  `Associate two entries.`,
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := RequestGet{
-				args[0],
-				0,
+			a := RequestGet{}
+			a.Value = args[0]
+			if len(args) > 1 {
+				a.Relation = args[1]
 			}
+			a.MaxAssociations = 0
 			b, _ := json.Marshal(a)
 			SendToWebservice("Get", b, GetHandler)
 		},
