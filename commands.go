@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"nicecode.rocks/uid/tie-client"
 )
 
 func cmdList() []*cobra.Command {
@@ -41,11 +42,11 @@ Echo works a lot like print, except it has a child command.`,
 		Long:  `Set current namespace + collection.`,
 		Args:  cobra.MinimumNArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
-			state.Webservice = args[0]
-			state.Namespace = args[1]
-			state.Collection = args[2]
-			SaveJSON(configPath, state)
-			PrintState()
+			tie.CurrentState.Webservice = args[0]
+			tie.CurrentState.Namespace = args[1]
+			tie.CurrentState.Collection = args[2]
+			SaveJSON(configPath, tie.CurrentState)
+			tie.PrintState()
 		},
 	}
 	cmds = append(cmds, cmdSetState)
@@ -56,13 +57,13 @@ Echo works a lot like print, except it has a child command.`,
 		Long:  `Associate two entries.`,
 		Args:  cobra.MinimumNArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := Association{
+			a := tie.Association{
 				args[0],
 				args[1],
 				args[2],
 			}
 			b, _ := json.Marshal(a)
-			SendToWebservice("Associate", b, AddHandler)
+			tie.SendToWebservice("Associate", b, AddHandler)
 		},
 	}
 	cmds = append(cmds, cmdAdd)
@@ -73,14 +74,14 @@ Echo works a lot like print, except it has a child command.`,
 		Long:  `Associate two entries.`,
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := RequestGet{}
+			a := tie.RequestGet{}
 			a.Value = args[0]
 			if len(args) > 1 {
 				a.Relation = args[1]
 			}
 			a.MaxAssociations = 0
 			b, _ := json.Marshal(a)
-			SendToWebservice("Get", b, GetHandler)
+			tie.SendToWebservice("Get", b, GetHandler)
 		},
 	}
 	cmds = append(cmds, cmdGet)
@@ -89,9 +90,9 @@ Echo works a lot like print, except it has a child command.`,
 }
 
 func AddHandler(resp json.RawMessage) {
-	s := Success{}
+	s := tie.Success{}
 	if err := json.Unmarshal(resp, &s); err == nil {
-		if verbose || !s.Success {
+		if tie.CurrentState.Verbose || !s.Success {
 			fmt.Println(resp)
 		}
 	} else {
@@ -101,7 +102,7 @@ func AddHandler(resp json.RawMessage) {
 }
 
 func GetHandler(resp json.RawMessage) {
-	var result []ReplyGet
+	var result []tie.ReplyGet
 	err := json.Unmarshal(resp, &result)
 	if err != nil {
 		fmt.Println("Error handling Get reponse:", err)

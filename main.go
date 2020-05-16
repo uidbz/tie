@@ -6,14 +6,14 @@ import (
 	"os/user"
 
 	"github.com/spf13/cobra"
+	"nicecode.rocks/uid/tie-client"
 )
 
 var (
-	state      State
+	// state      State
 	config     string
 	configDir  string
 	configPath string
-	verbose    bool
 )
 
 func main() {
@@ -22,7 +22,7 @@ func main() {
 	var rootCmd = &cobra.Command{Use: "app"}
 	rootCmd.AddCommand(cmdList()...)
 	rootCmd.PersistentFlags().StringVarP(&config, "config", "c", "config", "Config file to load")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")
 
 	rootCmd.Execute()
 }
@@ -42,14 +42,17 @@ func initConfig() {
 				panic("Can't create " + configDir + "\nExiting...")
 			}
 		}
-		state.Webservice = "http://localhost:8080"
-		state.Namespace = "Collections"
-		state.Collection = "Main"
+		s := tie.State{
+			Webservice: "http://localhost:8080",
+			Namespace:  "Collections",
+			Collection: "Main",
+		}
+		tie.CurrentState = s
 
-		SaveJSON(configPath, state)
-		PrintState()
+		SaveJSON(configPath, tie.CurrentState)
+		tie.PrintState()
 	} else {
-		LoadJSON(configPath, &state)
-		PrintState()
+		LoadJSON(configPath, &tie.CurrentState)
+		tie.PrintState()
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+
+	"nicecode.rocks/uid/tie-client"
 )
 
 func LoadJSON(inputFile string, dest interface{}) bool {
@@ -20,7 +22,7 @@ func LoadJSON(inputFile string, dest interface{}) bool {
 			log.Fatal(err2)
 			return false
 		} else {
-			if verbose {
+			if tie.CurrentState.Verbose {
 				log.Println("Loading succeeded: " + inputFile)
 			}
 			return true
