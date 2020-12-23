@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"os/user"
@@ -14,9 +16,25 @@ var (
 	config     string
 	configDir  string
 	configPath string
+	hashRoot   = "/data/"
+	key        []byte
 )
 
+const (
+	tieKey = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
+)
+
+func InitKey() {
+	k, err := hex.DecodeString(tieKey)
+	if err != nil {
+		fmt.Printf("Cannot decode hex key: %v", err) // add error handling
+		return
+	}
+	key = k
+}
+
 func main() {
+	InitKey()
 	cobra.OnInitialize(initConfig)
 
 	var rootCmd = &cobra.Command{Use: "app"}
