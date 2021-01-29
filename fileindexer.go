@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	// "git.sr.ht/~uid/tie-client"
 	"github.com/h2non/filetype"
-	// "nicecode.rocks/uid/tiedb"
 )
 
 func TypeSpecificTags(path, relPath string) error {
@@ -112,21 +112,6 @@ func CreateImageThumbnail(source, dest string) {
 		fmt.Println(err)
 	}
 }
-
-// func CreateVideoThumbnail(source, dest string) {
-// 	args := []string{
-// 		source,
-// 		"-thumbnail", "200x200^",
-// 		"-gravity", "center",
-// 		"-extent", "200x200",
-// 		"-auto-orient",
-// 		dest,
-// 	}
-// 	cmd := exec.Command("convert", args...) //source+" -thumbnail 200x200^ -gravity center -extent 200x200 -auto-orient "+dest)
-// 	if err := cmd.Run(); err != nil {
-// 		fmt.Println(err)
-// 	}
-// }
 
 func CreateVideoThumbnail(source, dest string) {
 	args := []string{

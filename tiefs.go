@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nicecode.rocks/uid/tie-client"
+	"git.sr.ht/~uid/tie-client"
 )
 
 func CreateTieFilesystem(path string) {

@@ -7,8 +7,8 @@ import (
 	"os"
 	"os/user"
 
+	"git.sr.ht/~uid/tie-client"
 	"github.com/spf13/cobra"
-	"nicecode.rocks/uid/tie-client"
 )
 
 var (
@@ -61,7 +61,7 @@ func initConfig() {
 			}
 		}
 		s := tie.State{
-			Webservice: "http://localhost:8080",
+			Webservice: "https://localhost:1161",
 			Namespace:  "Collections",
 			Collection: "Main",
 		}

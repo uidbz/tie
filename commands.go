@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"git.sr.ht/~uid/tie-client"
 	"github.com/spf13/cobra"
-	"nicecode.rocks/uid/tie-client"
 )
 
 func cmdList() []*cobra.Command {
