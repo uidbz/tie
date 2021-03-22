@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
 	"os/user"
+	"strings"
 
 	"git.sr.ht/~uid/tie-client"
 	"github.com/spf13/cobra"
@@ -18,7 +20,13 @@ var (
 	configPath string
 	hashRoot   = "/data/"
 	key        []byte
+	stdin      []Stdin
 )
+
+type Stdin struct {
+	hash string
+	path string
+}
 
 const (
 	tieKey = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
@@ -34,6 +42,30 @@ func InitKey() {
 }
 
 func main() {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		panic(err)
+	}
+	if !(fi.Mode()&os.ModeNamedPipe == 0) {
+		scanner := bufio.NewScanner(os.Stdin)
+		first := true
+		for scanner.Scan() {
+			line := scanner.Text()
+			if first && len(line) > 1 && line[0] == '{' { // json input
+
+			} else {
+				parts := strings.Split(line, "\t")
+				if len(parts) == 2 {
+					input := Stdin{parts[0], parts[1]}
+					stdin = append(stdin, input)
+				}
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			log.Println(err)
+		}
+	}
 	InitKey()
 	cobra.OnInitialize(initConfig)
 

@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"git.sr.ht/~uid/tie-client"
@@ -66,19 +64,35 @@ Echo works a lot like print, except it has a child command.`,
 	}
 	cmds = append(cmds, cmdSetCollection)
 
+	minArgs := 3
+	if len(stdin) != 0 {
+		minArgs = 2
+	}
 	var cmdAdd = &cobra.Command{
 		Use:   "add [key] [value1] [value2]",
 		Short: "Associate two entries.",
 		Long:  `Associate two entries.`,
-		Args:  cobra.MinimumNArgs(3),
+		Args:  cobra.MinimumNArgs(minArgs),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := tie.Association{
-				args[0],
-				args[1],
-				args[2],
+			if minArgs == 2 {
+				for _, x := range stdin {
+					a := tie.Association{
+						x.hash,
+						args[0],
+						args[1],
+					}
+					b, _ := json.Marshal(a)
+					tie.SendToWebservice("Associate", b, AddHandler)
+				}
+			} else {
+				a := tie.Association{
+					args[0],
+					args[1],
+					args[2],
+				}
+				b, _ := json.Marshal(a)
+				tie.SendToWebservice("Associate", b, AddHandler)
 			}
-			b, _ := json.Marshal(a)
-			tie.SendToWebservice("Associate", b, AddHandler)
 		},
 	}
 	cmds = append(cmds, cmdAdd)
@@ -177,20 +191,7 @@ Echo works a lot like print, except it has a child command.`,
 		Long:  `tag current dir`,
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("INPUT", args[0])
-			fi, _ := os.Lstat(args[0])
-			path, _ := filepath.Abs(args[0])
-			if fi.IsDir() {
-				ProcessDir(path, hashRoot, args[1:])
-			} else {
-				ProcessFile(path, fi.Name(), hashRoot, args[1:])
-			}
-
-			// var input, _ = os.Getwd()
-			// if string(input[len(input)-1]) == "/" {
-			// 	input = input[0 : len(input)-1]
-			// }
-
+			Tag(args[0], args[1:])
 		},
 	}
 	cmds = append(cmds, cmdTag)
@@ -218,8 +219,21 @@ func GetHandler(resp json.RawMessage) {
 	}
 	for _, x := range result {
 		for i, _ := range x.Associations {
-			fmt.Println(x.Item + "\t" + x.Relations[i] + "\t" + x.Associations[i])
+			key := x.Item
+			value1 := x.Relations[i]
+			value2 := x.Associations[i]
+			// source := "/.data/"
 
+			// if key[0:3] == "hh/" {
+			// 	key = source + key
+			// }
+			// if value1[0:3] == "hh/" {
+			// 	value1 = source + value1
+			// }
+			// if value2[0:3] == "hh/" {
+			// 	value2 = source + value2
+			// }
+			fmt.Println(key + "\t" + value1 + "\t" + value2)
 		}
 	}
 }

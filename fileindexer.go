@@ -40,6 +40,13 @@ func TypeSpecificTags(path, relPath string) error {
 	TieAssociate(newEntry, file, is)
 	TieAssociate(file, newEntry, is)
 
+	ext := filepath.Ext(path)
+
+	switch ext {
+	case "md":
+
+	}
+
 	f, err := os.Open(path)
 	defer f.Close()
 
