@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	"nicecode.rocks/uid/tie-client"
+	"git.sr.ht/~uid/tie-client"
 )
 
 func LoadJSON(inputFile string, dest interface{}) bool {

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 
 	"git.sr.ht/~uid/tie-client"
@@ -82,12 +83,11 @@ func initConfig() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	configDir = usr.HomeDir + "/.config/tie"
+	configDir = filepath.Join(usr.HomeDir, ".config", "tie")
 	configPath = configDir + "/" + config + ".json"
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// path/to/whatever does not exist
-		if a, b := Exists(configDir); !a && b != nil {
+		if _, err2 := os.Stat(configDir); os.IsNotExist(err2) {
 			if os.Mkdir(configDir, 0777) != nil {
 				panic("Can't create " + configDir + "\nExiting...")
 			}
