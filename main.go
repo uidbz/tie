@@ -2,12 +2,8 @@ package main
 
 import (
 	"bufio"
-	"encoding/hex"
-	"fmt"
 	"log"
 	"os"
-	"os/user"
-	"path/filepath"
 	"strings"
 
 	"git.sr.ht/~uid/tie-client"
@@ -15,31 +11,12 @@ import (
 )
 
 var (
-	// state      State
-	config     string
-	configDir  string
-	configPath string
-	hashRoot   = "/data/"
-	key        []byte
-	stdin      []Stdin
+	stdin []Stdin
 )
 
 type Stdin struct {
 	hash string
 	path string
-}
-
-const (
-	tieKey = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
-)
-
-func InitKey() {
-	k, err := hex.DecodeString(tieKey)
-	if err != nil {
-		fmt.Printf("Cannot decode hex key: %v", err) // add error handling
-		return
-	}
-	key = k
 }
 
 func main() {
@@ -56,8 +33,12 @@ func main() {
 
 			} else {
 				parts := strings.Split(line, "\t")
+				// Assumes input from put
 				if len(parts) == 2 {
 					input := Stdin{parts[0], parts[1]}
+					stdin = append(stdin, input)
+				} else {
+					input := Stdin{hash: line}
 					stdin = append(stdin, input)
 				}
 			}
@@ -67,42 +48,12 @@ func main() {
 			log.Println(err)
 		}
 	}
-	InitKey()
-	cobra.OnInitialize(initConfig)
+	cobra.OnInitialize(tie.InitConfig)
 
 	var rootCmd = &cobra.Command{Use: "app"}
 	rootCmd.AddCommand(cmdList()...)
-	rootCmd.PersistentFlags().StringVarP(&config, "config", "c", "config", "Config file to load")
+	rootCmd.PersistentFlags().StringVarP(&tie.Config, "config", "c", "config", "Config file to load")
 	rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")
 
 	rootCmd.Execute()
-}
-
-func initConfig() {
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-	configDir = filepath.Join(usr.HomeDir, ".config", "tie")
-	configPath = configDir + "/" + config + ".json"
-
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if _, err2 := os.Stat(configDir); os.IsNotExist(err2) {
-			if os.Mkdir(configDir, 0777) != nil {
-				panic("Can't create " + configDir + "\nExiting...")
-			}
-		}
-		s := tie.State{
-			Webservice: "https://localhost:1161",
-			Namespace:  "Collections",
-			Collection: "Main",
-		}
-		tie.CurrentState = s
-
-		SaveJSON(configPath, tie.CurrentState)
-		tie.PrintState()
-	} else {
-		LoadJSON(configPath, &tie.CurrentState)
-		tie.PrintState()
-	}
 }

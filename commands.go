@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"git.sr.ht/~uid/tie-client"
 	"github.com/spf13/cobra"
@@ -11,30 +10,6 @@ import (
 
 func cmdList() []*cobra.Command {
 	cmds := []*cobra.Command{}
-
-	var cmdPrint = &cobra.Command{
-		Use:   "print [string to print]",
-		Short: "Print anything to the screen",
-		Long: `print is for printing anything back to the screen.
-For many years people have printed back to the screen.`,
-		Args: cobra.MinimumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Print: " + strings.Join(args, " "))
-		},
-	}
-	cmds = append(cmds, cmdPrint)
-
-	var cmdEcho = &cobra.Command{
-		Use:   "echo [string to echo]",
-		Short: "Echo anything to the screen",
-		Long: `echo is for echoing anything back.
-Echo works a lot like print, except it has a child command.`,
-		Args: cobra.MinimumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Echo: " + strings.Join(args, " "))
-		},
-	}
-	cmds = append(cmds, cmdEcho)
 
 	var cmdSetState = &cobra.Command{
 		Use:   "set [webservice] [namespace] [collection]",
@@ -45,7 +20,7 @@ Echo works a lot like print, except it has a child command.`,
 			tie.CurrentState.Webservice = args[0]
 			tie.CurrentState.Namespace = args[1]
 			tie.CurrentState.Collection = args[2]
-			SaveJSON(configPath, tie.CurrentState)
+			tie.SaveJSON(tie.ConfigPath, tie.CurrentState)
 			tie.PrintState()
 		},
 	}
@@ -58,7 +33,7 @@ Echo works a lot like print, except it has a child command.`,
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			tie.CurrentState.Collection = args[0]
-			SaveJSON(configPath, tie.CurrentState)
+			tie.SaveJSON(tie.ConfigPath, tie.CurrentState)
 			tie.PrintState()
 		},
 	}
@@ -98,7 +73,7 @@ Echo works a lot like print, except it has a child command.`,
 	cmds = append(cmds, cmdAdd)
 
 	var cmdGet = &cobra.Command{
-		Use:   "get [entry1] [relation] [entry2]",
+		Use:   "get [entry1] [relation]",
 		Short: "Associate two entries.",
 		Long:  `Associate two entries.`,
 		Args:  cobra.MinimumNArgs(1),
@@ -106,7 +81,7 @@ Echo works a lot like print, except it has a child command.`,
 			a := tie.RequestGet{}
 			a.Value = args[0]
 			if len(args) > 1 {
-				a.Relation = args[1]
+				a.Relation = args[1:]
 			}
 			a.MaxAssociations = 0
 			b, _ := json.Marshal(a)
@@ -114,42 +89,6 @@ Echo works a lot like print, except it has a child command.`,
 		},
 	}
 	cmds = append(cmds, cmdGet)
-
-	var cmdGroupGet = &cobra.Command{
-		Use:   "gget [key]",
-		Short: "Associate two entries.",
-		Long:  `Associate two entries.`,
-		Args:  cobra.MinimumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			a := tie.RequestGroupGet{}
-			a.Key = args[0]
-			if len(args) > 1 {
-				a.Value1 = args[1]
-			}
-			a.MaxAssociations = 0
-			b, _ := json.Marshal(a)
-			tie.SendToWebservice("GroupGet", b, GetHandler)
-		},
-	}
-	cmds = append(cmds, cmdGroupGet)
-
-	var cmdGroupAdd = &cobra.Command{
-		Use:   "gadd [group] [key] [value1] [value2]",
-		Short: "Associate tie to group",
-		Long:  `Associate tie to group`,
-		Args:  cobra.MinimumNArgs(4),
-		Run: func(cmd *cobra.Command, args []string) {
-			a := tie.GroupAssociation{
-				args[0],
-				args[1],
-				args[2],
-				args[3],
-			}
-			b, _ := json.Marshal(a)
-			tie.SendToWebservice("GroupAdd", b, AddHandler)
-		},
-	}
-	cmds = append(cmds, cmdGroupAdd)
 
 	var cmdDel = &cobra.Command{
 		Use:   "del [key] [value1] [value2]",
@@ -185,13 +124,23 @@ Echo works a lot like print, except it has a child command.`,
 	}
 	cmds = append(cmds, cmdFilter)
 
+	minArgsTag := 1
+	if len(stdin) != 0 {
+		minArgsTag = 0
+	}
 	var cmdTag = &cobra.Command{
 		Use:   "tag [file|dir] [flags...]",
 		Short: "tag current dir",
 		Long:  `tag current dir`,
-		Args:  cobra.MinimumNArgs(1),
+		Args:  cobra.MinimumNArgs(minArgsTag),
 		Run: func(cmd *cobra.Command, args []string) {
-			Tag(args[0], args[1:])
+			if minArgsTag == 0 {
+				for _, x := range stdin {
+					tie.Tag(x.hash, args, AddHandler)
+				}
+			} else {
+				tie.Tag(args[0], args[1:], AddHandler)
+			}
 		},
 	}
 	cmds = append(cmds, cmdTag)
@@ -222,17 +171,6 @@ func GetHandler(resp json.RawMessage) {
 			key := x.Item
 			value1 := x.Relations[i]
 			value2 := x.Associations[i]
-			// source := "/.data/"
-
-			// if key[0:3] == "hh/" {
-			// 	key = source + key
-			// }
-			// if value1[0:3] == "hh/" {
-			// 	value1 = source + value1
-			// }
-			// if value2[0:3] == "hh/" {
-			// 	value2 = source + value2
-			// }
 			fmt.Println(key + "\t" + value1 + "\t" + value2)
 		}
 	}
