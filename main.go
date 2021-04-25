@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	stdin []Stdin
+	stdin         []Stdin
+	outputAsTable bool
 )
 
 type Stdin struct {
@@ -54,6 +55,7 @@ func main() {
 	rootCmd.AddCommand(cmdList()...)
 	rootCmd.PersistentFlags().StringVarP(&tie.Config, "config", "c", "config", "Config file to load")
 	rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")
+	rootCmd.PersistentFlags().BoolVarP(&outputAsTable, "table", "t", false, "Output as table")
 
 	rootCmd.Execute()
 }

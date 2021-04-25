@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"git.sr.ht/~uid/tie-client"
+	common "git.sr.ht/~uid/tie-common"
 	"github.com/spf13/cobra"
 )
 
@@ -51,43 +52,51 @@ func cmdList() []*cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			if minArgs == 2 {
 				for _, x := range stdin {
-					a := tie.Association{
+					a := common.RequestAdd{
 						x.hash,
 						args[0],
 						args[1],
 					}
 					b, _ := json.Marshal(a)
-					tie.SendToWebservice("Associate", b, AddHandler)
+					tie.SendToWebservice("Add", b, AddHandler)
 				}
 			} else {
-				a := tie.Association{
+				a := common.RequestAdd{
 					args[0],
 					args[1],
 					args[2],
 				}
 				b, _ := json.Marshal(a)
-				tie.SendToWebservice("Associate", b, AddHandler)
+				tie.SendToWebservice("Add", b, AddHandler)
 			}
 		},
 	}
 	cmds = append(cmds, cmdAdd)
 
+	var getFilter string
 	var cmdGet = &cobra.Command{
-		Use:   "get [entry1] [relation]",
-		Short: "Associate two entries.",
-		Long:  `Associate two entries.`,
+		Use:   "get [key] [key2] ... [keyN]",
+		Short: "Return tie with [key] or Join multiple keys on their 'associated' value",
+		Long:  "Return tie with [key] or Join multiple keys on their 'associated' value",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := tie.RequestGet{}
-			a.Value = args[0]
-			if len(args) > 1 {
-				a.Relation = args[1:]
-			}
+
+			a := common.RequestGet{}
+			a.Values = args
 			a.MaxAssociations = 0
+			if len(args) > 1 {
+				a.Filter = common.Associated
+			}
+			if getFilter != "" {
+				a.Filter = getFilter
+			}
+
 			b, _ := json.Marshal(a)
 			tie.SendToWebservice("Get", b, GetHandler)
 		},
 	}
+	cmdGet.Flags().StringVarP(&getFilter, "filter", "f", "", "Relation filter")
+
 	cmds = append(cmds, cmdGet)
 
 	var cmdDel = &cobra.Command{
@@ -96,7 +105,7 @@ func cmdList() []*cobra.Command {
 		Long:  `Delete tie`,
 		Args:  cobra.MinimumNArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := tie.Association{
+			a := common.RequestDelete{
 				args[0],
 				args[1],
 				args[2],
@@ -107,22 +116,17 @@ func cmdList() []*cobra.Command {
 	}
 	cmds = append(cmds, cmdDel)
 
-	var cmdFilter = &cobra.Command{
-		Use:   "filter [value] [value2]...",
-		Short: "Filter associations",
-		Long:  `Filter associations`,
-		Args:  cobra.MinimumNArgs(2),
-		Run: func(cmd *cobra.Command, args []string) {
-			a := tie.RequestInnerJoin{
-				args,
-				"associated",
-				0,
-			}
-			b, _ := json.Marshal(a)
-			tie.SendToWebservice("InnerJoin", b, GetHandler)
-		},
-	}
-	cmds = append(cmds, cmdFilter)
+	// var cmdFilter = &cobra.Command{
+	// 	Use:   "filter [value] [value2]...",
+	// 	Short: "Filter associations",
+	// 	Long:  `Filter associations`,
+	// 	Args:  cobra.MinimumNArgs(2),
+	// 	Run: func(cmd *cobra.Command, args []string) {
+	// 	},
+	// }
+	// // cmdFilter.fla
+	// // localCmd.Flags().StringVarP(&Source, "source", "s", "", "Source directory to read from")
+	// cmds = append(cmds, cmdFilter)
 
 	minArgsTag := 1
 	if len(stdin) != 0 {
@@ -149,7 +153,7 @@ func cmdList() []*cobra.Command {
 }
 
 func AddHandler(resp json.RawMessage) {
-	s := tie.Success{}
+	s := common.ReplyStatus{}
 	if err := json.Unmarshal(resp, &s); err == nil {
 		if tie.CurrentState.Verbose || !s.Success {
 			fmt.Println(resp)
@@ -161,18 +165,28 @@ func AddHandler(resp json.RawMessage) {
 }
 
 func GetHandler(resp json.RawMessage) {
-	var result []tie.ReplyGet
+	var result []common.ReplyGet
 	err := json.Unmarshal(resp, &result)
 	if err != nil {
 		fmt.Println("Error handling Get reponse:", err)
 	}
+	var input tie.TieOutput
+	var columns []string
 	for _, x := range result {
 		for i, _ := range x.Associations {
 			key := x.Item
 			value1 := x.Relations[i]
 			value2 := x.Associations[i]
-			fmt.Println(key + "\t" + value1 + "\t" + value2)
+			if outputAsTable {
+				tie.LoadTieOutput(key, value1, value2, &input, &columns)
+			} else {
+				fmt.Println(key + "\t" + value1 + "\t" + value2)
+			}
 		}
+	}
+	if outputAsTable {
+		table := tie.TieOutputToTable(input, columns)
+		table.Print(columns)
 	}
 }
 
