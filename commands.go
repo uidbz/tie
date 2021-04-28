@@ -138,12 +138,13 @@ func cmdList() []*cobra.Command {
 		Long:  `tag current dir`,
 		Args:  cobra.MinimumNArgs(minArgsTag),
 		Run: func(cmd *cobra.Command, args []string) {
+			options := tie.TagOptions{}
 			if minArgsTag == 0 {
 				for _, x := range stdin {
-					tie.Tag(x.hash, args, AddHandler)
+					tie.Tag(x.hash, args, options, AddHandler)
 				}
 			} else {
-				tie.Tag(args[0], args[1:], AddHandler)
+				tie.Tag(args[0], args[1:], options, AddHandler)
 			}
 		},
 	}
