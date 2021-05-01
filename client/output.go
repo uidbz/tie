@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"git.sr.ht/~uid/tie/db"
 	"git.sr.ht/~uid/tie/request"
+	"git.sr.ht/~uid/tie/tiedb"
 )
 
 func TieOutputToTable(input TieOutput, columns []string) TieOutput {

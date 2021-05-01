@@ -2,7 +2,7 @@
 package request
 
 import (
-	"git.sr.ht/~uid/tie/db"
+	"git.sr.ht/~uid/tie/tiedb"
 )
 
 type Request interface {

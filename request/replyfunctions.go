@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"git.sr.ht/~uid/tie/db"
+	"git.sr.ht/~uid/tie/tiedb"
 )
 
 func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
