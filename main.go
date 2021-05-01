@@ -51,7 +51,7 @@ func main() {
 	}
 	cobra.OnInitialize(tie.InitConfig)
 
-	var rootCmd = &cobra.Command{Use: "app"}
+	var rootCmd = &cobra.Command{Use: "tie"}
 	rootCmd.AddCommand(cmdList()...)
 	rootCmd.PersistentFlags().StringVarP(&tie.Config, "config", "c", "config", "Config file to load")
 	rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")

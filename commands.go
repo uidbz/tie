@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"git.sr.ht/~uid/tie-client"
-	common "git.sr.ht/~uid/tie-common"
+	"git.sr.ht/~uid/tie/tiedb"
+
+	"git.sr.ht/~uid/tie/client"
+	"git.sr.ht/~uid/tie/request"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +54,7 @@ func cmdList() []*cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			if minArgs == 2 {
 				for _, x := range stdin {
-					a := common.RequestAdd{
+					a := request.Add{
 						x.hash,
 						args[0],
 						args[1],
@@ -61,7 +63,7 @@ func cmdList() []*cobra.Command {
 					tie.SendToWebservice("Add", b, AddHandler)
 				}
 			} else {
-				a := common.RequestAdd{
+				a := request.Add{
 					args[0],
 					args[1],
 					args[2],
@@ -81,11 +83,11 @@ func cmdList() []*cobra.Command {
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 
-			a := common.RequestGet{}
+			a := request.Get{}
 			a.Values = args
 			a.MaxAssociations = 0
 			if len(args) > 1 {
-				a.Filter = common.Associated
+				a.Filter = tiedb.ASSOCIATED
 			}
 			if getFilter != "" {
 				a.Filter = getFilter
@@ -105,7 +107,7 @@ func cmdList() []*cobra.Command {
 		Long:  `Delete tie`,
 		Args:  cobra.MinimumNArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := common.RequestDelete{
+			a := request.Delete{
 				args[0],
 				args[1],
 				args[2],
@@ -154,7 +156,7 @@ func cmdList() []*cobra.Command {
 }
 
 func AddHandler(resp json.RawMessage) {
-	s := common.ReplyStatus{}
+	s := request.ReplyStatus{}
 	if err := json.Unmarshal(resp, &s); err == nil {
 		if tie.CurrentState.Verbose || !s.Success {
 			fmt.Println(resp)
@@ -166,7 +168,7 @@ func AddHandler(resp json.RawMessage) {
 }
 
 func GetHandler(resp json.RawMessage) {
-	var result []common.ReplyGet
+	var result []request.ReplyGet
 	err := json.Unmarshal(resp, &result)
 	if err != nil {
 		fmt.Println("Error handling Get reponse:", err)
