@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"git.sr.ht/~uid/tie-client"
+	"git.sr.ht/~uid/tie/client"
 	"github.com/spf13/cobra"
 )
 
