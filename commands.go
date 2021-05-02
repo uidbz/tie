@@ -193,6 +193,25 @@ func GetHandler(resp json.RawMessage) {
 	}
 }
 
+func GetHandler2(resp json.RawMessage) {
+	var result []request.ReplyGet
+	err := json.Unmarshal(resp, &result)
+	if err != nil {
+		fmt.Println("Error handling Get reponse:", err)
+	}
+
+	db := tiedb.NewDB(false)
+	col := db.GetCollection(tiedb.CollectionKey{"tmp", "results"})
+	for _, x := range result {
+		for i, _ := range x.Associations {
+			key := x.Item
+			value1 := x.Relations[i]
+			value2 := x.Associations[i]
+			col.Add(key, value1, value2)
+		}
+	}
+}
+
 func DeleteHandler(resp json.RawMessage) {
 	// s := tie.Success{}
 	// if err := json.Unmarshal(resp, &s); err == nil {

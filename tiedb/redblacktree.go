@@ -139,8 +139,9 @@ func StringComparator(o1, o2 interface{}) int {
 
 // Tree encapsulates the data structure.
 type Tree struct {
-	root *Node      // tip of the tree
-	cmp  Comparator // required function to order keys
+	root        *Node      // tip of the tree
+	cmp         Comparator // required function to order keys
+	writeToDisk bool
 }
 
 // `lock` protects `logger`
@@ -172,13 +173,13 @@ func SetOutput(w io.Writer) {
 
 // NewTree returns an empty Tree with default comparator `IntComparator`.
 // `IntComparator` expects keys to be type-assertable to `int`.
-func NewTree() *Tree {
-	return &Tree{root: nil, cmp: IntComparator}
+func NewTree(writeToDisk bool) *Tree {
+	return &Tree{root: nil, cmp: IntComparator, writeToDisk: writeToDisk}
 }
 
 // NewTreeWith returns an empty Tree with a supplied `Comparator`.
-func NewTreeWith(c Comparator) *Tree {
-	return &Tree{root: nil, cmp: c}
+func NewTreeWith(c Comparator, writeToDisk bool) *Tree {
+	return &Tree{root: nil, cmp: c, writeToDisk: writeToDisk}
 }
 
 // Get looks for the node with supplied key and returns its mapped payload.
@@ -526,7 +527,7 @@ func (t *Tree) HasKeyComparator(cmp Comparator, key interface{}) bool {
 
 // Returns intersection of two trees
 func (t1 *Tree) InnerJoin(t2 *Tree, cmp Comparator) *Tree {
-	result := InnerJoinVisitor{Tree: NewTreeWith(AssociationComparator)}
+	result := InnerJoinVisitor{Tree: NewTreeWith(AssociationComparator, t1.writeToDisk)}
 
 	result.Visit(cmp, t1.root, t2)
 

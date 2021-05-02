@@ -87,6 +87,7 @@ type InternalCollection struct {
 	DBFullPath          string
 	DBWriteQueue        chan FileMod
 	DBCloseWriter       chan bool
+	WriteToDisk         bool
 	// Finished            chan bool
 	Finished sync.WaitGroup
 	// DBUpdateQueue    chan FileEntry

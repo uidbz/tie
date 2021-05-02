@@ -31,7 +31,7 @@ func (ic *InternalCollection) InternalCollection(level int, id uint64) *Internal
 		subdir := ic.DBPath + "/" + ic.DBName + "-sub-collections"
 		os.Mkdir(subdir, 0777)
 		name := ic.GetValueString(level, id)
-		ic2 := Initialize(subdir, name, false)
+		ic2 := Initialize(subdir, name, false, ic.WriteToDisk)
 		ic2.Level = level
 		ic2.Id = id
 		ic.SubCollections[level].Put(id, ic2)
@@ -50,11 +50,11 @@ func (ic *InternalCollection) SecureLevelInIndex(level int) {
 		ic.AssociationAdder = append(ic.AssociationAdder, make(chan *Association, 1000))
 		ic.AssociationExtAdder = append(ic.AssociationExtAdder, make(chan *AssociationExt, 1000))
 
-		ic.Entries = append(ic.Entries, NewTreeWith(UInt64Comparator))
-		ic.UniqueValues = append(ic.UniqueValues, NewTreeWith(UniqueValueComparator))
-		ic.Associations = append(ic.Associations, NewTreeWith(UInt64Comparator))
-		ic.AssociationsExt = append(ic.AssociationsExt, NewTreeWith(UniqueAssociationComparator))
-		ic.SubCollections = append(ic.SubCollections, NewTreeWith(UInt64Comparator))
+		ic.Entries = append(ic.Entries, NewTreeWith(UInt64Comparator, ic.WriteToDisk))
+		ic.UniqueValues = append(ic.UniqueValues, NewTreeWith(UniqueValueComparator, ic.WriteToDisk))
+		ic.Associations = append(ic.Associations, NewTreeWith(UInt64Comparator, ic.WriteToDisk))
+		ic.AssociationsExt = append(ic.AssociationsExt, NewTreeWith(UniqueAssociationComparator, ic.WriteToDisk))
+		ic.SubCollections = append(ic.SubCollections, NewTreeWith(UInt64Comparator, ic.WriteToDisk))
 
 		go ic.InsertEntryAdder(i)
 		go ic.InsertAssociationAdder(i)
@@ -153,17 +153,19 @@ func (ic *InternalCollection) InsertValue(level int, parentId uint64, value []by
 		UniqueValue: UniqueValue{parentId, valPtr.(*[]byte)},
 	}
 
-	m := FileMod{
-		Mode:  FILE_APPEND,
-		Entry: e,
+	if ic.WriteToDisk {
+		m := FileMod{
+			Mode:  FILE_APPEND,
+			Entry: e,
+		}
+		if len(ic.Freespace) > 0 {
+			tmp := <-ic.Freespace
+			pos := tmp.GetPosition()
+			e.SetPosition(pos)
+			m.Mode = FILE_UPDATE
+		}
+		ic.DBWriteQueue <- m
 	}
-	if len(ic.Freespace) > 0 {
-		tmp := <-ic.Freespace
-		pos := tmp.GetPosition()
-		e.SetPosition(pos)
-		m.Mode = FILE_UPDATE
-	}
-	ic.DBWriteQueue <- m
 	ic.InsertEntry(level, e)
 
 	return e
@@ -187,7 +189,7 @@ func (ic *InternalCollection) InsertAssociationAdder(level int) {
 	for a := range ic.AssociationAdder[level] {
 		found, s := ic.Associations[level].Get(a.EntryId)
 		if !found {
-			ass := NewTreeWith(UniqueAssociationComparator)
+			ass := NewTreeWith(UniqueAssociationComparator, ic.WriteToDisk)
 			key := UniqueAssociation{
 				AssociateTo: a.AssociateTo,
 				Relation:    a.Relation,
@@ -231,7 +233,7 @@ func (ic *InternalCollection) InsertAssociationExtAdder(level int) {
 		// if found, s := ic.Associations[level].Get(aExt.EntryId); found { // Only insert AssExt if Ass exists
 		foundExt, sExt := ic.AssociationsExt[level].Get(id)
 		if !foundExt {
-			ass := NewTreeWith(UniqueAssociationExtComparator)
+			ass := NewTreeWith(UniqueAssociationExtComparator, ic.WriteToDisk)
 			key := UniqueAssociationExt{
 				AssociateToCollection: aExt.AssociationCollection,
 				AssociateTo:           aExt.AssociateTo,
@@ -322,7 +324,7 @@ func (ic *InternalCollection) GetAssociationsFromEntry(e *Entry) *Tree {
 			return set.(*Tree)
 		}
 	}
-	return NewTreeWith(UInt64Comparator)
+	return NewTreeWith(UInt64Comparator, ic.WriteToDisk)
 }
 
 func (ic *InternalCollection) GetAssociationsExtFromEntry(e *Entry) *Tree {
@@ -332,7 +334,7 @@ func (ic *InternalCollection) GetAssociationsExtFromEntry(e *Entry) *Tree {
 			return set.(*Tree)
 		}
 	}
-	return NewTreeWith(UInt64Comparator)
+	return NewTreeWith(UInt64Comparator, ic.WriteToDisk)
 }
 
 // Returns a copy of full value
@@ -402,20 +404,26 @@ func (ic *InternalCollection) Update(entry1 string, entry2 string, relation stri
 
 func (ic *InternalCollection) DeleteEntry(e *Entry) {
 	ic.Entries[e.Level].Delete(e.Id) //TODO: Make thread safe
-	m := FileMod{
-		Mode:  FILE_DELETE,
-		Entry: e,
+
+	if ic.WriteToDisk {
+		m := FileMod{
+			Mode:  FILE_DELETE,
+			Entry: e,
+		}
+		ic.DBWriteQueue <- m
 	}
-	ic.DBWriteQueue <- m
 }
 
 func (ic *InternalCollection) DeleteAssociation(tree *Tree, key UniqueAssociation, a *Association) {
 	tree.Delete(key) //TODO: Make thread safe
-	m := FileMod{
-		Mode:  FILE_DELETE,
-		Entry: a,
+
+	if ic.WriteToDisk {
+		m := FileMod{
+			Mode:  FILE_DELETE,
+			Entry: a,
+		}
+		ic.DBWriteQueue <- m
 	}
-	ic.DBWriteQueue <- m
 }
 
 // This is wrong. If the entry has any associations, they will no longer work.
@@ -471,16 +479,18 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 		return association
 	}
 
-	m := FileMod{
-		Mode:  FILE_APPEND,
-		Entry: &ass,
+	if ic.WriteToDisk {
+		m := FileMod{
+			Mode:  FILE_APPEND,
+			Entry: &ass,
+		}
+		if len(ic.Freespace) > 0 {
+			tmp := <-ic.Freespace
+			ass.SetPosition(tmp.GetPosition())
+			m.Mode = FILE_UPDATE
+		}
+		ic.DBWriteQueue <- m
 	}
-	if len(ic.Freespace) > 0 {
-		tmp := <-ic.Freespace
-		ass.SetPosition(tmp.GetPosition())
-		m.Mode = FILE_UPDATE
-	}
-	ic.DBWriteQueue <- m
 
 	ic.InsertAssociation(ass.Level, &ass)
 
@@ -496,16 +506,18 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 		assExt.AssociationCollectionLevel = col2.Level
 		assExt.AssociationCollection = col2.Id
 
-		m := FileMod{
-			Mode:  FILE_APPEND,
-			Entry: &assExt,
+		if ic.WriteToDisk {
+			m := FileMod{
+				Mode:  FILE_APPEND,
+				Entry: &assExt,
+			}
+			if len(ic.Freespace) > 0 {
+				tmp := <-ic.Freespace
+				assExt.SetPosition(tmp.GetPosition())
+				m.Mode = FILE_UPDATE
+			}
+			ic.DBWriteQueue <- m
 		}
-		if len(ic.Freespace) > 0 {
-			tmp := <-ic.Freespace
-			assExt.SetPosition(tmp.GetPosition())
-			m.Mode = FILE_UPDATE
-		}
-		ic.DBWriteQueue <- m
 
 		ic.InsertAssociationExt(assExt.RelationCollectionLevel, &assExt)
 
