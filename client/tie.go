@@ -92,9 +92,10 @@ func TieAdd(Entry1, Relation, Entry2 string, addHandler func(json.RawMessage)) {
 }
 
 func Tag(path string, tags []string, options TagOptions, addHandler func(json.RawMessage)) {
-	putlib.JsonOutput = true
-	putlib.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
-	output, _ := putlib.Upload(CurrentState.ServeUrl+"/upload", CurrentState.Key, path)
+	pc := putlib.PutConfig{}
+	pc.JsonOutput = true
+	pc.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
+	output, _ := pc.Upload(CurrentState.ServeUrl+"/upload", path)
 	if output != "" {
 		info := metadata.Info{}
 		if err := json.Unmarshal([]byte(output), &info); err != nil {

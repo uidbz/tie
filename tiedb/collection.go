@@ -537,6 +537,8 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 // 	, valueCollection string,
 // }
 func (ic *InternalCollection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
+	ic.mutexSetToString.Lock()
+	defer ic.mutexSetToString.Unlock()
 	size := s.Size()
 	// var e *Entry
 	// if valueCollection == nil {
