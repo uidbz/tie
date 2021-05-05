@@ -7,6 +7,14 @@ import (
 )
 
 func main() {
-	view := component.TieView{}
+	view := component.NewTieGUIComponent()
+	view.SetKey("a")
+	view.SetData([]string{}, []string{})
+	myApp := app.New()
+	w := myApp.NewWindow("fileinfo")
 
+	w.SetContent(view.MakeUI())
+
+	w.Resize(fyne.NewSize(150, 100))
+	w.ShowAndRun()
 }
