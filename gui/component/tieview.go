@@ -1,11 +1,16 @@
 package component
 
 import (
+	"encoding/json"
+	"fmt"
+
 	"fyne.io/fyne/v2"
 
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
+	"git.sr.ht/~uid/tie/client"
+	"git.sr.ht/~uid/tie/request"
 )
 
 type TieView struct {
@@ -112,6 +117,14 @@ func (tv *TieView) List2Select(id int) {
 }
 
 func (tv *TieView) Add() {
+	key, _ := tv.SelectedKey.Get()
+	a := request.Add{
+		key,
+		"hej",
+		"hej",
+	}
+	b, _ := json.Marshal(a)
+	tie.SendToWebservice("Add", b, AddHandler)
 
 }
 
@@ -163,4 +176,16 @@ func (tv *TieView) MakeUI() fyne.CanvasObject {
 	bottom := container.NewGridWithRows(2, entryFields, buttons)
 
 	return container.NewBorder(txtKey, bottom, nil, nil, split)
+}
+
+func AddHandler(resp json.RawMessage) {
+	s := request.ReplyStatus{}
+	if err := json.Unmarshal(resp, &s); err == nil {
+		if tie.CurrentState.Verbose || !s.Success {
+			fmt.Println(resp)
+		}
+	} else {
+		fmt.Println("Error unmarshalling response:", err, resp)
+	}
+
 }
