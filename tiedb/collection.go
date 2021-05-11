@@ -369,11 +369,11 @@ func (ic *InternalCollection) Sync() {
 	ic.InserterWGDynTrie.Wait()
 }
 
-func (ic *InternalCollection) Delete(entry1 string, entry2 string, relation string) (bool, string) {
-	found, asses := ic.GetAssociations(entry1)
+func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (bool, string) {
+	found, asses := ic.GetAssociations(key)
 	if found {
-		f1, e2 := ic.GetEntryFromString(entry2)
-		f2, r := ic.GetEntryFromString(relation)
+		f1, e2 := ic.GetEntryFromString(value2)
+		f2, r := ic.GetEntryFromString(value1)
 
 		if f1 && f2 {
 			key := UniqueAssociation{
@@ -387,15 +387,15 @@ func (ic *InternalCollection) Delete(entry1 string, entry2 string, relation stri
 				return true, ""
 			}
 		}
-		return false, "Did not find '" + entry2 + "' with relation '" + relation + "'"
+		return false, "Did not find '" + value2 + "' with relation '" + value1 + "'"
 	} else {
-		return false, "Did not find '" + entry1 + "'"
+		return false, "Did not find '" + key + "'"
 	}
 }
 
-func (ic *InternalCollection) Update(entry1 string, entry2 string, relation string, newEntry2 string) (bool, string) {
-	if ok, msg := ic.Delete(entry1, entry2, relation); ok {
-		ic.Add(entry1, newEntry2, relation)
+func (ic *InternalCollection) Update(key string, value1 string, value2 string, newValue2 string) (bool, string) {
+	if ok, msg := ic.Delete(key, value1, value2); ok {
+		ic.Add(key, value1, value2)
 		return true, ""
 	} else {
 		return false, msg
