@@ -3,6 +3,7 @@ package component
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"fyne.io/fyne/v2"
 
@@ -14,25 +15,30 @@ import (
 )
 
 type TieView struct {
-	Object           fyne.CanvasObject
-	SelectedKey      binding.String
-	SelectedValue1   binding.String
-	SelectedValue2   binding.String
-	SelectedValue2ID int
-	value1tovalue2   map[string][]string
-	value1           []string
-	uniquevalue1     []string
-	value2           []string
-	value2tovalue1   []string
+	Object            fyne.CanvasObject
+	SelectedKey       binding.String
+	SelectedValue1    binding.String
+	SelectedValue2    binding.String
+	SelectedValue2Old string
+	SelectedValue1ID  int
+	SelectedValue2ID  int
+	value1tovalue2    map[string][]string
+	value1            []string
+	uniquevalue1      []string
+	value2            []string
+	value2tovalue1    []string
 
 	data1 binding.ExternalStringList
 	data2 binding.ExternalStringList
 
 	list1 *widget.List
 	list2 *widget.List
+
+	window       fyne.Window
+	refreshTimer *time.Ticker
 }
 
-func NewTieGUIComponent() *TieView {
+func NewTieView() *TieView {
 	tv := TieView{}
 	tv.data1 = binding.BindStringList(&[]string{})
 	tv.data2 = binding.BindStringList(&[]string{})
@@ -40,13 +46,16 @@ func NewTieGUIComponent() *TieView {
 	tv.SelectedValue1 = binding.NewString()
 	tv.SelectedValue2 = binding.NewString()
 	tv.value1tovalue2 = make(map[string][]string)
+	tv.refreshTimer = time.NewTicker(100)
+	go func() {
+		for {
+			<-tv.refreshTimer.C
+			tv.Refresh()
+			tv.refreshTimer.Stop()
+		}
+	}()
 
 	return &tv
-}
-
-type ValueCouple struct {
-	Value1 string
-	Value2 string
 }
 
 func (tv *TieView) SetKey(key string) {
@@ -90,6 +99,7 @@ func (tv *TieView) SetData(value1 []string, value2 []string) {
 
 func (tv *TieView) List1Select(id int) {
 	selected := tv.uniquevalue1[id]
+	tv.SelectedValue1ID = id
 
 	if id == 0 { // 'All values' selected
 		tv.data2.Set(tv.value2)
@@ -110,33 +120,67 @@ func (tv *TieView) List1Select(id int) {
 
 func (tv *TieView) List2Select(id int) {
 	d, _ := tv.data2.Get()
+	tv.SelectedValue2Old = d[id]
 	tv.SelectedValue2.Set(d[id])
-	tv.SelectedValue1.Set(tv.value2tovalue1[id])
+	if tv.SelectedValue1ID == 0 {
+		tv.SelectedValue1.Set(tv.value2tovalue1[id])
+	}
+	// tv.SelectedValue1.Set(tv. value2tovalue1[id])
+
+	// }
 	tv.SelectedValue2ID = id
 
 }
 
 func (tv *TieView) Add() {
 	key, _ := tv.SelectedKey.Get()
-	a := request.Add{
-		key,
-		"hej",
-		"hej",
-	}
-	b, _ := json.Marshal(a)
-	tie.SendToWebservice("Add", b, AddHandler)
+	// a := request.Add{
+	// 	key,
+	// 	"hej",
+	// 	"hej",
+	// }
+	// b, _ := json.Marshal(a)
+	// tie.SendToWebservice("Add", b, AddHandler)
+	addView := NewTieAddView()
+	addView.SetKey(key)
+	addView.SetData([]string{}, []string{})
+	addView.GetTags()
+
+	tv.window.SetContent(addView.MakeUI(tv))
+}
+
+func (tv *TieView) Create() {
 
 }
 
-func (tv *TieView) Edit() {
-
+func (tv *TieView) Update(newValue2 string) {
+	key, _ := tv.SelectedKey.Get()
+	val1, _ := tv.SelectedValue1.Get()
+	g := request.Update{
+		Key:       key,
+		Value1:    val1,
+		Value2:    tv.SelectedValue2Old,
+		NewValue2: newValue2,
+	}
+	b, _ := json.Marshal(g)
+	tie.SendToWebservice("Update", b, tv.AddHandler)
 }
 
 func (tv *TieView) Del() {
-
+	key, _ := tv.SelectedKey.Get()
+	val1, _ := tv.SelectedValue1.Get()
+	val2, _ := tv.SelectedValue2.Get()
+	g := request.Delete{
+		Key:    key,
+		Value1: val1,
+		Value2: val2,
+	}
+	b, _ := json.Marshal(g)
+	tie.SendToWebservice("Delete", b, tv.AddHandler)
 }
 
-func (tv *TieView) MakeUI() fyne.CanvasObject {
+func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
+	tv.window = w
 	tv.list1 = widget.NewListWithData(tv.data1,
 		func() fyne.CanvasObject {
 			return widget.NewLabel("template")
@@ -162,8 +206,8 @@ func (tv *TieView) MakeUI() fyne.CanvasObject {
 
 	split := container.NewHSplit(tv.list1, tv.list2)
 
-	add := widget.NewButton("Add", tv.Add)
-	edit := widget.NewButton("Edit", tv.Edit)
+	add := widget.NewButton("Add tag", tv.Add)
+	create := widget.NewButton("Create tag", tv.Create)
 	del := widget.NewButton("Del", tv.Del)
 
 	txtKey := widget.NewEntryWithData(tv.SelectedKey)
@@ -171,21 +215,56 @@ func (tv *TieView) MakeUI() fyne.CanvasObject {
 	txtValue1 := widget.NewEntryWithData(tv.SelectedValue1)
 	txtValue1.Disable()
 	txtValue2 := widget.NewEntryWithData(tv.SelectedValue2)
-	buttons := container.NewGridWithColumns(3, add, edit, del)
+	txtValue2.OnSubmitted = tv.Update
+	buttons := container.NewGridWithColumns(3, create, del, add)
 	entryFields := container.NewGridWithColumns(2, txtValue1, txtValue2)
 	bottom := container.NewGridWithRows(2, entryFields, buttons)
 
 	return container.NewBorder(txtKey, bottom, nil, nil, split)
 }
 
-func AddHandler(resp json.RawMessage) {
+func (tv *TieView) AddHandler(resp json.RawMessage) {
 	s := request.ReplyStatus{}
 	if err := json.Unmarshal(resp, &s); err == nil {
 		if tie.CurrentState.Verbose || !s.Success {
-			fmt.Println(resp)
+			fmt.Println(string(resp))
 		}
 	} else {
 		fmt.Println("Error unmarshalling response:", err, resp)
 	}
 
+	tv.refreshTimer.Reset(100)
+}
+
+func (tv *TieView) Refresh() {
+	key, _ := tv.SelectedKey.Get()
+	g := request.Get{
+		Values: []string{key},
+	}
+	b, _ := json.Marshal(g)
+	tie.SendToWebservice("Get", b, tv.GetHandler)
+}
+
+func (tv *TieView) GetHandler(resp json.RawMessage) {
+	var result []request.ReplyGet
+	err := json.Unmarshal(resp, &result)
+	if err != nil {
+		fmt.Println("Error handling Get reponse:", err)
+	}
+
+	// fmt.Println(result)
+	if len(result) > 0 {
+		tv.SetData(result[0].Relations, result[0].Associations)
+	}
+	// db := tiedb.NewDB(false)
+	// col := db.GetCollection(tiedb.CollectionKey{"tmp", "results"})
+	// for _, x := range result {
+	// 	for i, _ := range x.Associations {
+	// 		key := x.Item
+	// 		value1 := x.Relations[i]
+	// 		value2 := x.Associations[i]
+	// 		fmt.Println(key, value1, value2)
+	// 		// col.Add(key, value1, value2)
+	// 	}
+	// }
 }

@@ -118,7 +118,7 @@ func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 
 func (r *Update) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 	col := db.GetCollection(key)
-	success, msg := col.Update(r.Entry1, r.Entry2, r.Relation, r.NewEntry2)
+	success, msg := col.Update(r.Key, r.Value2, r.Value1, r.NewValue2)
 	reply := ReplyStatus{
 		Success: success,
 		Message: msg,

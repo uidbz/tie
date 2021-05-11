@@ -29,10 +29,10 @@ type Delete struct {
 }
 
 type Update struct {
-	Entry1    string
-	Entry2    string
-	Relation  string
-	NewEntry2 string
+	Key       string
+	Value1    string
+	Value2    string
+	NewValue2 string
 }
 
 type ReplyGet struct {
