@@ -156,6 +156,7 @@ func (tv *TieView) Create() {
 func (tv *TieView) Update(newValue2 string) {
 	key, _ := tv.SelectedKey.Get()
 	val1, _ := tv.SelectedValue1.Get()
+	fmt.Println(tv.SelectedValue2Old)
 	g := request.Update{
 		Key:       key,
 		Value1:    val1,

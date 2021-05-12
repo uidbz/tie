@@ -5,10 +5,17 @@ go 1.16
 require (
 	fyne.io/fyne/v2 v2.0.3
 	git.sr.ht/~uid/putlib v0.0.0-20210504180720-4aba3cf34713
-	git.sr.ht/~uid/tie v0.0.0-20210505074052-d36af4cfbb82
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20210504182642-0b159d4f3daf
-	git.sr.ht/~uid/tie/request v0.0.0-20210511184902-7047c326fa57 // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20210511182523-385b72bb0441 // indirect
+	git.sr.ht/~uid/tie v0.0.0-20210511205824-eda5c64cdc10
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20210511205824-eda5c64cdc10
+	git.sr.ht/~uid/tie/request v0.0.0-20210511205824-eda5c64cdc10 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20210511205824-eda5c64cdc10 // indirect
+	github.com/go-gl/gl v0.0.0-20210501111010-69f74958bac0 // indirect
+	github.com/srwiley/oksvg v0.0.0-20210320200257-875f767ac39a // indirect
+	github.com/stretchr/testify v1.7.0 // indirect
+	golang.org/x/image v0.0.0-20210504121937-7319ad40d33e // indirect
+	golang.org/x/net v0.0.0-20210510120150-4163338589ed // indirect
+	golang.org/x/sys v0.0.0-20210511113859-b0526f3d8744 // indirect
+	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
 
 replace git.sr.ht/~uid/tie/gui/component => ../component
