@@ -13,6 +13,10 @@ cloud.google.com/go/storage v1.0.0/go.mod h1:IhtSnM/ZTZV8YYJWCY8RULGVqBDmpoyjwiy
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
 git.sr.ht/~uid/putlib v0.0.0-20210504180720-4aba3cf34713 h1:VdCdl0m3GIB0sG32aGM+HLyPh/bC/k/45dHjTXjy7g8=
 git.sr.ht/~uid/putlib v0.0.0-20210504180720-4aba3cf34713/go.mod h1:rDgEswvKu5BCw8hJfZHd+noQGSN7W06LRRz5zHyUcnY=
+git.sr.ht/~uid/tie/client v0.0.0-20210512063039-c632728f5a76 h1:VTtusqeh/cm4nyYB4ZkFf+P1LioQdGomGpHr/cJnC64=
+git.sr.ht/~uid/tie/client v0.0.0-20210512063039-c632728f5a76/go.mod h1:umQ1Boyqev2yRVZeHCopPM0qRhq78qGfvnjBchm+WZo=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210512062001-da426b56a410 h1:P+hCBfIQN5Nm/XumavHeWV9ixbCnmYXYdrzZz6eoULg=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210512062001-da426b56a410/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 git.sr.ht/~uid/tie/request v0.0.0-20210511205824-eda5c64cdc10 h1:hdrHxJGC60C5TNDErpBW3gJJqo9m3qlTqFU3MH7cAgM=
 git.sr.ht/~uid/tie/request v0.0.0-20210511205824-eda5c64cdc10/go.mod h1:VFgKwcvn+oMsd93uqJOhTIUVJ3C9GreCORxCxL/iv/U=
 git.sr.ht/~uid/tie/tiedb v0.0.0-20210511182523-385b72bb0441 h1:ub81XzR/jEI2Ko0afemWvbkQR96U1uOiNHh1FabjdNE=
