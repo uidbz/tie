@@ -9,24 +9,28 @@ import (
 
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/request"
 )
 
 type TieView struct {
-	Object            fyne.CanvasObject
-	SelectedKey       binding.String
-	SelectedValue1    binding.String
-	SelectedValue2    binding.String
-	SelectedValue2Old string
-	SelectedValue1ID  int
-	SelectedValue2ID  int
-	value1tovalue2    map[string][]string
-	value1            []string
-	uniquevalue1      []string
-	value2            []string
-	value2tovalue1    []string
+	Object             fyne.CanvasObject
+	SelectedKey        binding.String
+	SelectedValue1     binding.String
+	SelectedValue2     binding.String
+	SelectedValue2Old  string
+	SelectedHistory    []string
+	CurrentHistoryItem int
+	SelectedValue1ID   int
+	SelectedValue2ID   int
+	value1tovalue2     map[string][]string
+	value1             []string
+	uniquevalue1       []string
+	value2             []string
+	value2tovalue1     []string
+	CurrentFilePath    string
 
 	data1 binding.ExternalStringList
 	data2 binding.ExternalStringList
@@ -38,6 +42,33 @@ type TieView struct {
 	refreshTimer *time.Ticker
 }
 
+type DoubleTapLabel struct {
+	widget.Label
+	tap       func()
+	doubletap func()
+}
+
+func NewDoubleTapLabel(text string, tap func(), doubletap func()) *DoubleTapLabel {
+	i := &DoubleTapLabel{tap: tap, doubletap: doubletap}
+	i.Text = text
+	i.ExtendBaseWidget(i)
+	return i
+}
+
+func (t *DoubleTapLabel) Tapped(_ *fyne.PointEvent) {
+	if t.tap == nil {
+		return
+	}
+	t.tap()
+}
+
+func (t *DoubleTapLabel) DoubleTapped(_ *fyne.PointEvent) {
+	if t.doubletap == nil {
+		return
+	}
+	t.doubletap()
+}
+
 func NewTieView() *TieView {
 	tv := TieView{}
 	tv.data1 = binding.BindStringList(&[]string{})
@@ -46,6 +77,7 @@ func NewTieView() *TieView {
 	tv.SelectedValue1 = binding.NewString()
 	tv.SelectedValue2 = binding.NewString()
 	tv.value1tovalue2 = make(map[string][]string)
+	tv.SelectedHistory = make([]string, 0)
 	tv.refreshTimer = time.NewTicker(100)
 	go func() {
 		for {
@@ -95,6 +127,10 @@ func (tv *TieView) SetData(value1 []string, value2 []string) {
 	tv.value2 = value2
 	tv.data1.Set(data1)
 	tv.data2.Set(value2)
+
+	if tv.list1 != nil {
+		tv.list1.Select(0)
+	}
 }
 
 func (tv *TieView) List1Select(id int) {
@@ -150,7 +186,10 @@ func (tv *TieView) Add() {
 }
 
 func (tv *TieView) Create() {
-
+	key, _ := tv.SelectedKey.Get()
+	createView := NewTieCreateView()
+	createView.SetKey(key)
+	tv.window.SetContent(createView.MakeUI(tv))
 }
 
 func (tv *TieView) Update(newValue2 string) {
@@ -171,6 +210,7 @@ func (tv *TieView) Del() {
 	key, _ := tv.SelectedKey.Get()
 	val1, _ := tv.SelectedValue1.Get()
 	val2, _ := tv.SelectedValue2.Get()
+	fmt.Println(key, val1, val2)
 	g := request.Delete{
 		Key:    key,
 		Value1: val1,
@@ -178,6 +218,11 @@ func (tv *TieView) Del() {
 	}
 	b, _ := json.Marshal(g)
 	tie.SendToWebservice("Delete", b, tv.AddHandler)
+}
+
+func (tv *TieView) ImportFile() {
+	options := tie.TagOptions{}
+	tie.Tag(tv.CurrentFilePath, []string{}, options, tv.AddHandler)
 }
 
 func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
@@ -192,14 +237,27 @@ func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
 
 	tv.list2 = widget.NewListWithData(tv.data2,
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			// return widget.NewLabel("template")
+			label := widget.NewLabel("template")
+			item := container.NewHBox(widget.NewButton("*", func() {
+				prev, _ := tv.SelectedKey.Get()
+				tv.SelectedHistory = tv.SelectedHistory[0:tv.CurrentHistoryItem]
+				tv.SelectedHistory = append(tv.SelectedHistory, prev)
+				tv.SelectedHistory = append(tv.SelectedHistory, label.Text)
+				tv.CurrentHistoryItem++
+				tv.SetKey(label.Text)
+				tv.Refresh()
+			}), label)
+			return item
 		},
 		func(i binding.DataItem, o fyne.CanvasObject) {
-			o.(*widget.Label).Bind(i.(binding.String))
+			o.(*fyne.Container).Objects[1].(*widget.Label).Bind(i.(binding.String))
+			// o.(*widget.Label).Bind(i.(binding.String))
 		})
 
 	tv.list1.OnSelected = tv.List1Select
 	tv.list2.OnSelected = tv.List2Select
+	// tv.list
 
 	tv.list2.OnUnselected = func(id int) {
 		tv.SelectedValue2.Set("")
@@ -210,18 +268,40 @@ func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
 	add := widget.NewButton("Add tag", tv.Add)
 	create := widget.NewButton("Create tag", tv.Create)
 	del := widget.NewButton("Del", tv.Del)
+	importFile := widget.NewButton("Import", tv.ImportFile)
 
 	txtKey := widget.NewEntryWithData(tv.SelectedKey)
 	txtKey.Disable()
+	toolbar := widget.NewToolbar(
+		widget.NewToolbarAction(theme.NavigateBackIcon(), func() {
+			if tv.CurrentHistoryItem == 0 {
+				return
+			}
+			tv.CurrentHistoryItem--
+			tv.SetKey(tv.SelectedHistory[tv.CurrentHistoryItem])
+			tv.Refresh()
+		}),
+		widget.NewToolbarAction(theme.NavigateNextIcon(), func() {
+			if tv.CurrentHistoryItem >= len(tv.SelectedHistory)-1 {
+				return
+			}
+			tv.CurrentHistoryItem++
+			tv.SetKey(tv.SelectedHistory[tv.CurrentHistoryItem])
+			tv.Refresh()
+		}),
+		widget.NewToolbarAction(theme.ViewRefreshIcon(), func() {
+			tv.Refresh()
+		}))
+	top := container.NewGridWithRows(2, txtKey, toolbar)
 	txtValue1 := widget.NewEntryWithData(tv.SelectedValue1)
 	txtValue1.Disable()
 	txtValue2 := widget.NewEntryWithData(tv.SelectedValue2)
 	txtValue2.OnSubmitted = tv.Update
-	buttons := container.NewGridWithColumns(3, create, del, add)
+	buttons := container.NewGridWithColumns(4, create, del, importFile, add)
 	entryFields := container.NewGridWithColumns(2, txtValue1, txtValue2)
 	bottom := container.NewGridWithRows(2, entryFields, buttons)
 
-	return container.NewBorder(txtKey, bottom, nil, nil, split)
+	return container.NewBorder(top, bottom, nil, nil, split)
 }
 
 func (tv *TieView) AddHandler(resp json.RawMessage) {

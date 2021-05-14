@@ -5,7 +5,7 @@ import (
 )
 
 func TestInsertAssociation(t *testing.T) {
-	db := NewDB()
+	db := NewDB(false)
 	col := db.GetCollection(CollectionKey{"Collections", "test"})
 	input1 := "/home/johan/gopath/src/nicecode.rocks/uid/tiedb"
 	input2 := "/home/johan/gopath/src/nicecode.rocks/uid/tiedb2"
@@ -16,7 +16,7 @@ func TestInsertAssociation(t *testing.T) {
 	found, asses := col.GetAssociations("a")
 
 	if found {
-		out := col.SetToString("a", "", asses)
+		out, _ := col.SetToString("a", "", asses)
 		if out.Associations[0] != input2 {
 			t.Errorf("Error input1, got: %s, want: %s.", out.Associations[0], input2)
 		}
@@ -51,7 +51,7 @@ func TestInsertAssociation(t *testing.T) {
 // }
 
 func TestDeleteAssociation(t *testing.T) {
-	db := NewDB()
+	db := NewDB(false)
 	col := db.GetCollection(CollectionKey{"Collections", "test3"})
 
 	col.Add("superkey", "value1", "file")
@@ -63,7 +63,7 @@ func TestDeleteAssociation(t *testing.T) {
 	found, asses := col.GetAssociations("superkey")
 
 	if found {
-		out := col.SetToString("superkey", "", asses)
+		out, _ := col.SetToString("superkey", "", asses)
 		if out.Associations[0] != "value3" {
 			t.Errorf("Error input1, got: %s, want: %s.", out.Associations[0], "value3")
 		}
@@ -76,14 +76,14 @@ func TestDeleteAssociation(t *testing.T) {
 }
 
 func TestReOpen(t *testing.T) {
-	db := NewDB()
+	db := NewDB(true)
 	col := db.GetCollection(CollectionKey{"Collections", "test4"})
 
 	col.Add("superkey", "value1", "file0")
 	col.Add("superkey", "value2", "file1")
 
 	col.CloseDB()
-	db = NewDB()
+	db = NewDB(true)
 	col = db.GetCollection(CollectionKey{"Collections", "test4"})
 
 	col.Add("superkey2", "value3", "file2")
@@ -92,7 +92,7 @@ func TestReOpen(t *testing.T) {
 	found, asses := col.GetAssociations("superkey2")
 
 	if found {
-		out := col.SetToString("superkey2", "", asses)
+		out, _ := col.SetToString("superkey2", "", asses)
 		if out.Relations[0] != "value3" {
 			t.Errorf("Error input1, got: %s, want: %s.", out.Relations[0], "value3")
 		}
@@ -112,7 +112,7 @@ func TestReOpen(t *testing.T) {
 	found, asses = col.GetAssociations("superkey")
 
 	if found {
-		out := col.SetToString("superkey", "", asses)
+		out, _ := col.SetToString("superkey", "", asses)
 		if out.Relations[0] != "value1" {
 			t.Errorf("Error input1, got: %s, want: %s.", out.Relations[0], "value1")
 		}
@@ -124,6 +124,32 @@ func TestReOpen(t *testing.T) {
 		}
 		if out.Associations[1] != "file1" {
 			t.Errorf("Error input4, got: %s, want: %s.", out.Associations[1], "file1")
+		}
+	} else {
+		t.Error("Error GetAssociations, did not find", "superkey")
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	db := NewDB(false)
+	col := db.GetCollection(CollectionKey{"Collections", "test5"})
+
+	key := "superkey"
+	val1 := "value1"
+	val2 := "value2"
+	val3 := "value3"
+	col.Add(key, val1, val2)
+	success, err := col.Update(key, val1, val2, val3)
+	if !success {
+		t.Errorf("Error Update returned false, msg: %s.", err)
+	}
+
+	found, asses := col.GetAssociations("superkey")
+
+	if found {
+		out, _ := col.SetToString(key, "", asses)
+		if out.Associations[0] != val3 {
+			t.Errorf("Error input1, got: %s, want: %s.", out.Associations[0], val3)
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "superkey")

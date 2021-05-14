@@ -12,17 +12,20 @@ import (
 
 func main() {
 	var hash string
+
+	tie.InitConfig()
+	view := component.NewTieView()
+
 	if len(os.Args) > 1 {
 		pc := putlib.PutConfig{}
 		hash, _ = pc.AddressOfFile(os.Args[1])
+		view.CurrentFilePath = os.Args[1]
 	} else {
 		pc := putlib.PutConfig{}
-		hash, _ = pc.AddressOfFile("test")
+		hash, _ = pc.AddressOfFile("main.go")
+		view.CurrentFilePath = "main.go"
 	}
 
-	tie.InitConfig()
-
-	view := component.NewTieView()
 	view.SetKey(hash)
 	view.SetData([]string{}, []string{})
 	myApp := app.New()

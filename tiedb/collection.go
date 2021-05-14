@@ -370,9 +370,6 @@ func (ic *InternalCollection) Sync() {
 }
 
 func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (bool, string) {
-	fmt.Println("Del Key:", key)
-	fmt.Println("Del Val1:", value1)
-	fmt.Println("Del Val2:", value2)
 	found, asses := ic.GetAssociations(key)
 	if found {
 		f1, e2 := ic.GetEntryFromString(value2)
@@ -397,12 +394,8 @@ func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (
 }
 
 func (ic *InternalCollection) Update(key string, value1 string, value2 string, newValue2 string) (bool, string) {
-	fmt.Println("Key:", key)
-	fmt.Println("Val1:", value1)
-	fmt.Println("Val2:", value2)
-	fmt.Println("New:", newValue2)
 	if ok, msg := ic.Delete(key, value1, value2); ok {
-		ic.Add(key, value1, value2)
+		ic.Add(key, value1, newValue2)
 		return true, ""
 	} else {
 		return false, msg
