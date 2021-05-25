@@ -63,7 +63,6 @@ type InternalCollection struct {
 	mu2                      sync.Mutex // TODO: Better names
 	mutexAssociation         sync.Mutex // TODO: Better names
 	mutexInsert              sync.Mutex // TODO: Better names
-	mutexSetToString         sync.Mutex // TODO: Better names
 	InserterWG               sync.WaitGroup
 	InserterWGAssociation    sync.WaitGroup
 	InserterWGAssociationExt sync.WaitGroup

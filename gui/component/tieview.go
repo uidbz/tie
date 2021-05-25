@@ -291,7 +291,11 @@ func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
 		}),
 		widget.NewToolbarAction(theme.ViewRefreshIcon(), func() {
 			tv.Refresh()
-		}))
+		}),
+		widget.NewToolbarSpacer(),
+		widget.NewToolbarAction(theme.SettingsIcon(), func() {
+		}),
+	)
 	top := container.NewGridWithRows(2, txtKey, toolbar)
 	txtValue1 := widget.NewEntryWithData(tv.SelectedValue1)
 	txtValue1.Disable()

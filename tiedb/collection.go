@@ -537,8 +537,6 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 // 	, valueCollection string,
 // }
 func (ic *InternalCollection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
-	ic.mutexSetToString.Lock()
-	defer ic.mutexSetToString.Unlock()
 	size := s.Size()
 	// var e *Entry
 	// if valueCollection == nil {
@@ -563,6 +561,7 @@ func (ic *InternalCollection) SetToString(value string, relationFilter string, s
 	v.Ch = make(chan interface{}, 1000)
 	first := true
 	wg.Add(1)
+	var appendMutex sync.Mutex
 	go func() {
 		i := 0
 		for t := range v.Ch {
@@ -575,20 +574,23 @@ func (ic *InternalCollection) SetToString(value string, relationFilter string, s
 			x := t.(*Association)
 
 			go func(i int, x *Association) {
-				if i-1 > int(size) { //In case results change since size was calculated
-					for j := int(size); j <= i; j++ {
+				defer wg.Done()
+
+				if i >= int(size) { //In case results change since size was calculated
+					appendMutex.Lock()
+					for j := len(set.Keys); j <= i; j++ {
 						set.Keys = append(set.Keys, "")
 						set.Associations = append(set.Associations, "")
 						set.Relations = append(set.Relations, "")
 						associationTrees = append(associationTrees, &Tree{})
 					}
+					appendMutex.Unlock()
 				}
 				set.Keys[i] = ic.GetValueString(x.Level, x.EntryId)
 				set.Associations[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
 				associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
 				// fmt.Println("Associate to:", x.AssociationLevel, x.AssociateTo, ic.GetValueString(x.AssociationLevel, x.AssociateTo))
 				set.Relations[i] = ic.GetValueString(x.RelationLevel, x.Relation)
-				wg.Done()
 			}(i, x)
 			i++
 		}
