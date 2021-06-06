@@ -24,6 +24,5 @@ _testmain.go
 *.test
 *.prof
 
-cmd/tie/tie
-cmd/tie-daemon/tie-daemon
-gui/tie-tag/tie-tag
+#tie specific
+tie-daemon

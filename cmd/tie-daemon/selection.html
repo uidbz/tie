@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<head>
+  <title>{{.Title}}</title>
+  <meta charset="UTF-8">
+  <style>
+    .rTable {
+			display: block;
+			width: 100%;
+			margin-left: auto;
+			margin-right: auto;
+		}
+		.rTableHeading, .rTableBody, .rTableFoot, .rTableRow{
+			clear: both;
+		}
+		.rTableHead, .rTableFoot{
+			background-color: #312f2f;
+			font-weight: bold;
+			color: #ffaa00;
+		}
+		.rTableCell, .rTableHead {
+			border: 0px solid #999999;
+			float: left;
+			height: 17px;
+			overflow: auto;
+			padding: 3px 1.8%;
+			width: 15%;
+		}
+		#content {
+			width: 55%;
+		}
+		.rTableCell {
+			height: 100%;
+			background-color: #3f3f3f;
+		}
+		.rTable:after {
+			 visibility: hidden;
+			 display: block;
+			 font-size: 0;
+			 content: " ";
+			 clear: both;
+			 height: 0;
+		}
+      
+      body {
+					background-color: #3f3f3f;
+          color: #d5d5c6;
+      }
+      a:link {
+        color: #0e8fff;
+      }
+      a:visited {
+        color: #0e8fff;
+      }
+      a:hover {
+        color: #0e8fff;
+      }
+      a:active {
+        color: #0e8fff;
+      }
+  </style>
+</head>
+<body>
+  <div class="rTable">
+	 <div class="rTableRow">
+		 <div class="rTableHead"><strong>Select Document</strong></div>
+	 </div>
+	 <div class="rTableRow">
+        <div class="rTableCell">
+			{{.Options}}
+		</div>
+	</div>
+  </div>
+</body>
