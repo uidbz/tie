@@ -10,11 +10,15 @@ git.sr.ht/~uid/tie/request v0.0.0-20210511205824-eda5c64cdc10 h1:hdrHxJGC60C5TND
 git.sr.ht/~uid/tie/request v0.0.0-20210511205824-eda5c64cdc10/go.mod h1:VFgKwcvn+oMsd93uqJOhTIUVJ3C9GreCORxCxL/iv/U=
 git.sr.ht/~uid/tie/request v0.0.0-20210606173009-dd352469fcb8 h1:jNp83kkY5LeeWrJji+DephVdTAcotQMHMLAssK82n+o=
 git.sr.ht/~uid/tie/request v0.0.0-20210606173009-dd352469fcb8/go.mod h1:SI33qL/E6ewc/MTU9u0W3OaStaQrjZ+7nQfabFIc/ss=
+git.sr.ht/~uid/tie/request v0.0.0-20210609071741-dcd5d7fe16b1 h1:CMNN5jV7LCFeISh0ia5+GNbRXQ9K5bz+oJMBJEdy+ZY=
+git.sr.ht/~uid/tie/request v0.0.0-20210609071741-dcd5d7fe16b1/go.mod h1:xasWeF9Gunv/v2i4iwW0cpNgBxz8faVmmpCU1jaOzfk=
 git.sr.ht/~uid/tie/tiedb v0.0.0-20210511182523-385b72bb0441/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 git.sr.ht/~uid/tie/tiedb v0.0.0-20210511205824-eda5c64cdc10 h1:Z0ldXZg2HSnTUxLYG5gPdvLQPGETnuqiWAjaegOeyRw=
 git.sr.ht/~uid/tie/tiedb v0.0.0-20210511205824-eda5c64cdc10/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 git.sr.ht/~uid/tie/tiedb v0.0.0-20210606173009-dd352469fcb8 h1:gcb/XpWg9FCHsvGdr8bnW6YE1VJa8EX4p84GMhVT+PU=
 git.sr.ht/~uid/tie/tiedb v0.0.0-20210606173009-dd352469fcb8/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210609071741-dcd5d7fe16b1 h1:Qor1xaPQsQL56/233pi0wiyDEakJ7kuKvCl37ggLJj0=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210609071741-dcd5d7fe16b1/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9/go.mod h1:7uhhqiBaR4CpN0k9rMjOtjpcfGd6DG2m04zQxKnWQ0I=
 github.com/akavel/rsrc v0.8.0/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
