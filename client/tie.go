@@ -104,6 +104,7 @@ func Tag(path string, tags []string, options TagOptions, addHandler func(json.Ra
 			// uid := metalib.HashFunction + "/" + info.MediaType + "/" + info.Hash
 			base := filepath.Base(path)
 			TieAdd("file", "highway-hash", info.Hash, addHandler)
+			TieAdd(info.Hash, "context", "tiehashv1", addHandler)
 			TieAdd(info.Hash, "filename", base, addHandler)
 			TieAdd(info.Hash, "media-type", info.MediaType, addHandler)
 			if options.AddOriginalPath {
@@ -121,6 +122,9 @@ func Tag(path string, tags []string, options TagOptions, addHandler func(json.Ra
 			if len(p) == 2 {
 				switch p[0] {
 				case "video":
+					if height := GetVideoHeight(path); height != "" {
+						TieAdd(info.Hash, "tag", height, addHandler)
+					}
 
 				case "image":
 

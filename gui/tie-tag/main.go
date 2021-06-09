@@ -13,6 +13,7 @@ import (
 func main() {
 	var hash string
 
+	tie.Config = "2"
 	tie.InitConfig()
 	view := component.NewTieView()
 
