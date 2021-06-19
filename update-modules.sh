@@ -1,0 +1,46 @@
+#!/bin/bash
+
+cd tiedb
+go get -u .
+cd ../metadata
+go get -u .
+cd ../request
+go get -u .
+go get git.sr.ht/~uid/tie/tiedb@latest
+cd ../client
+go get -u .
+go get git.sr.ht/~uid/tie/tiedb@latest
+go get git.sr.ht/~uid/tie/metadata@latest
+go get git.sr.ht/~uid/tie/client@latest
+cd ../cmd/tie
+go get -u .
+go get git.sr.ht/~uid/putlib@latest
+go get git.sr.ht/~uid/tie/client@latest
+go get git.sr.ht/~uid/tie/request@latest
+go get git.sr.ht/~uid/tie/tiedb@latest
+cd ../tie-daemon
+go get -u .
+go get git.sr.ht/~uid/tie/request@latest
+go get git.sr.ht/~uid/tie/tiedb@latest
+cd ../../gui/component
+go get -u .
+go get git.sr.ht/~uid/tie/client@latest
+go get git.sr.ht/~uid/tie/request@latest
+cd ../tie-tag
+go get -u .
+go get git.sr.ht/~uid/tie/component@latest
+go get git.sr.ht/~uid/tie/client@latest
+go get git.sr.ht/~uid/putlib@latest
+cd ../../io/putlib
+go get -u .
+cd ../getlib
+go get -u .
+cd ../../cmd/tie-put
+go get -u .
+go get git.sr.ht/~uid/tie/io/putlib@latest
+cd ../tie-get
+go get -u .
+go get git.sr.ht/~uid/tie/io/getlib@latest
+cd ../tie-serve
+go get -u .
+go get git.sr.ht/~uid/tie/metadata@latest

@@ -16,7 +16,7 @@ import (
 
 	"gopkg.in/resty.v1"
 
-	"git.sr.ht/~uid/putlib"
+	"git.sr.ht/~uid/tie/io/putlib"
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/request"
 )
