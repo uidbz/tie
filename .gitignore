@@ -26,4 +26,7 @@ _testmain.go
 
 cmd/tie/tie
 cmd/tie-daemon/tie-daemon
+cmd/tie-put/tie-put
+cmd/tie-get/tie-get
+cmd/tie-serve/tie-serve
 gui/tie-tag/tie-tag

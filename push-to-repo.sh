@@ -2,6 +2,7 @@
 git add -A
 git commit -m "$@"
 git push
+
 cd tiedb
 go get -u .
 cd ../metadata
@@ -33,6 +34,20 @@ go get -u .
 go get git.sr.ht/~uid/tie/component@latest
 go get git.sr.ht/~uid/tie/client@latest
 go get git.sr.ht/~uid/putlib@latest
+cd ../../io/putlib
+go get -u .
+cd ../getlib
+go get -u .
+cd ../../cmd/tie-put
+go get -u .
+go get git.sr.ht/~uid/tie/io/putlib@latest
+cd ../tie-get
+go get -u .
+go get git.sr.ht/~uid/tie/io/getlib@latest
+cd ../tie-serve
+go get -u .
+go get git.sr.ht/~uid/tie/metadata@latest
+
 git add -A
 git commit -m "Update modules to latest versions"
 git push
