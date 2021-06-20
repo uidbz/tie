@@ -26,7 +26,7 @@ _testmain.go
 *.test
 *.prof
 
-./dist
+dist
 
 cmd/tie/tie
 cmd/tie-daemon/tie-daemon
