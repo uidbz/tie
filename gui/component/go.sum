@@ -1,11 +1,11 @@
 fyne.io/fyne/v2 v2.0.3 h1:qzd2uLLrAVrNeqnLY44QZCsMxZwjoo1my+lMzHicMXY=
 fyne.io/fyne/v2 v2.0.3/go.mod h1:nNpgL7sZkDVLraGtQII2ArNRnnl6kHup/KfQRxIhbvs=
-git.sr.ht/~uid/tie/io/putlib v0.0.0-20210619185141-28fca9f10dad h1:fx4a55aEBfcY73l+65HVzeaJVMziW2YV8ZIfhz1nRZ8=
-git.sr.ht/~uid/tie/io/putlib v0.0.0-20210619185141-28fca9f10dad/go.mod h1:sohlRTv6ZY8hDyWWDRLc92l00HJi3cR3blyW9+29KWs=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210619185141-28fca9f10dad h1:MCJ0H+G/y+51MteB/fq/ONy0kmUK948i4m7E1NQmdiI=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210619185141-28fca9f10dad/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20210619185141-28fca9f10dad h1:8w7BNOnaoJ8Vv+O5lYY4pQVm3b/pYocQrUhFzR0RZtM=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20210619185141-28fca9f10dad/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/io/putlib v0.0.0-20210620074611-ca132b42db60 h1:vbmK3HN3wgOH0dbE2IFM+bg8BC1CHa/Hi/qvsl6ZnbI=
+git.sr.ht/~uid/tie/io/putlib v0.0.0-20210620074611-ca132b42db60/go.mod h1:sohlRTv6ZY8hDyWWDRLc92l00HJi3cR3blyW9+29KWs=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210620074611-ca132b42db60 h1:HiC9zvxBBv6v9OFf24JAGzGhJD+q9NUMTtptzJ5r8/g=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210620074611-ca132b42db60/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210620074611-ca132b42db60 h1:1UVKxxug1+bk/iNgzDgE6IrEolcWJSxozcWir0Om8NE=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210620074611-ca132b42db60/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9/go.mod h1:7uhhqiBaR4CpN0k9rMjOtjpcfGd6DG2m04zQxKnWQ0I=
 github.com/akavel/rsrc v0.8.0/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
