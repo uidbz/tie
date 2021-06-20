@@ -1,4 +1,4 @@
-module git.sr.ht/~uid/tie-daemon
+module git.sr.ht/~uid/tie/cmd/tie-daemon
 
 go 1.16
 

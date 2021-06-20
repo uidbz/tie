@@ -1,4 +1,4 @@
-module git.sr.ht/~uid/get
+module git.sr.ht/~uid/tie/cmd/tie-download
 
 go 1.16
 

@@ -1,4 +1,4 @@
-module git.sr.ht/~uid/put
+module git.sr.ht/~uid/tie/cmd/tie-upload
 
 go 1.16
 

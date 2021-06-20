@@ -26,9 +26,11 @@ _testmain.go
 *.test
 *.prof
 
+./dist
+
 cmd/tie/tie
 cmd/tie-daemon/tie-daemon
-cmd/tie-put/tie-put
-cmd/tie-get/tie-get
+cmd/tie-download/tie-download
+cmd/tie-upload/tie-upload
 cmd/tie-serve/tie-serve
 gui/tie-tag/tie-tag
