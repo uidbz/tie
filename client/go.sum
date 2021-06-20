@@ -1,12 +1,8 @@
-git.sr.ht/~uid/tie/metadata v0.0.0-20210606173009-dd352469fcb8 h1:IH64Z760k/4NjPJgsG8CuTaQGXpB+SbL3LOE9HJy2Uo=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210606173009-dd352469fcb8/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210619183836-21eb3cdfb30a h1:LP5wahIQ94v2wBYMrY502mjcrJ7CihwsjvksIIhJQfY=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210619183836-21eb3cdfb30a/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210619185141-28fca9f10dad h1:MCJ0H+G/y+51MteB/fq/ONy0kmUK948i4m7E1NQmdiI=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210619185141-28fca9f10dad/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=
 github.com/minio/highwayhash v1.0.2/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
 golang.org/x/net v0.0.0-20181220203305-927f97764cc3/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
-golang.org/x/net v0.0.0-20210525063256-abc453219eb5 h1:wjuX4b5yYQnEQHzd+CBcrcC6OVR2J1CN6mUy0oSxIPo=
-golang.org/x/net v0.0.0-20210525063256-abc453219eb5/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/net v0.0.0-20210614182718-04defd469f4e h1:XpT3nA5TvE525Ne3hInMh6+GETgn27Zfm9dxsThnX2Q=
 golang.org/x/net v0.0.0-20210614182718-04defd469f4e/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/sys v0.0.0-20190130150945-aca44879d564/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
