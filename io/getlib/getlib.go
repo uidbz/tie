@@ -3,6 +3,7 @@ package getlib
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,7 +13,38 @@ import (
 	"strings"
 )
 
-func DownloadFile(url string, sourceHash string, basepath string, path string) (err error) {
+func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
+	// Create the file
+
+	// Get the data
+	resp, err := http.Get(url + "/" + sourceHash)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Check server response
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	var buf bytes.Buffer
+	_, err = io.CopyN(&buf, resp.Body, 3)
+	mode := string(buf.Bytes())
+	_, err = io.Copy(&buf, resp.Body)
+
+	if mode == "dir" {
+		return nil, errors.New("Source is a directory; expected file.")
+	} else {
+		return &buf, nil
+	}
+}
+
+func DownloadFile(url string, sourceHash string, destination string) (err error) {
+	return downloadFile(url, sourceHash, destination, "")
+}
+
+func downloadFile(url string, sourceHash string, basepath string, path string) (err error) {
 	// Create the file
 
 	// Get the data
@@ -44,7 +76,7 @@ func DownloadFile(url string, sourceHash string, basepath string, path string) (
 			if begin {
 				parts := strings.Split(input, "\t")
 				if len(parts) == 2 {
-					DownloadFile(url, parts[0], basepath, parts[1])
+					downloadFile(url, parts[0], basepath, parts[1])
 				}
 			}
 		}
