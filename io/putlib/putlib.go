@@ -156,6 +156,7 @@ func (pc *PutConfig) Upload(url string, file string) (string, string) {
 		var hashes string = "dir\n---\n"
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
+			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
 			h, f := pc.Upload(url, abs)
 			hashes += h + "\t" + f + "\n"
 		}

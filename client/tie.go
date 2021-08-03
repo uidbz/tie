@@ -47,33 +47,39 @@ func InitConfig() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ConfigDir = filepath.Join(usr.HomeDir, ".config", "tie")
-	ConfigPath = ConfigDir + "/" + Config + ".json"
-
-	if _, err := os.Stat(ConfigPath); os.IsNotExist(err) {
-		if _, err2 := os.Stat(ConfigDir); os.IsNotExist(err2) {
-			if os.Mkdir(ConfigDir, 0777) != nil {
-				panic("Can't create " + ConfigDir + "\nExiting...")
-			}
-		}
-		// Default values
-		s := State{
-			Webservice:    "https://localhost:1161",
-			Namespace:     "Collections",
-			Collection:    "Main",
-			ServeUrl:      "http://localhost:1162",
-			DataHost:      "/data",
-			ThumbnailHost: "/mnt/thumbnails",
-		}
-		CurrentState = s
-
-		SaveJSON(ConfigPath, CurrentState)
-		PrintState()
-	} else {
-		LoadJSON(ConfigPath, &CurrentState)
-		CurrentState.Key = InitKey()
-		PrintState()
+	if ConfigDir, err := os.Getwd(); err == nil {
+		ConfigPath = ConfigDir + "/" + Config + ".json"
 	}
+	// If config file does not exist in workdir, then assume config will be in $HOME/.config/tie
+	if _, err := os.Stat(ConfigPath); os.IsNotExist(err) {
+		ConfigDir = filepath.Join(usr.HomeDir, ".config", "tie")
+		ConfigPath = ConfigDir + "/" + Config + ".json"
+
+		if _, err := os.Stat(ConfigPath); os.IsNotExist(err) {
+			if _, err2 := os.Stat(ConfigDir); os.IsNotExist(err2) {
+				if os.MkdirAll(ConfigDir, 0777) != nil {
+					panic("Can't create " + ConfigDir + "\nExiting...")
+				}
+			}
+			// Default values
+			s := State{
+				Webservice:    "https://localhost:1161",
+				Namespace:     "Collections",
+				Collection:    "Main",
+				ServeUrl:      "http://localhost:1162",
+				DataHost:      "/data",
+				ThumbnailHost: "/mnt/thumbnails",
+			}
+			CurrentState = s
+
+			SaveJSON(ConfigPath, CurrentState)
+			PrintState()
+			return
+		}
+	}
+	LoadJSON(ConfigPath, &CurrentState)
+	CurrentState.Key = InitKey()
+	PrintState()
 }
 
 func TieAdd(Entry1, Relation, Entry2 string, addHandler func(json.RawMessage)) {
