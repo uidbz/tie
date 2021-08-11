@@ -135,17 +135,27 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) (stri
 	return string(body), nil
 }
 
-func (pc *PutConfig) Upload(url string, file string) (string, string) {
+func Upload(url string, file string, config PutConfig) (string, string) {
+	if len(url) < 5 {
+		url = "http://" + url
+	}
+	if url[0:5] != "http:" {
+		url = "http://" + url
+	}
+	if url[len(url)-1] == '/' {
+		url += "upload/"
+	} else {
+		url += "/upload/"
+	}
+
+	return upload(url, file, config)
+}
+
+func upload(url string, file string, config PutConfig) (string, string) {
 	fi, errStat := os.Lstat(file)
 	if errStat != nil {
 		fmt.Println("Error stat file:", file, errStat)
 		return "", ""
-	}
-	if len(url) < 5 {
-		return "", ""
-	}
-	if url[len(url)-1] != '/' {
-		url += "/"
 	}
 
 	if fi.IsDir() {
@@ -157,22 +167,22 @@ func (pc *PutConfig) Upload(url string, file string) (string, string) {
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
 			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
-			h, f := pc.Upload(url, abs)
+			h, f := upload(url, abs, config)
 			hashes += h + "\t" + f + "\n"
 		}
-		h, _ := pc.AddressOf(strings.NewReader(hashes))
-		output, err := pc.UploadMultipart(url+h, strings.NewReader(hashes), file)
+		h, _ := config.AddressOf(strings.NewReader(hashes))
+		output, err := config.UploadMultipart(url+h, strings.NewReader(hashes), file)
 		if err != nil {
 			fmt.Println("Upload directory error:", err)
 		}
-		return pc.ValidateAndPrint(h, file, output)
+		return config.ValidateAndPrint(h, file, output)
 	} else {
-		h, _ := pc.AddressOfFile(file)
-		output, err := pc.UploadFile(url+h, file)
+		h, _ := config.AddressOfFile(file)
+		output, err := config.UploadFile(url+h, file)
 		if err != nil {
 			fmt.Println("Upload error:", err)
 		}
-		return pc.ValidateAndPrint(h, file, output)
+		return config.ValidateAndPrint(h, file, output)
 	}
 }
 

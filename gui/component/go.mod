@@ -11,3 +11,5 @@ require (
 replace git.sr.ht/~uid/tie/request => ../../request
 
 replace git.sr.ht/~uid/tie/client => ../../client
+
+replace git.sr.ht/~uid/tie/io/putlib => ../../io/putlib

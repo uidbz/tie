@@ -25,14 +25,14 @@ func main() {
 		file := os.Args[1]
 		var url string
 		if server != "" {
-			url = "http://" + server + "/upload/"
+			url = "http://" + server
 		} else {
-			url = "http://localhost:1162/upload/"
+			url = "http://localhost:1162"
 		}
 
 		pc := putlib.PutConfig{}
 		pc.JsonOutput = jsonOutput
-		pc.Upload(url, file)
+		putlib.Upload(url, file, pc)
 	} else {
 		fmt.Println("Need file/dir to upload")
 	}

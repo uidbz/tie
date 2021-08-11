@@ -101,7 +101,7 @@ func Tag(path string, tags []string, options TagOptions, addHandler func(json.Ra
 	pc := putlib.PutConfig{}
 	pc.JsonOutput = true
 	pc.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
-	output, _ := pc.Upload(CurrentState.ServeUrl+"/upload", path)
+	output, _ := putlib.Upload(CurrentState.ServeUrl, path, pc)
 	if output != "" {
 		info := metadata.Info{}
 		if err := json.Unmarshal([]byte(output), &info); err != nil {
