@@ -104,8 +104,11 @@ func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 	col := db.GetCollection(key)
 	success, msg := col.Delete(r.Key, r.Value1, r.Value2)
 	reply := ReplyStatus{
-		Success: success,
-		Message: msg,
+		Success:    success,
+		Message:    msg,
+		OrigKey:    r.Key,
+		OrigValue1: r.Value1,
+		OrigValue2: r.Value2,
 	}
 
 	json_reply, err := json.Marshal(reply)
@@ -118,10 +121,19 @@ func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 
 func (r *Update) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 	col := db.GetCollection(key)
-	success, msg := col.Update(r.Key, r.Value1, r.Value2, r.NewValue2)
+	var success bool
+	var msg string
+	if r.AddOnFailure {
+		success, msg = col.UpdateAdd(r.Key, r.Value1, r.Value2, r.NewValue2)
+	} else {
+		success, msg = col.Update(r.Key, r.Value1, r.Value2, r.NewValue2)
+	}
 	reply := ReplyStatus{
-		Success: success,
-		Message: msg,
+		Success:    success,
+		Message:    msg,
+		OrigKey:    r.Key,
+		OrigValue1: r.Value1,
+		OrigValue2: r.Value2,
 	}
 
 	json_reply, err := json.Marshal(reply)
@@ -145,6 +157,9 @@ func (r *Add) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 		fmt.Println("ERROR", a)
 		reply.Message = "Something went wrong"
 	}
+	reply.OrigKey = r.Key
+	reply.OrigValue1 = r.Value1
+	reply.OrigValue2 = r.Value2
 
 	json_reply, err := json.Marshal(reply)
 

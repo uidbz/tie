@@ -29,10 +29,11 @@ type Delete struct {
 }
 
 type Update struct {
-	Key       string
-	Value1    string
-	Value2    string
-	NewValue2 string
+	Key          string
+	Value1       string
+	Value2       string
+	NewValue2    string
+	AddOnFailure bool
 }
 
 type ReplyGet struct {
@@ -42,6 +43,9 @@ type ReplyGet struct {
 }
 
 type ReplyStatus struct {
-	Success bool
-	Message string
+	Success    bool
+	Message    string
+	OrigKey    string
+	OrigValue1 string
+	OrigValue2 string
 }

@@ -387,7 +387,7 @@ func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (
 				return true, ""
 			}
 		}
-		return false, "Did not find '" + value2 + "' with relation '" + value1 + "'"
+		return false, "Did not find '" + value2 + "' with value1 '" + value1 + "'"
 	} else {
 		return false, "Did not find '" + key + "'"
 	}
@@ -399,6 +399,17 @@ func (ic *InternalCollection) Update(key string, value1 string, value2 string, n
 		return true, ""
 	} else {
 		return false, msg
+	}
+}
+
+// Try to update value2 to newvalue2. Add if unsuccessful. TODO: Add error checking
+func (ic *InternalCollection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string) {
+	if ok, msg := ic.Delete(key, value1, value2); ok {
+		ic.Add(key, value1, newValue2)
+		return true, ""
+	} else {
+		ic.Add(key, value1, newValue2)
+		return true, msg + ": could not update; adding new value as requested."
 	}
 }
 

@@ -52,6 +52,7 @@ type Collection interface {
 	GetAssociationsExt(value string, entryCollection string) (bool, *Tree)
 	SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree)
 	Update(key string, value1 string, value2 string, newValue2 string) (bool, string)
+	UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string)
 	Delete(key string, value1 string, value2 string) (bool, string)
 	CloseDB()
 }
