@@ -3,7 +3,7 @@ module git.sr.ht/~uid/tie/cmd/tie-serve
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20210803200836-8b2027240a81
+	git.sr.ht/~uid/tie/metadata v0.0.0-20210811072126-6010eb598c7b
 	github.com/dhowden/tag v0.0.0-20201120070457-d52dcb253c63
 	github.com/h2non/filetype v1.1.1
 	github.com/julienschmidt/httprouter v1.3.0
