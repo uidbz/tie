@@ -4,8 +4,8 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.0.4
-	git.sr.ht/~uid/tie/client v0.0.0-20210803200836-8b2027240a81
-	git.sr.ht/~uid/tie/request v0.0.0-20210811072126-6010eb598c7b
+	git.sr.ht/~uid/tie/client v0.0.0-20210813071935-06d25e133f3e
+	git.sr.ht/~uid/tie/request v0.0.0-20210813071935-06d25e133f3e
 )
 
 replace git.sr.ht/~uid/tie/request => ../../request
