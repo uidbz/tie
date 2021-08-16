@@ -1,14 +1,72 @@
 package request
 
 import (
-	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"git.sr.ht/~uid/tie/tiedb"
 )
 
-func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
+func (r *Batch) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
+	batch := ReplyBatch{}
+
+	for _, x := range r.Update {
+		reply, err := x.Reply(db, key)
+		if err != nil {
+			batch.Update = append(batch.Update, reply.ReplyStruct.(ReplyStatus))
+		} else {
+			return Reply{
+				ReplyType:   ReplyTypeEmpty,
+				ReplyStruct: nil,
+			}, err
+		}
+	}
+
+	for _, x := range r.Delete {
+		reply, err := x.Reply(db, key)
+		if err != nil {
+			batch.Delete = append(batch.Delete, reply.ReplyStruct.(ReplyStatus))
+		} else {
+			return Reply{
+				ReplyType:   ReplyTypeEmpty,
+				ReplyStruct: nil,
+			}, err
+		}
+	}
+
+	for _, x := range r.Add {
+		reply, err := x.Reply(db, key)
+		if err != nil {
+			batch.Add = append(batch.Add, reply.ReplyStruct.(ReplyStatus))
+		} else {
+			return Reply{
+				ReplyType:   ReplyTypeEmpty,
+				ReplyStruct: nil,
+			}, err
+		}
+	}
+
+	for _, x := range r.Get {
+		reply, err := x.Reply(db, key)
+		if err == nil {
+			batch.Get = append(batch.Get, reply.ReplyStruct.([]*tiedb.StringSliceSet))
+		} else {
+			fmt.Println("Error:", err.Error())
+			return Reply{
+				ReplyType:   ReplyTypeEmpty,
+				ReplyStruct: nil,
+			}, err
+		}
+	}
+
+	return Reply{
+		ReplyType:   ReplyTypeBatch,
+		ReplyStruct: batch,
+	}, nil
+}
+
+func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 	col := db.GetCollection(key)
 
 	if len(r.Values) == 1 { // GET
@@ -28,7 +86,10 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 				}
 			}
 			if len(relation) > 1 {
-				return "Error: Max filters = 1, maybe you ment to use 'tie filters' or with + in front."
+				return Reply{
+					ReplyType:   ReplyTypeEmpty,
+					ReplyStruct: nil,
+				}, errors.New("Error: Max filters = 1, maybe you ment to use 'tie filters' or with + in front.")
 			}
 
 			set, trees := col.SetToString(r.Values[0], r.Filter, assPtr)
@@ -41,15 +102,15 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 					}
 				}
 			}
-
-			json_reply, err := json.Marshal(replySlice)
-			if err != nil {
-				return "[]"
-			}
-
-			return string(json_reply)
+			return Reply{
+				ReplyType:   ReplyTypeGet,
+				ReplyStruct: replySlice,
+			}, nil
 		}
-		return "[]"
+		return Reply{
+			ReplyType:   ReplyTypeEmpty,
+			ReplyStruct: nil,
+		}, nil
 	} else { // JOIN
 		var prev *tiedb.Tree
 		var replySlice []*tiedb.StringSliceSet
@@ -67,13 +128,19 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 				var found bool
 				found, prev = col.GetAssociations(x)
 				if !found {
-					return "[]"
+					return Reply{
+						ReplyType:   ReplyTypeEmpty,
+						ReplyStruct: nil,
+					}, errors.New("Did not find " + x)
 				}
 				first = false
 			} else {
 				found, second := col.GetAssociations(x)
 				if !found {
-					return "[]"
+					return Reply{
+						ReplyType:   ReplyTypeEmpty,
+						ReplyStruct: nil,
+					}, errors.New("Did not find " + x)
 				}
 				prev = prev.InnerJoin(second, tiedb.AssociationComparator)
 			}
@@ -90,17 +157,15 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 			}
 		}
 
-		json_reply, err := json.Marshal(replySlice)
-
-		if err != nil {
-			return "[]"
-		}
-
-		return string(json_reply)
+		return Reply{
+			ReplyType:   ReplyTypeGet,
+			ReplyStruct: replySlice,
+		}, nil
+		//her
 	}
 }
 
-func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
+func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 	col := db.GetCollection(key)
 	success, msg := col.Delete(r.Key, r.Value1, r.Value2)
 	reply := ReplyStatus{
@@ -111,15 +176,13 @@ func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 		OrigValue2: r.Value2,
 	}
 
-	json_reply, err := json.Marshal(reply)
-	if err != nil {
-		return "Error creating reply"
-	}
-
-	return string(json_reply)
+	return Reply{
+		ReplyType:   ReplyTypeStatus,
+		ReplyStruct: reply,
+	}, nil
 }
 
-func (r *Update) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
+func (r *Update) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 	col := db.GetCollection(key)
 	var success bool
 	var msg string
@@ -136,15 +199,13 @@ func (r *Update) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 		OrigValue2: r.Value2,
 	}
 
-	json_reply, err := json.Marshal(reply)
-	if err != nil {
-		return "Error creating reply"
-	}
-
-	return string(json_reply)
+	return Reply{
+		ReplyType:   ReplyTypeStatus,
+		ReplyStruct: reply,
+	}, nil
 }
 
-func (r *Add) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
+func (r *Add) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 	reply := ReplyStatus{}
 
 	a := db.GetCollection(key).Add(r.Key, r.Value1, r.Value2)
@@ -161,11 +222,8 @@ func (r *Add) Reply(db *tiedb.Tree, key tiedb.CollectionKey) string {
 	reply.OrigValue1 = r.Value1
 	reply.OrigValue2 = r.Value2
 
-	json_reply, err := json.Marshal(reply)
-
-	if err != nil {
-		return "Error creating reply"
-	}
-
-	return string(json_reply)
+	return Reply{
+		ReplyType:   ReplyTypeStatus,
+		ReplyStruct: reply,
+	}, nil
 }

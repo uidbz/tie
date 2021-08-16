@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"git.sr.ht/~uid/tie/tiedb"
 
@@ -152,6 +153,43 @@ func cmdList() []*cobra.Command {
 	}
 	cmds = append(cmds, cmdTag)
 
+	var cmdBatch = &cobra.Command{
+		Use:   "batch [cmd:key] [cmd:key2] ... [cmd:keyN]",
+		Short: "batch requests (probably temp command)",
+		Long:  "batch requests (probably temp command)",
+		Args:  cobra.MinimumNArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			b := request.Batch{}
+			for _, x := range args {
+				part := strings.Split(x, ":")
+
+				if len(part) < 2 {
+					fmt.Println("Need input args in format 'cmd:key', like get:music")
+					return
+				}
+
+				switch strings.ToLower(part[0]) {
+				case "get":
+					a := request.Get{}
+					a.Values = []string{strings.Join(part[1:], ":")}
+					a.MaxAssociations = 0
+					// if len(args) > 1 {
+					// 	a.Filter = tiedb.ASSOCIATED
+					// }
+					if getFilter != "" {
+						a.Filter = getFilter
+					}
+					b.Get = append(b.Get, a)
+				}
+			}
+
+			c, _ := json.Marshal(b)
+			tie.SendToWebservice("Batch", c, BatchHandler)
+		},
+	}
+	cmdBatch.Flags().StringVarP(&getFilter, "filter", "f", "", "Relation filter")
+	cmds = append(cmds, cmdBatch)
+
 	return cmds
 }
 
@@ -172,6 +210,7 @@ func GetHandler(resp json.RawMessage) {
 	err := json.Unmarshal(resp, &result)
 	if err != nil {
 		fmt.Println("Error handling Get reponse:", err)
+		fmt.Println("Received:", string(resp))
 	}
 	var input tie.TieOutput
 	var columns []string
@@ -222,4 +261,33 @@ func DeleteHandler(resp json.RawMessage) {
 	// fmt.Println("Error unmarshalling response:", err, resp)
 	// }
 
+}
+
+func BatchHandler(resp json.RawMessage) {
+	var result request.ReplyBatch
+	err := json.Unmarshal(resp, &result)
+	if err != nil {
+		fmt.Println("Error handling Get reponse:", err)
+		fmt.Println("Received:", string(resp))
+	}
+	var input tie.TieOutput
+	var columns []string
+	for _, a := range result.Get {
+		for _, x := range a {
+			for i, _ := range x.Associations {
+				key := x.Item
+				value1 := x.Relations[i]
+				value2 := x.Associations[i]
+				if outputAsTable {
+					tie.LoadTieOutput(key, value1, value2, &input, &columns)
+				} else {
+					fmt.Println(key + "\t" + value1 + "\t" + value2)
+				}
+			}
+		}
+	}
+	if outputAsTable {
+		table := tie.TieOutputToTable(input, columns)
+		table.Print(columns)
+	}
 }

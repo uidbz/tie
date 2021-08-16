@@ -120,17 +120,49 @@ func RequestHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params
 		log.Println("Request from " + r.RemoteAddr + ": Update")
 		AnswerRequest(w, raw_data, &request.Update{}, key)
 
+	case "Batch":
+		log.Println("Request from " + r.RemoteAddr + ": Batch")
+		AnswerRequest(w, raw_data, &request.Batch{}, key)
+
 	default:
 		log.Println("Unrecognized request from " + r.RemoteAddr + ": " + ps.ByName("type"))
 	}
 }
 
-func AnswerRequest(w http.ResponseWriter, raw_data []byte, r request.Request, key tiedb.CollectionKey) {
-	err := json.Unmarshal(raw_data, r)
+func ErrorToJsonString(prepend string, err error) string {
+	msg := request.ReplyStatus{
+		Success: false,
+		Message: prepend + " " + err.Error(),
+	}
+	json_reply, err := json.Marshal(msg)
+
 	if err != nil {
-		log.Println(err)
-		fmt.Fprint(w, "error: "+err.Error())
+		return "[\"Success\": false, \"Message\": \"Internal error: " + err.Error() + "\"]"
+	}
+
+	return string(json_reply)
+}
+
+func AnswerRequest(w http.ResponseWriter, raw_data []byte, r request.Request, key tiedb.CollectionKey) {
+	errRequest := json.Unmarshal(raw_data, r)
+	if errRequest != nil {
+		log.Println(errRequest)
+		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
+		fmt.Fprint(w, msg)
+		return
+	}
+
+	reply, errReply := r.Reply(db, key)
+	if errReply != nil {
+		msg := ErrorToJsonString("Error:", errReply)
+		fmt.Fprint(w, msg)
 	} else {
-		fmt.Fprint(w, r.Reply(db, key))
+		json_reply, errMarshal := json.Marshal(reply.ReplyStruct)
+		if errMarshal != nil {
+			msg := ErrorToJsonString("Internal error:", errMarshal)
+			fmt.Fprint(w, msg)
+		} else {
+			fmt.Fprint(w, string(json_reply))
+		}
 	}
 }

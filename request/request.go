@@ -5,8 +5,34 @@ import (
 	"git.sr.ht/~uid/tie/tiedb"
 )
 
+const (
+	ReplyTypeEmpty = iota
+	ReplyTypeStatus
+	ReplyTypeGet
+	ReplyTypeBatch
+)
+
+type Reply struct {
+	ReplyType   uint
+	ReplyStruct interface{}
+}
+
 type Request interface {
-	Reply(*tiedb.Tree, tiedb.CollectionKey) string
+	Reply(*tiedb.Tree, tiedb.CollectionKey) (Reply, error)
+}
+
+type Batch struct {
+	Add    []Add
+	Get    []Get
+	Delete []Delete
+	Update []Update
+}
+
+type ReplyBatch struct {
+	Add    []ReplyStatus
+	Get    [][]*tiedb.StringSliceSet
+	Delete []ReplyStatus
+	Update []ReplyStatus
 }
 
 type Add struct {
