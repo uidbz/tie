@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,7 +15,7 @@ import (
 
 	"path/filepath"
 
-	"gopkg.in/resty.v1"
+	"github.com/go-resty/resty/v2"
 
 	"git.sr.ht/~uid/tie/io/putlib"
 	"git.sr.ht/~uid/tie/metadata"
@@ -177,7 +178,7 @@ func SendToWebservice(command string, body json.RawMessage, handler func(json.Ra
 	if CurrentState.Webservice[0:5] == "https" {
 		t := tls.Config{}
 		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
-		r = resty.SetTLSClientConfig(&t)
+		r = resty.New().SetTLSClientConfig(&t)
 	} else {
 		r = resty.New()
 	}
@@ -189,6 +190,36 @@ func SendToWebservice(command string, body json.RawMessage, handler func(json.Ra
 
 	printOutput(resp, err)
 	handler(resp.Body())
+}
+
+func Run(requestType uint, tieRequest interface{}) (*request.Reply, error) {
+	if len(CurrentState.Webservice) < 5 {
+		e := request.CreateReply(request.ReplyTypeEmpty)
+		return &e, errors.New("Webservice not set")
+	}
+	var r *resty.Client
+	if CurrentState.Webservice[0:5] == "https" {
+		t := tls.Config{}
+		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
+		r = resty.New().SetTLSClientConfig(&t)
+	} else {
+		r = resty.New()
+	}
+	body, errMarshal := json.Marshal(tieRequest)
+	if errMarshal != nil {
+		e := request.CreateReply(request.ReplyTypeEmpty)
+		return &e, errMarshal
+	}
+	var reply = request.CreateReply(requestType)
+	resp, err := r.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(body).
+		SetResult(&reply.ReplyStruct).
+		Post(CurrentState.Webservice + "/" + CurrentState.Namespace + "/" + CurrentState.Collection + "/" + reply.RequestString)
+
+	printOutput(resp, err)
+
+	return &reply, err
 }
 
 func LoadJSON(inputFile string, dest interface{}) bool {
