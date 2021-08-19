@@ -1,9 +1,9 @@
 fyne.io/fyne/v2 v2.0.4 h1:eDGaPGzeR4qNqWuAp9Li1kY4eVIHldCkf42KMakKIK4=
 fyne.io/fyne/v2 v2.0.4/go.mod h1:nNpgL7sZkDVLraGtQII2ArNRnnl6kHup/KfQRxIhbvs=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210816061213-5365f4be66a7 h1:JS2Kf8w9M0qrlY1NcqsjH78OnKlRvSnmLZwaw4DIj/k=
-git.sr.ht/~uid/tie/metadata v0.0.0-20210816061213-5365f4be66a7/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20210816061213-5365f4be66a7 h1:0ow9zoGNApc38mG5c5CUJUIF0LY3anQU6A5xLgEBtZ8=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20210816061213-5365f4be66a7/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210818074128-d0875899865f h1:u2Aj3TEa9TAVMd0djhfe6uHTLwPycHcRXeXMPosnxKc=
+git.sr.ht/~uid/tie/metadata v0.0.0-20210818074128-d0875899865f/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210818074128-d0875899865f h1:Y0u7iQrV6n0qaYLmttllN5mq5QI153Ix+PWFEQRx9xU=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210818074128-d0875899865f/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9/go.mod h1:7uhhqiBaR4CpN0k9rMjOtjpcfGd6DG2m04zQxKnWQ0I=
 github.com/akavel/rsrc v0.8.0/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -68,8 +68,8 @@ golang.org/x/sys v0.0.0-20200720211630-cb9d2d5c5666/go.mod h1:h1NjWce9XRLGQEsW7w
 golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210330210617-4fbd30eecc44/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
-golang.org/x/sys v0.0.0-20210817190340-bfb29a6856f2 h1:c8PlLMqBbOHoqtjteWm5/kbe6rNY2pbRfbIMVnepueo=
-golang.org/x/sys v0.0.0-20210817190340-bfb29a6856f2/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+golang.org/x/sys v0.0.0-20210819135213-f52c844e1c1c h1:Lyn7+CqXIiC+LOR9aHD6jDK+hPcmAuCfuXztd1v4w1Q=
+golang.org/x/sys v0.0.0-20210819135213-f52c844e1c1c/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/text v0.3.0/go.mod h1:NqM8EUOU14njkJ3fqMW+pc6Ldnwhi/IjpwHt7yyuwOQ=
 golang.org/x/text v0.3.2/go.mod h1:bEr9sfX3Q8Zfm5fL9x+3itogRgK3+ptLWKqgva+5dAk=
