@@ -3,9 +3,9 @@ module git.sr.ht/~uid/tie
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/client v0.0.0-20210818074128-d0875899865f
-	git.sr.ht/~uid/tie/request v0.0.0-20210818074128-d0875899865f
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20210818074128-d0875899865f
+	git.sr.ht/~uid/tie/client v0.0.0-20210819162605-bc5bf47578d5
+	git.sr.ht/~uid/tie/request v0.0.0-20210819162605-bc5bf47578d5
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20210819162605-bc5bf47578d5
 	github.com/spf13/cobra v1.2.1
 )
 
