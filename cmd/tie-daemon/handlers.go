@@ -44,14 +44,14 @@ func GetHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 
 			var filename string
 			set, _ := col.SetToString(id, ".md", assPtr)
-			if len(set.Associations) == 0 {
+			if len(set.Value2) == 0 {
 				fmt.Fprintf(w, "Not found")
 				return
 			}
 
-			if len(set.Associations) > 1 && selection == -1 {
+			if len(set.Value2) > 1 && selection == -1 {
 				set, _ = col.SetToString(id, ".md", assPtr)
-				renderer, err := GetSelectionRenderer(filename, set.Associations)
+				renderer, err := GetSelectionRenderer(filename, set.Value2)
 				if err != nil {
 					fmt.Fprintf(w, "Internal error: "+err.Error())
 				}
@@ -61,7 +61,7 @@ func GetHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 				selection = 0
 			}
 
-			filename = set.Associations[selection]
+			filename = set.Value2[selection]
 			set, _ = col.SetToString(id, "", assPtr)
 			renderer, err := GetDocumentRenderer(filename, set, selected)
 			if err != nil {

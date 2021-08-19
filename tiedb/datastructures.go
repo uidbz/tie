@@ -155,10 +155,10 @@ type AssociationExt struct {
 }
 
 type StringSliceSet struct {
-	Item         string
-	Keys         []string
-	Associations []string
-	Relations    []string
+	Item   string
+	Key    []string
+	Value1 []string
+	Value2 []string
 	// Good idea?
 	// CustomColumn []CustomColumn //ArbitraryColumns
 }

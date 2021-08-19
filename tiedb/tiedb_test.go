@@ -17,11 +17,11 @@ func TestInsertAssociation(t *testing.T) {
 
 	if found {
 		out, _ := col.SetToString("a", "", asses)
-		if out.Associations[0] != input2 {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Associations[0], input2)
+		if out.Value2[0] != input2 {
+			t.Errorf("Error input1, got: %s, want: %s.", out.Value2[0], input2)
 		}
-		if out.Associations[1] != input1 {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Associations[1], input1)
+		if out.Value2[1] != input1 {
+			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[1], input1)
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "a")
@@ -64,11 +64,11 @@ func TestDeleteAssociation(t *testing.T) {
 
 	if found {
 		out, _ := col.SetToString("superkey", "", asses)
-		if out.Associations[0] != "value3" {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Associations[0], "value3")
+		if out.Value2[0] != "value3" {
+			t.Errorf("Error input1, got: %s, want: %s.", out.Value2[0], "value3")
 		}
-		if out.Associations[1] != "value4" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Associations[1], "value4")
+		if out.Value2[1] != "value4" {
+			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[1], "value4")
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "a")
@@ -93,17 +93,17 @@ func TestReOpen(t *testing.T) {
 
 	if found {
 		out, _ := col.SetToString("superkey2", "", asses)
-		if out.Relations[0] != "value3" {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Relations[0], "value3")
+		if out.Value1[0] != "value3" {
+			t.Errorf("Error input1, got: %s, want: %s.", out.Value1[0], "value3")
 		}
-		if out.Relations[1] != "value4" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Relations[1], "value4")
+		if out.Value1[1] != "value4" {
+			t.Errorf("Error input2, got: %s, want: %s.", out.Value1[1], "value4")
 		}
-		if out.Associations[0] != "file2" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Associations[0], "file2")
+		if out.Value2[0] != "file2" {
+			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[0], "file2")
 		}
-		if out.Associations[1] != "file3" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Associations[1], "file3")
+		if out.Value2[1] != "file3" {
+			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[1], "file3")
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "superkey2")
@@ -113,17 +113,17 @@ func TestReOpen(t *testing.T) {
 
 	if found {
 		out, _ := col.SetToString("superkey", "", asses)
-		if out.Relations[0] != "value1" {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Relations[0], "value1")
+		if out.Value1[0] != "value1" {
+			t.Errorf("Error input1, got: %s, want: %s.", out.Value1[0], "value1")
 		}
-		if out.Relations[1] != "value2" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Relations[1], "value2")
+		if out.Value1[1] != "value2" {
+			t.Errorf("Error input2, got: %s, want: %s.", out.Value1[1], "value2")
 		}
-		if out.Associations[0] != "file0" {
-			t.Errorf("Error input3, got: %s, want: %s.", out.Associations[0], "file0")
+		if out.Value2[0] != "file0" {
+			t.Errorf("Error input3, got: %s, want: %s.", out.Value2[0], "file0")
 		}
-		if out.Associations[1] != "file1" {
-			t.Errorf("Error input4, got: %s, want: %s.", out.Associations[1], "file1")
+		if out.Value2[1] != "file1" {
+			t.Errorf("Error input4, got: %s, want: %s.", out.Value2[1], "file1")
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "superkey")
@@ -148,8 +148,8 @@ func TestUpdate(t *testing.T) {
 
 	if found {
 		out, _ := col.SetToString(key, "", asses)
-		if out.Associations[0] != val3 {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Associations[0], val3)
+		if out.Value2[0] != val3 {
+			t.Errorf("Error input1, got: %s, want: %s.", out.Value2[0], val3)
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "superkey")

@@ -83,7 +83,6 @@ func cmdList() []*cobra.Command {
 		Long:  "Return tie with [key] or Join multiple keys on their 'associated' value",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-
 			a := request.Get{}
 			a.Values = args
 			a.MaxAssociations = 0
@@ -93,9 +92,7 @@ func cmdList() []*cobra.Command {
 			if getFilter != "" {
 				a.Filter = getFilter
 			}
-
-			b, _ := json.Marshal(a)
-			tie.SendToWebservice("Get", b, GetHandler)
+			GetHandler(tie.Run(request.RequestTypeGet, a))
 		},
 	}
 	cmdGet.Flags().StringVarP(&getFilter, "filter", "f", "", "Relation filter")
@@ -113,8 +110,7 @@ func cmdList() []*cobra.Command {
 				args[1],
 				args[2],
 			}
-			b, _ := json.Marshal(a)
-			tie.SendToWebservice("Delete", b, DeleteHandler)
+			DeleteHandler(tie.Run(request.RequestTypeGet, a))
 		},
 	}
 	cmds = append(cmds, cmdDel)
@@ -183,8 +179,7 @@ func cmdList() []*cobra.Command {
 				}
 			}
 
-			c, _ := json.Marshal(b)
-			tie.SendToWebservice("Batch", c, BatchHandler)
+			BatchHandler(tie.Run(request.RequestTypeBatch, b))
 		},
 	}
 	cmdBatch.Flags().StringVarP(&getFilter, "filter", "f", "", "Relation filter")
@@ -205,20 +200,19 @@ func AddHandler(resp json.RawMessage) {
 
 }
 
-func GetHandler(resp json.RawMessage) {
-	var result []request.ReplyGet
-	err := json.Unmarshal(resp, &result)
+func GetHandler(reply *request.Reply, err error) {
 	if err != nil {
-		fmt.Println("Error handling Get reponse:", err)
-		fmt.Println("Received:", string(resp))
+		fmt.Println("Error handling 'Get' reponse:", err.Error())
+		fmt.Println("Received:", string(reply.ReplyRawResponse))
 	}
+	var result = *reply.DataGet()
 	var input tie.TieOutput
 	var columns []string
 	for _, x := range result {
-		for i, _ := range x.Associations {
+		for i, _ := range x.Value2 {
 			key := x.Item
-			value1 := x.Relations[i]
-			value2 := x.Associations[i]
+			value1 := x.Value1[i]
+			value2 := x.Value2[i]
 			if outputAsTable {
 				tie.LoadTieOutput(key, value1, value2, &input, &columns)
 			} else {
@@ -232,52 +226,30 @@ func GetHandler(resp json.RawMessage) {
 	}
 }
 
-func GetHandler2(resp json.RawMessage) {
-	var result []request.ReplyGet
-	err := json.Unmarshal(resp, &result)
+func DeleteHandler(reply *request.Reply, err error) {
 	if err != nil {
-		fmt.Println("Error handling Get reponse:", err)
+		fmt.Println("Error handling 'Delete' reponse:", err.Error())
+		fmt.Println("Received:", string(reply.ReplyRawResponse))
 	}
-
-	db := tiedb.NewDB(false)
-	col := db.GetCollection(tiedb.CollectionKey{"tmp", "results"})
-	for _, x := range result {
-		for i, _ := range x.Associations {
-			key := x.Item
-			value1 := x.Relations[i]
-			value2 := x.Associations[i]
-			col.Add(key, value1, value2)
-		}
-	}
-}
-
-func DeleteHandler(resp json.RawMessage) {
-	// s := tie.Success{}
-	// if err := json.Unmarshal(resp, &s); err == nil {
-	// 	if tie.CurrentState.Verbose || !s.Success {
-	fmt.Println(string(resp))
-	// }
-	// } else {
-	// fmt.Println("Error unmarshalling response:", err, resp)
-	// }
+	var result = *reply.DataStatus()
+	fmt.Println("Success:", result.Success, "Message:", result.Message)
 
 }
 
-func BatchHandler(resp json.RawMessage) {
-	var result request.ReplyBatch
-	err := json.Unmarshal(resp, &result)
+func BatchHandler(reply *request.Reply, err error) {
 	if err != nil {
-		fmt.Println("Error handling Get reponse:", err)
-		fmt.Println("Received:", string(resp))
+		fmt.Println("Error handling 'Batch' reponse:", err.Error())
+		fmt.Println("Received:", string(reply.ReplyRawResponse))
 	}
+	var result = *reply.DataBatch()
 	var input tie.TieOutput
 	var columns []string
 	for _, a := range result.Get {
 		for _, x := range a {
-			for i, _ := range x.Associations {
+			for i, _ := range x.Value2 {
 				key := x.Item
-				value1 := x.Relations[i]
-				value2 := x.Associations[i]
+				value1 := x.Value1[i]
+				value2 := x.Value2[i]
 				if outputAsTable {
 					tie.LoadTieOutput(key, value1, value2, &input, &columns)
 				} else {

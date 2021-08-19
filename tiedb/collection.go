@@ -555,9 +555,9 @@ func (ic *InternalCollection) SetToString(value string, relationFilter string, s
 	// }
 
 	set := StringSliceSet{Item: value, //ic.GetValueStringFromEntry(e),
-		Keys:         make([]string, size),
-		Associations: make([]string, size),
-		Relations:    make([]string, size)}
+		Key:         make([]string, size),
+		Value2: make([]string, size),
+		Value1:    make([]string, size)}
 
 	associationTrees := make([]*Tree, size)
 
@@ -589,19 +589,19 @@ func (ic *InternalCollection) SetToString(value string, relationFilter string, s
 
 				if i >= int(size) { //In case results change since size was calculated
 					appendMutex.Lock()
-					for j := len(set.Keys); j <= i; j++ {
-						set.Keys = append(set.Keys, "")
-						set.Associations = append(set.Associations, "")
-						set.Relations = append(set.Relations, "")
+					for j := len(set.Key); j <= i; j++ {
+						set.Key = append(set.Key, "")
+						set.Value2 = append(set.Value2, "")
+						set.Value1 = append(set.Value1, "")
 						associationTrees = append(associationTrees, &Tree{})
 					}
 					appendMutex.Unlock()
 				}
-				set.Keys[i] = ic.GetValueString(x.Level, x.EntryId)
-				set.Associations[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
+				set.Key[i] = ic.GetValueString(x.Level, x.EntryId)
+				set.Value2[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
 				associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
 				// fmt.Println("Associate to:", x.AssociationLevel, x.AssociateTo, ic.GetValueString(x.AssociationLevel, x.AssociateTo))
-				set.Relations[i] = ic.GetValueString(x.RelationLevel, x.Relation)
+				set.Value1[i] = ic.GetValueString(x.RelationLevel, x.Relation)
 			}(i, x)
 			i++
 		}
@@ -615,16 +615,16 @@ func (ic *InternalCollection) SetToString(value string, relationFilter string, s
 	if relationFilter != "" {
 		n := 0
 
-		for i, x := range set.Relations {
+		for i, x := range set.Value1 {
 			if x == relationFilter {
-				set.Relations[n] = x
-				set.Associations[n] = set.Associations[i]
+				set.Value1[n] = x
+				set.Value2[n] = set.Value2[i]
 				associationTrees[n] = associationTrees[i]
 				n++
 			}
 		}
-		set.Associations = set.Associations[:n]
-		set.Relations = set.Relations[:n]
+		set.Value2 = set.Value2[:n]
+		set.Value1 = set.Value1[:n]
 		associationTrees = associationTrees[:n]
 	}
 

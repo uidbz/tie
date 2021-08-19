@@ -214,10 +214,35 @@ func Run(requestType uint, tieRequest interface{}) (*request.Reply, error) {
 	resp, err := r.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(body).
-		SetResult(&reply.ReplyStruct).
 		Post(CurrentState.Webservice + "/" + CurrentState.Namespace + "/" + CurrentState.Collection + "/" + reply.RequestString)
 
 	printOutput(resp, err)
+
+	var errUnmarshal error
+	switch reply.ReplyType {
+	case request.ReplyTypeGet:
+		var res []request.ReplyGet
+		errUnmarshal = json.Unmarshal(resp.Body(), &res)
+		reply.ReplyStruct = &res
+
+	case request.ReplyTypeBatch:
+		var res request.ReplyBatch
+		errUnmarshal = json.Unmarshal(resp.Body(), &res)
+		reply.ReplyStruct = &res
+
+	case request.ReplyTypeStatus:
+		var res request.ReplyStatus
+		errUnmarshal = json.Unmarshal(resp.Body(), &res)
+		reply.ReplyStruct = &res
+
+	default:
+		errUnmarshal = errors.New("Error unmarshalling: Unknown ReplyType")
+
+	}
+
+	if errUnmarshal != nil {
+		return nil, errUnmarshal
+	}
 
 	return &reply, err
 }

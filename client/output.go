@@ -174,7 +174,7 @@ func LoadTieOutput2(key string, value1 string, value2 string, input *TieOutput2)
 		}
 	}
 	if !found {
-		*data = append(*data, request.ReplyGet{Item: key, Associations: make([]string, 0), Relations: make([]string, 0)})
+		*data = append(*data, request.ReplyGet{Item: key, Value1: make([]string, 0), Value2: make([]string, 0)})
 		keyPos = len(*data) - 1
 	}
 	// }
@@ -185,8 +185,8 @@ func LoadTieOutput2(key string, value1 string, value2 string, input *TieOutput2)
 	// 	(*input)[key][value1] = make(map[string]bool, 0)
 	// }
 	if value1 != "associated" {
-		(*data)[keyPos].Relations = append((*data)[keyPos].Relations, value1)
-		(*data)[keyPos].Associations = append((*data)[keyPos].Associations, value2)
+		(*data)[keyPos].Value1 = append((*data)[keyPos].Value1, value1)
+		(*data)[keyPos].Value2 = append((*data)[keyPos].Value2, value2)
 		// (*input)[key][value1][value2] = true //append(input[key][value1], value2)
 	}
 

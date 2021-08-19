@@ -23,7 +23,7 @@ type Reply struct {
 	RequestString    string
 	ReplyType        uint
 	ReplyStruct      interface{}
-	ReylpRawResponse json.RawMessage
+	ReplyRawResponse json.RawMessage
 }
 
 type Request interface {
@@ -36,7 +36,7 @@ func CreateReply(requestType uint) Reply {
 		return Reply{RequestString: "Add", ReplyType: ReplyTypeStatus, ReplyStruct: ReplyStatus{}}
 
 	case RequestTypeGet:
-		return Reply{RequestString: "Get", ReplyType: ReplyTypeGet, ReplyStruct: ReplyGet{}}
+		return Reply{RequestString: "Get", ReplyType: ReplyTypeGet, ReplyStruct: []ReplyGet{}}
 
 	case RequestTypeDelete:
 		return Reply{RequestString: "Delete", ReplyType: ReplyTypeStatus, ReplyStruct: ReplyStatus{}}
@@ -50,6 +50,18 @@ func CreateReply(requestType uint) Reply {
 	default:
 		return Reply{RequestString: "Empty", ReplyType: ReplyTypeEmpty}
 	}
+}
+
+func (r *Reply) DataGet() *[]ReplyGet {
+	return r.ReplyStruct.(*[]ReplyGet)
+}
+
+func (r *Reply) DataStatus() *ReplyStatus {
+	return r.ReplyStruct.(*ReplyStatus)
+}
+
+func (r *Reply) DataBatch() *ReplyBatch {
+	return r.ReplyStruct.(*ReplyBatch)
 }
 
 type Add struct {
@@ -86,10 +98,15 @@ type Batch struct {
 	Update []Update
 }
 
+type ReplyGetSlice []struct {
+	Result []ReplyGet
+}
+
 type ReplyGet struct {
-	Item         string
-	Associations []string
-	Relations    []string
+	Item   string
+	Key    []string
+	Value1 []string
+	Value2 []string
 }
 
 type ReplyStatus struct {

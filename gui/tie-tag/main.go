@@ -11,9 +11,9 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/widget"
-	"git.sr.ht/~uid/putlib"
 	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/gui/component"
+	"git.sr.ht/~uid/tie/io/putlib"
 )
 
 type TieTag struct {
@@ -43,9 +43,11 @@ func (tt *TieTag) Init() {
 	if err != nil {
 		fmt.Println(err.Error())
 	} else {
-		// fmt.Println(reply.ReplyType)
-
-		fmt.Println(reply.ReplyStruct.(request.ReplyGet))
+		for _, x := range *reply.DataGet() {
+			for _, x := range x.Value2 {
+				fmt.Println(x)
+			}
+		}
 	}
 }
 
@@ -54,6 +56,7 @@ func main() {
 
 	// tie.Config = "2"
 	tie.InitConfig()
+	tie.CurrentState.Verbose = true
 	view := component.NewTieView()
 
 	if len(os.Args) > 1 {

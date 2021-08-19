@@ -72,9 +72,9 @@ func GetDocumentRenderer(filename string, associated *tiedb.StringSliceSet, sele
 
 	var mdBuf1 string //* Option 1\n* Option2\n* Option 3")
 	var mdBuf2 string //* Option 1\n* Option2\n* Option 3")
-	for i, rel := range associated.Relations {
+	for i, rel := range associated.Value1 {
 		if rel == tiedb.ASSOCIATED {
-			x := associated.Associations[i]
+			x := associated.Value2[i]
 			url := strings.Replace(x, "/", "&slash;", -1)
 			if selected {
 				url = "../" + url
@@ -82,7 +82,7 @@ func GetDocumentRenderer(filename string, associated *tiedb.StringSliceSet, sele
 			x = "[" + x + "](" + url + ")"
 			mdBuf1 += "* " + x + "\n"
 		} else {
-			x := associated.Associations[i]
+			x := associated.Value2[i]
 			url := strings.Replace(x, "/", "&slash;", -1)
 			if selected {
 				url = "../" + url

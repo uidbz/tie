@@ -97,7 +97,7 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 			if len(nextLevelRelation) > 0 {
 				for i, x := range trees {
 					for _, rel := range nextLevelRelation {
-						set2, _ := col.SetToString(set.Associations[i], rel, x)
+						set2, _ := col.SetToString(set.Value2[i], rel, x)
 						replySlice = append(replySlice, set2)
 					}
 				}
@@ -151,7 +151,7 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 		if len(nextLevelRelation) > 0 {
 			for i, x := range trees {
 				for _, rel := range nextLevelRelation {
-					set2, _ := col.SetToString(set.Associations[i], rel, x)
+					set2, _ := col.SetToString(set.Value2[i], rel, x)
 					replySlice = append(replySlice, set2)
 				}
 			}

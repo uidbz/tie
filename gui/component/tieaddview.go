@@ -109,7 +109,7 @@ func (tv *TieAddView) GetHandler(resp json.RawMessage) {
 
 	fmt.Println(result)
 	if len(result) > 0 {
-		tv.SetData(result[0].Relations, result[0].Associations)
+		tv.SetData(result[0].Value1, result[0].Value2)
 	}
 }
 

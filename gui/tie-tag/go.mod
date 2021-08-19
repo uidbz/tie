@@ -4,9 +4,9 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.0.4
-	git.sr.ht/~uid/putlib v0.0.0-20210504180720-4aba3cf34713
 	git.sr.ht/~uid/tie/client v0.0.0-20210816061213-5365f4be66a7
 	git.sr.ht/~uid/tie/gui/component v0.0.0-20210816061213-5365f4be66a7
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210816061213-5365f4be66a7
 	git.sr.ht/~uid/tie/request v0.0.0-20210816061213-5365f4be66a7
 	github.com/go-gl/gl v0.0.0-20210813123233-e4099ee2221f // indirect
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20210727001814-0db043d8d5be // indirect
@@ -25,3 +25,5 @@ replace git.sr.ht/~uid/tie/client => ../../client
 replace git.sr.ht/~uid/tie/io/putlib => ../../io/putlib
 
 replace git.sr.ht/~uid/tie/request => ../../request
+
+replace git.sr.ht/~uid/tie/tiedb => ../../tiedb
