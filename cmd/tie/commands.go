@@ -110,7 +110,7 @@ func cmdList() []*cobra.Command {
 				args[1],
 				args[2],
 			}
-			DeleteHandler(tie.Run(request.RequestTypeGet, a))
+			DeleteHandler(tie.Run(request.RequestTypeDelete, a))
 		},
 	}
 	cmds = append(cmds, cmdDel)
