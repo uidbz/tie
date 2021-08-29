@@ -36,6 +36,8 @@ import (
 	"sync"
 )
 
+var modifyMutex sync.Mutex
+
 // Color of a redblack tree node is either
 // `Black` (true) & `Red` (false)
 type Color bool
@@ -355,6 +357,8 @@ func (t *Tree) RotateLeft(x *Node) {
 // If a mapping identified by `key` already exists, it is overwritten.
 // Constraint: Not everything can be a key.
 func (t *Tree) Put(key interface{}, data interface{}) error {
+	modifyMutex.Lock()
+	defer modifyMutex.Unlock()
 	// if err := mustBeValidKey(key); err != nil {
 	// 	logger.Printf("Put was prematurely aborted: %s\n", err.Error())
 	// 	return err
@@ -550,6 +554,9 @@ func (t *Tree) transplant(u *Node, v *Node) {
 // Delete removes the item identified by the supplied key.
 // Delete is a noop if the supplied key doesn't exist.
 func (t *Tree) Delete(key interface{}) {
+	modifyMutex.Lock()
+	defer modifyMutex.Unlock()
+
 	if !t.Has(key) {
 		// logger.Printf("Delete: bail as no node exists for key %d\n", key)
 		return
