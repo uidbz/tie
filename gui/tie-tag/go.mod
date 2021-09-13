@@ -4,13 +4,14 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.0.4
-	git.sr.ht/~uid/tie/client v0.0.0-20210829082918-7d33cf75f27b
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20210829082918-7d33cf75f27b
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210829082918-7d33cf75f27b
-	git.sr.ht/~uid/tie/request v0.0.0-20210829082918-7d33cf75f27b
+	git.sr.ht/~uid/tie/client v0.0.0-20210913162750-3bfb3f58467e
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20210913162750-3bfb3f58467e
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210913162750-3bfb3f58467e
+	git.sr.ht/~uid/tie/request v0.0.0-20210913162750-3bfb3f58467e
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
-	github.com/go-gl/gl v0.0.0-20210813123233-e4099ee2221f // indirect
+	github.com/go-gl/gl v0.0.0-20210905235341-f7a045908259 // indirect
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20210727001814-0db043d8d5be // indirect
+	github.com/godbus/dbus/v5 v5.0.5 // indirect
 	github.com/srwiley/oksvg v0.0.0-20210519022825-9fc0c575d5fe // indirect
 	github.com/srwiley/rasterx v0.0.0-20210519020934-456a8d69b780 // indirect
 	github.com/stretchr/testify v1.7.0 // indirect
