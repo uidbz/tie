@@ -3,6 +3,7 @@ package getlib
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,9 +14,72 @@ import (
 	"strings"
 )
 
-func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
-	// Create the file
+type TieFunc interface {
+	Run(file io.Reader, args TieArgs) (err error)
+}
 
+type TieArgs struct {
+	BasePath   string
+	RelPath    string
+	CustomArgs json.RawMessage
+}
+
+func DownloadFile(url string, sourceHash string, destination string) (err error) {
+	args := TieArgs{BasePath: destination}
+
+	return ExecForEach(url, sourceHash, args, &Download{})
+}
+
+type Download struct{}
+
+func (_ *Download) Run(file io.Reader, args TieArgs) (err error) {
+	fullpath := filepath.Join(args.BasePath, args.RelPath)
+	dir := filepath.Dir(fullpath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return errors.New("Error making directories: " + err.Error())
+	}
+	dest, err := os.Create(fullpath)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+	_, err2 := io.Copy(dest, file)
+	if err2 != nil {
+		return err2
+	}
+
+	return nil
+}
+
+func IsDir(url string, sourceHash string) (isDir bool, err error) {
+	// Get the data
+	resp, err := http.Get(url + "/" + sourceHash)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	// Check server response
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	var buf bytes.Buffer
+	_, err = io.CopyN(&buf, resp.Body, 3)
+	mode := string(buf.Bytes())
+
+	if err != nil {
+		return false, err
+	}
+
+	if mode == "dir" {
+		return true, nil
+	} else {
+		return false, nil
+	}
+}
+
+func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	// Get the data
 	resp, err := http.Get(url + "/" + sourceHash)
 	if err != nil {
@@ -40,13 +104,7 @@ func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	}
 }
 
-func DownloadFile(url string, sourceHash string, destination string) (err error) {
-	return downloadFile(url, sourceHash, destination, "")
-}
-
-func downloadFile(url string, sourceHash string, basepath string, path string) (err error) {
-	// Create the file
-
+func ExecForEach(url string, sourceHash string, args TieArgs, funcToExec TieFunc) (err error) {
 	// Get the data
 	resp, err := http.Get(url + "/" + sourceHash)
 	if err != nil {
@@ -76,7 +134,8 @@ func downloadFile(url string, sourceHash string, basepath string, path string) (
 			if begin {
 				parts := strings.Split(input, "\t")
 				if len(parts) == 2 {
-					downloadFile(url, parts[0], basepath, parts[1])
+					args.RelPath = parts[1]
+					ExecForEach(url, parts[0], args, funcToExec)
 				}
 			}
 		}
@@ -85,21 +144,7 @@ func downloadFile(url string, sourceHash string, basepath string, path string) (
 			log.Fatal(err)
 		}
 	} else {
-		fullpath := filepath.Join(basepath, path)
-		dir := filepath.Dir(fullpath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			fmt.Println("Error making directories:", err.Error())
-			log.Fatal("Exiting!")
-		}
-		out, err := os.Create(fullpath)
-		if err != nil {
-			return err
-		}
-		defer out.Close()
-		_, err2 := io.Copy(out, &buf)
-		if err2 != nil {
-			return err2
-		}
+		return funcToExec.Run(&buf, args)
 	}
 
 	return nil

@@ -28,7 +28,10 @@ func main() {
 		} else {
 			url = "http://localhost:1162"
 		}
-		getlib.DownloadFile(url, source, dest)
+		err := getlib.DownloadFile(url, source, dest)
+		if err != nil {
+			fmt.Println(err.Error())
+		}
 	} else {
 		fmt.Println("Need file/dir to download")
 	}
