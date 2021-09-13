@@ -3,7 +3,6 @@ package getlib
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,25 +14,21 @@ import (
 )
 
 type TieFunc interface {
-	Run(file io.Reader, args TieArgs) (err error)
-}
-
-type TieArgs struct {
-	BasePath   string
-	RelPath    string
-	CustomArgs json.RawMessage
+	Run(file io.Reader, relPath string) (err error)
 }
 
 func DownloadFile(url string, sourceHash string, destination string) (err error) {
-	args := TieArgs{BasePath: destination}
+	d := Download{destination: destination}
 
-	return ExecForEach(url, sourceHash, args, &Download{})
+	return ExecForEach(url, sourceHash, &d, "")
 }
 
-type Download struct{}
+type Download struct {
+	destination string
+}
 
-func (_ *Download) Run(file io.Reader, args TieArgs) (err error) {
-	fullpath := filepath.Join(args.BasePath, args.RelPath)
+func (d *Download) Run(file io.Reader, relPath string) (err error) {
+	fullpath := filepath.Join(d.destination, relPath)
 	dir := filepath.Dir(fullpath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return errors.New("Error making directories: " + err.Error())
@@ -104,7 +99,7 @@ func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	}
 }
 
-func ExecForEach(url string, sourceHash string, args TieArgs, funcToExec TieFunc) (err error) {
+func ExecForEach(url string, sourceHash string, funcToExec TieFunc, relPath string) (err error) {
 	// Get the data
 	resp, err := http.Get(url + "/" + sourceHash)
 	if err != nil {
@@ -134,8 +129,7 @@ func ExecForEach(url string, sourceHash string, args TieArgs, funcToExec TieFunc
 			if begin {
 				parts := strings.Split(input, "\t")
 				if len(parts) == 2 {
-					args.RelPath = parts[1]
-					ExecForEach(url, parts[0], args, funcToExec)
+					ExecForEach(url, parts[0], funcToExec, parts[1])
 				}
 			}
 		}
@@ -144,7 +138,7 @@ func ExecForEach(url string, sourceHash string, args TieArgs, funcToExec TieFunc
 			log.Fatal(err)
 		}
 	} else {
-		return funcToExec.Run(&buf, args)
+		return funcToExec.Run(&buf, relPath)
 	}
 
 	return nil
