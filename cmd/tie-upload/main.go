@@ -2,6 +2,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -32,7 +33,17 @@ func main() {
 
 		pc := putlib.PutConfig{}
 		pc.JsonOutput = jsonOutput
-		putlib.Upload(url, file, pc)
+		status := putlib.Upload(url, file, pc)
+		if status.ErrorMsg != "" {
+			fmt.Println(status.ErrorMsg)
+			return
+		}
+		if jsonOutput {
+			rawJson, _ := json.Marshal(status)
+			fmt.Println(string(rawJson))
+		} else {
+			fmt.Println(status.LastItem.Hash + "\t" + status.LastItem.Filename)
+		}
 	} else {
 		fmt.Println("Need file/dir to upload")
 	}

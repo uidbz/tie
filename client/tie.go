@@ -10,7 +10,8 @@ import (
 	"log"
 	"os"
 	"os/user"
-	"strconv"
+
+	// "strconv"
 	"strings"
 
 	"path/filepath"
@@ -18,7 +19,7 @@ import (
 	"github.com/go-resty/resty/v2"
 
 	"git.sr.ht/~uid/tie/io/putlib"
-	"git.sr.ht/~uid/tie/metadata"
+	// "git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/request"
 )
 
@@ -102,59 +103,56 @@ func Tag(path string, tags []string, options TagOptions, addHandler func(json.Ra
 	pc := putlib.PutConfig{}
 	pc.JsonOutput = true
 	pc.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
-	output, _ := putlib.Upload(CurrentState.ServeUrl, path, pc)
-	if output != "" {
-		info := metadata.Info{}
-		if err := json.Unmarshal([]byte(output), &info); err != nil {
-			fmt.Println("Unmashal error:", err.Error())
+	status := putlib.Upload(CurrentState.ServeUrl, path, pc)
+	if status.LastItem.Hash != "" {
+		info := status.LastItem
+		// uid := metalib.HashFunction + "/" + info.MediaType + "/" + info.Hash
+		base := filepath.Base(path)
+		TieAdd("file", "highway-hash", info.Hash, addHandler)
+		TieAdd(info.Hash, "context", "tiehashv1", addHandler)
+		TieAdd(info.Hash, "filename", base, addHandler)
+		TieAdd(info.Hash, "media-type", info.MediaType, addHandler)
+		if options.AddOriginalPath {
+			TieAdd(info.Hash, "original-path", path, addHandler)
+		}
+		for _, x := range tags {
+			TieAdd(info.Hash, "tag", x, addHandler)
+		}
+		if len(tags) != 0 {
+			fmt.Println(info.Hash, "tag", tags)
 		} else {
-			// uid := metalib.HashFunction + "/" + info.MediaType + "/" + info.Hash
-			base := filepath.Base(path)
-			TieAdd("file", "highway-hash", info.Hash, addHandler)
-			TieAdd(info.Hash, "context", "tiehashv1", addHandler)
-			TieAdd(info.Hash, "filename", base, addHandler)
-			TieAdd(info.Hash, "media-type", info.MediaType, addHandler)
-			if options.AddOriginalPath {
-				TieAdd(info.Hash, "original-path", path, addHandler)
-			}
-			for _, x := range tags {
-				TieAdd(info.Hash, "tag", x, addHandler)
-			}
-			if len(tags) != 0 {
-				fmt.Println(info.Hash, "tag", tags)
-			} else {
-				fmt.Println(info.Hash)
-			}
-			p := strings.Split(info.MediaType, "/")
-			if len(p) == 2 {
-				switch p[0] {
-				case "video":
-					if height := GetVideoHeight(path); height != "" {
-						TieAdd(info.Hash, "tag", height, addHandler)
-					}
-
-				case "image":
-
-				case "audio":
-					audio := metadata.Audio{}
-					if err := json.Unmarshal([]byte(output), &audio); err == nil {
-						if audio.Album != "" {
-							TieAdd(audio.Hash, "album", audio.Album, addHandler)
-						}
-						if audio.Artist != "" {
-							TieAdd(audio.Hash, "artist", audio.Artist, addHandler)
-						}
-						if audio.Title != "" {
-							TieAdd(audio.Hash, "title", audio.Title, addHandler)
-						}
-						if audio.Track != 0 {
-							TieAdd(audio.Hash, "track", strconv.Itoa(audio.Track), addHandler)
-						}
-						if audio.Year != 0 {
-							TieAdd(audio.Hash, "year", strconv.Itoa(audio.Year), addHandler)
-						}
-					}
+			fmt.Println(info.Hash)
+		}
+		p := strings.Split(info.MediaType, "/")
+		if len(p) == 2 {
+			switch p[0] {
+			case "video":
+				if height := GetVideoHeight(path); height != "" {
+					TieAdd(info.Hash, "tag", height, addHandler)
 				}
+
+			case "image":
+
+			case "audio":
+				// FIXME
+				// audio := metadata.Audio{}
+				// if err := json.Unmarshal([]byte(output), &audio); err == nil {
+				// 	if audio.Album != "" {
+				// 		TieAdd(audio.Hash, "album", audio.Album, addHandler)
+				// 	}
+				// 	if audio.Artist != "" {
+				// 		TieAdd(audio.Hash, "artist", audio.Artist, addHandler)
+				// 	}
+				// 	if audio.Title != "" {
+				// 		TieAdd(audio.Hash, "title", audio.Title, addHandler)
+				// 	}
+				// 	if audio.Track != 0 {
+				// 		TieAdd(audio.Hash, "track", strconv.Itoa(audio.Track), addHandler)
+				// 	}
+				// 	if audio.Year != 0 {
+				// 		TieAdd(audio.Hash, "year", strconv.Itoa(audio.Year), addHandler)
+				// 	}
+				// }
 			}
 		}
 	}

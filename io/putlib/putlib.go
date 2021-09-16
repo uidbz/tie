@@ -22,6 +22,7 @@ const (
 )
 
 type PutConfig struct {
+	PathToWorkdir           bool
 	JsonOutput              bool
 	ForceGenerateThumbnails bool
 	currentKey              []byte
@@ -30,6 +31,19 @@ type PutConfig struct {
 type Info struct {
 	Hash      string
 	MediaType string
+}
+
+type Status struct {
+	LastItem      StatusItem
+	UploadedItems []StatusItem
+	ErrorMsg      string
+}
+
+type StatusItem struct {
+	Hash      string
+	MediaType string
+	Filename  string
+	ErrorMsg  string
 }
 
 func InitKey() []byte {
@@ -68,17 +82,17 @@ func (pc *PutConfig) AddressOf(input io.Reader) (string, error) { // function to
 	return hex.EncodeToString(dest), err
 }
 
-func (pc *PutConfig) UploadFile(url string, path string) (string, error) {
+func (pc *PutConfig) UploadFile(url string, path string) StatusItem {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
-		return "", err
+		return StatusItem{ErrorMsg: err.Error()}
 	}
 	defer f.Close()
 
 	return pc.UploadMultipart(url, f, path)
 }
 
-func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) (string, error) {
+func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) StatusItem {
 	// Reduce number of syscalls when reading from disk.
 	bufferedFileReader := bufio.NewReader(f)
 
@@ -114,7 +128,10 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) (stri
 	}
 	req, err := http.NewRequest(http.MethodPut, url, bodyReader)
 	if err != nil {
-		return "", err
+		return StatusItem{
+			Filename: path,
+			ErrorMsg: err.Error(),
+		}
 	}
 	req.Header.Add("Content-Type", formWriter.FormDataContentType())
 
@@ -124,18 +141,21 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) (stri
 	resp, err := http.DefaultClient.Do(req)
 
 	if writeErr != nil {
-		return "", writeErr
+		return StatusItem{ErrorMsg: writeErr.Error()}
 	}
 
 	if err != nil {
-		return "", err
+		return StatusItem{ErrorMsg: err.Error()}
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	return string(body), nil
+	return StatusItem{
+		Hash:     string(body),
+		Filename: path,
+	}
 }
 
-func Upload(url string, file string, config PutConfig) (string, string) {
+func Upload(url string, file string, config PutConfig) *Status {
 	if len(url) < 5 {
 		url = "http://" + url
 	}
@@ -147,15 +167,36 @@ func Upload(url string, file string, config PutConfig) (string, string) {
 	} else {
 		url += "/upload/"
 	}
+	// Change workdir temporarily to input dir, to get relative paths in dir enumeration
+	if config.PathToWorkdir {
+		wd, _ := os.Getwd()
+		defer os.Chdir(wd)
 
-	return upload(url, file, config)
+		var dir string
+		fi, err := os.Stat(file)
+		if fi.IsDir() {
+			dir = file
+			file = "."
+		} else {
+			dir = filepath.Dir(file)
+			file = filepath.Base(file)
+		}
+		err = os.Chdir(dir)
+		if err != nil {
+			return &Status{ErrorMsg: "Error changing dir to:" + dir + " : " + err.Error()}
+		}
+	}
+
+	status := Status{}
+	upload(url, file, config, &status)
+
+	return &status
 }
 
-func upload(url string, file string, config PutConfig) (string, string) {
+func upload(url string, file string, config PutConfig, status *Status) StatusItem {
 	fi, errStat := os.Lstat(file)
 	if errStat != nil {
-		fmt.Println("Error stat file:", file, errStat)
-		return "", ""
+		return StatusItem{ErrorMsg: "Error stat file: " + file + errStat.Error()}
 	}
 
 	if fi.IsDir() {
@@ -167,42 +208,47 @@ func upload(url string, file string, config PutConfig) (string, string) {
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
 			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
-			h, f := upload(url, abs, config)
-			hashes += h + "\t" + f + "\n"
+			uploadStatus := upload(url, abs, config, status)
+			hashes += uploadStatus.Hash + "\t" + uploadStatus.Filename + "\n"
 		}
-		h, _ := config.AddressOf(strings.NewReader(hashes))
-		output, err := config.UploadMultipart(url+h, strings.NewReader(hashes), file)
-		if err != nil {
-			fmt.Println("Upload directory error:", err)
+		localhash, _ := config.AddressOf(strings.NewReader(hashes))
+		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), file)
+		if uploadStatus.ErrorMsg != "" {
+			uploadStatus.ErrorMsg = "Upload directory error:" + uploadStatus.ErrorMsg
+			return uploadStatus
 		}
-		return config.ValidateAndPrint(h, file, output)
+		return config.Validate(localhash, uploadStatus)
 	} else {
-		h, _ := config.AddressOfFile(file)
-		output, err := config.UploadFile(url+h, file)
-		if err != nil {
-			fmt.Println("Upload error:", err)
+		localhash, _ := config.AddressOfFile(file)
+		uploadStatus := config.UploadFile(url+localhash, file)
+		if uploadStatus.ErrorMsg != "" {
+			uploadStatus.ErrorMsg = "Upload error:" + uploadStatus.ErrorMsg
+			return uploadStatus
 		}
-		return config.ValidateAndPrint(h, file, output)
+		status.LastItem = config.Validate(localhash, uploadStatus)
+		if status.LastItem.ErrorMsg != "" {
+			status.ErrorMsg += status.LastItem.ErrorMsg + "\n"
+		}
+		status.UploadedItems = append(status.UploadedItems, status.LastItem)
+		return status.LastItem
 	}
 }
 
-func (pc *PutConfig) ValidateAndPrint(h string, file string, output string) (string, string) {
+func (pc *PutConfig) Validate(localhash string, uploadStatus StatusItem) StatusItem {
 	if pc.JsonOutput {
-		h2 := Info{}
-		if err := json.Unmarshal([]byte(output), &h2); err != nil {
-			fmt.Println("Unmashal error:", err.Error())
+		h2 := StatusItem{}
+		if err := json.Unmarshal([]byte(uploadStatus.Hash), &h2); err != nil {
+			uploadStatus.ErrorMsg = "Unmashal error:" + err.Error()
 		}
-		if h != h2.Hash {
-			fmt.Println("Upload checksum failed")
+		if localhash != h2.Hash {
+			uploadStatus.ErrorMsg = "Upload checksum failed"
 		}
-		// fmt.Println(output)
-		return output, file
+		uploadStatus.MediaType = h2.MediaType
+		return uploadStatus
 	} else {
-		if h != string(output) {
-			fmt.Println("Upload checksum failed")
+		if localhash != uploadStatus.Hash {
+			uploadStatus.ErrorMsg = "Upload checksum failed"
 		}
-		fmt.Println(string(output), "\t", file)
-		return h, file
+		return uploadStatus
 	}
-
 }
