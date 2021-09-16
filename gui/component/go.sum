@@ -1,7 +1,7 @@
 fyne.io/fyne/v2 v2.0.4 h1:eDGaPGzeR4qNqWuAp9Li1kY4eVIHldCkf42KMakKIK4=
 fyne.io/fyne/v2 v2.0.4/go.mod h1:nNpgL7sZkDVLraGtQII2ArNRnnl6kHup/KfQRxIhbvs=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20210913204703-694ebf552337 h1:jbbvapNifG8b53anGvivcnNj5sLedgfUbBlItA3IJtk=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20210913204703-694ebf552337/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210916070403-d64f099eb7da h1:9hZkGT52hzwDyGBDR0HB0NPZP0fPB829Zgk0fqIdCAc=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20210916070403-d64f099eb7da/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9/go.mod h1:7uhhqiBaR4CpN0k9rMjOtjpcfGd6DG2m04zQxKnWQ0I=
 github.com/akavel/rsrc v0.8.0/go.mod h1:uLoCtb9J+EyAqh+26kdrTgmzRBFPGOolLWKpdxkKq+c=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

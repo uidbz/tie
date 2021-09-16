@@ -42,6 +42,13 @@ go get git.sr.ht/~uid/tie/request@latest
 go get git.sr.ht/~uid/tie/tiedb@latest
 go mod tidy
 
+echo "Updating tie-handle..."
+cd ../tie-handle
+go get -u .
+go get git.sr.ht/~uid/tie/io/putlib@latest
+go get git.sr.ht/~uid/tie/io/getlib@latest
+go mod tidy
+
 echo "Updating tie-daemon..."
 cd ../tie-daemon
 go get -u .

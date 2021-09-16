@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 root=$(pwd)
 
@@ -18,6 +18,9 @@ install_cmd() {
     go install
 
     cd $root/cmd/tie-upload
+    go install
+    
+    cd $root/cmd/tie-handle
     go install
 
     cd $root/cmd/tie-serve
