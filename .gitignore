@@ -33,4 +33,5 @@ cmd/tie-daemon/tie-daemon
 cmd/tie-download/tie-download
 cmd/tie-upload/tie-upload
 cmd/tie-serve/tie-serve
+cmd/tie-handle/tie-handle
 gui/tie-tag/tie-tag

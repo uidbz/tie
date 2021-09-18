@@ -22,6 +22,7 @@ type ExternalApp struct {
 	tmpDir       string
 	output       string
 	settingsFile string
+	processDir   bool
 }
 
 func (app *ExternalApp) Run(file io.Reader, relPath string) (err error) {
@@ -40,14 +41,40 @@ func (app *ExternalApp) Run(file io.Reader, relPath string) (err error) {
 		return err2
 
 	}
-	cmdArgs := append(app.args,
-		"-input", fullpath,
-		"-settings", app.settingsFile,
-		"-output", app.output)
-	cmd := exec.Command(app.name, cmdArgs...)
-	cmd.CombinedOutput() // TODO: Capture output
+
+	app.Process(fullpath)
 
 	return nil
+}
+
+func (app *ExternalApp) Process(path string) {
+	cmdArgs := append(app.args,
+		"-input", path,
+		"-settings", app.settingsFile,
+		"-output", app.output)
+
+	fmt.Println(app.name, cmdArgs)
+	cmd := exec.Command(app.name, cmdArgs...)
+	// cmd.CombinedOutput()             // TODO: Capture output
+	out, err := cmd.CombinedOutput() // TODO: Capture output
+	if err != nil {
+		fmt.Println(string(out))
+		fmt.Println("Error processing data:", err.Error())
+	} else {
+		fmt.Println(string(out))
+	}
+}
+
+func (app *ExternalApp) PrintDebugInfo() {
+	fmt.Println("Starting with settings:")
+	fmt.Println("Url:", app.url)
+	fmt.Println("Name:", app.name)
+	fmt.Println("Args:", app.args)
+	fmt.Println("Input hash:", app.inputHash)
+	fmt.Println("Settings hash:", app.settingsFile)
+	fmt.Println("Temp dir:", app.tmpDir)
+	fmt.Println("Ouptut dir:", app.output)
+	fmt.Println("Process dir:", app.processDir)
 }
 
 func main() {
@@ -58,16 +85,25 @@ func main() {
 	inputPtr := flag.String("input", "c88a38e5d18a42980e2698ea1227fcb458204934203dfe912d3da2274cf2a7e6", "input hash")
 	settingsPtr := flag.String("settings", "", "settings file hash")
 	tmpDirPtr := flag.String("tempdir", "/tmp/tie-handle", "temp dir")
+	processDirPtr := flag.Bool("processdir", true, "process dir, instead of individidual files")
+	debugPtr := flag.Bool("debug", false, "Enable verbose output")
+
+	flag.Parse()
 
 	app := ExternalApp{
-		url:       *urlPtr,
-		name:      *appPtr,
-		inputHash: *inputPtr,
-		args:      []string{*argsPtr},
-		tmpDir:    filepath.Join(*tmpDirPtr, *inputPtr+*settingsPtr),
+		url:        *urlPtr,
+		name:       *appPtr,
+		inputHash:  *inputPtr,
+		args:       []string{*argsPtr},
+		tmpDir:     filepath.Join(*tmpDirPtr, *inputPtr+*settingsPtr),
+		processDir: *processDirPtr,
+	}
+	app.output = app.tmpDir + "-output"
+
+	if *debugPtr {
+		app.PrintDebugInfo()
 	}
 
-	app.output = app.tmpDir + "-output"
 	if err := os.MkdirAll(app.output, 0755); err != nil {
 		fmt.Println("Error making output directory: " + err.Error())
 		return
@@ -82,8 +118,23 @@ func main() {
 		}
 	}
 
-	getlib.ExecForEach(*urlPtr, *inputPtr, &app, "")
+	if *processDirPtr {
+		err := getlib.DownloadFile(app.url, app.inputHash, app.tmpDir)
+		if err != nil {
+			fmt.Println("Error downloading input:", err.Error())
+		}
+		app.Process(app.tmpDir)
+	} else {
+		getlib.ExecForEach(app.url, app.inputHash, &app, "")
+	}
+
 	status := putlib.Upload(app.url, app.output, putlib.PutConfig{PathToWorkdir: true})
+	if status.ErrorMsg != "" {
+		fmt.Println("Error uploading output:", status.ErrorMsg)
+	}
 
 	fmt.Println("tie-handle-result:", status.LastItem.Hash)
+
+	os.RemoveAll(app.tmpDir)
+	os.RemoveAll(app.output)
 }
