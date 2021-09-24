@@ -148,7 +148,10 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 		return StatusItem{ErrorMsg: err.Error()}
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, errResp := io.ReadAll(resp.Body)
+	if errResp != nil {
+		return StatusItem{ErrorMsg: errResp.Error()}
+	}
 	return StatusItem{
 		Hash:     string(body),
 		Filename: path,
@@ -157,10 +160,10 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 
 func Upload(url string, file string, config PutConfig) *Status {
 	if len(url) < 5 {
-		url = "http://" + url
-	}
-	if url[0:5] != "http:" {
-		url = "http://" + url
+		status := Status{
+			ErrorMsg: "Url to short",
+		}
+		return &status
 	}
 	if url[len(url)-1] == '/' {
 		url += "upload/"

@@ -8,6 +8,7 @@ require (
 	github.com/h2non/filetype v1.1.1
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/minio/highwayhash v1.0.2
+	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
 	golang.org/x/sys v0.0.0-20210917161153-d61c044b1678 // indirect
 )
 

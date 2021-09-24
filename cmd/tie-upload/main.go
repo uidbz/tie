@@ -12,6 +12,7 @@ import (
 
 var (
 	jsonOutput bool
+	insecure   bool
 	server     string
 )
 
@@ -19,16 +20,22 @@ func main() {
 	set := flag.NewFlagSet("", flag.ExitOnError)
 	set.BoolVar(&jsonOutput, "json", false, "")
 	set.StringVar(&server, "server", "", "")
+	set.BoolVar(&insecure, "insecure", false, "Use HTTP instead of HTTPS.")
+
 	if len(os.Args) > 2 {
 		set.Parse(os.Args[2:])
+	}
+	protocol := "https://"
+	if insecure {
+		protocol = "http://"
 	}
 	if len(os.Args) > 1 {
 		file := os.Args[1]
 		var url string
 		if server != "" {
-			url = "http://" + server
+			url = protocol + server
 		} else {
-			url = "http://localhost:1162"
+			url = protocol + "localhost:1162"
 		}
 
 		pc := putlib.PutConfig{}

@@ -2,16 +2,20 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/minio/highwayhash"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 var (
@@ -146,18 +150,73 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params
 }
 
 func main() {
+	var insecure = flag.Bool("insecure", false, "Use HTTP instead of HTTPS.")
+	var certFile = flag.String("tls-cert", "", "Root certificate filename.")
+	var keyFile = flag.String("tls-key", "", "Private key filename.")
+	var path = flag.String("path", "/data", "Path to store data.")
+	var host = flag.String("host", "", "Hostname for autocert")
+	var addr = flag.String("listen", ":1162", "Listen on particular address/port.")
+	var thumbs = flag.String("thumbs", "", "Path to store thumbnails of uploaded media files.")
+	var useAutocert = flag.Bool("autocert", false, "Use Let's encrypt for TLS certificate")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, `Content-addressed file server
+-----------------------------
+`)
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
 	InitKey()
 	router := httprouter.New()
 	routes(router)
-	if len(os.Args) > 1 {
-		destination = filepath.Clean(os.Args[1])
+	if *path == "" {
+		fmt.Println("Please provide a data-path")
+		return
+	}
+	destination = filepath.Clean(*path)
+	listenOn = *addr
+	if *thumbs != "" {
+		thumbnailDir = filepath.Clean(*thumbs)
+	}
+
+	if *insecure {
+		fmt.Println("Listening on http://" + listenOn + "\n")
+		log.Fatal(http.ListenAndServe(listenOn, router))
 	} else {
+		if *useAutocert {
+			certManager := &autocert.Manager{
+				Prompt:     autocert.AcceptTOS,
+				HostPolicy: autocert.HostWhitelist(*host),
+				Cache:      autocert.DirCache(cacheDir()),
+			}
+			server := &http.Server{
+				Addr: listenOn,
+				TLSConfig: &tls.Config{
+					GetCertificate: certManager.GetCertificate,
+				},
+			}
+			log.Fatal(server.ListenAndServeTLS("", ""))
+		} else {
+			if *certFile == "" || *keyFile == "" {
+				fmt.Println("Error: Please provide --tls-cert <file.crt> and --tls-key <file.key> or set --insecure.")
+				fmt.Println("Exiting.")
+				return
+			}
+			fmt.Println("Listening on https://" + listenOn + "\n")
+			log.Fatal(http.ListenAndServeTLS(listenOn, *certFile, *keyFile, router))
+		}
 	}
-	if len(os.Args) > 2 {
-		listenOn = os.Args[2]
+}
+
+// cacheDir makes a consistent cache directory inside /tmp. Returns "" on error.
+func cacheDir() (dir string) {
+	if u, _ := user.Current(); u != nil {
+		dir = filepath.Join(os.TempDir(), "cache-golang-autocert-"+u.Username)
+		if err := os.MkdirAll(dir, 0700); err == nil {
+			return dir
+		}
 	}
-	if len(os.Args) > 3 {
-		thumbnailDir = filepath.Clean(os.Args[3])
-	}
-	log.Fatal(http.ListenAndServe(listenOn, router))
+	return ""
 }
