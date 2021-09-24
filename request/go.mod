@@ -2,6 +2,6 @@ module git.sr.ht/~uid/tie/request
 
 go 1.16
 
-require git.sr.ht/~uid/tie/tiedb v0.0.0-20210916073254-3c4e1d9904b3
+require git.sr.ht/~uid/tie/tiedb v0.0.0-20210918071337-fd0d8dd9ae0e
 
 replace git.sr.ht/~uid/tie/tiedb => ../tiedb
