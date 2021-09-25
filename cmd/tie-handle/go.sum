@@ -1,5 +1,5 @@
-git.sr.ht/~uid/tie/io/getlib v0.0.0-20210924183216-63054f9bcd07 h1:r1VK+k2iJea/dzTriJ8wHq7QZPhRe51uD93CHlDwlMQ=
-git.sr.ht/~uid/tie/io/getlib v0.0.0-20210924183216-63054f9bcd07/go.mod h1:JA9Ac4qVLh6WIgNMpyI9ZCATMe5EzWP+As6IR+qrA+M=
+git.sr.ht/~uid/tie/io/getlib v0.0.0-20210925084131-da14c14044cd h1:serqswZp8xvlJZTBaurgn6hU3o/ZTcbrygKZv3Q8wfI=
+git.sr.ht/~uid/tie/io/getlib v0.0.0-20210925084131-da14c14044cd/go.mod h1:JA9Ac4qVLh6WIgNMpyI9ZCATMe5EzWP+As6IR+qrA+M=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=
 github.com/minio/highwayhash v1.0.2/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
 golang.org/x/sys v0.0.0-20190130150945-aca44879d564/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=

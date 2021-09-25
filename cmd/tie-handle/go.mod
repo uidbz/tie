@@ -3,8 +3,8 @@ module tie-handle
 go 1.17
 
 require (
-	git.sr.ht/~uid/tie/io/getlib v0.0.0-20210924183216-63054f9bcd07
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210924183216-63054f9bcd07
+	git.sr.ht/~uid/tie/io/getlib v0.0.0-20210925084131-da14c14044cd
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210925084131-da14c14044cd
 )
 
 require (

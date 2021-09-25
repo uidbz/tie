@@ -3,7 +3,7 @@ module git.sr.ht/~uid/tie/cmd/tie-serve
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20210924183216-63054f9bcd07
+	git.sr.ht/~uid/tie/metadata v0.0.0-20210925084131-da14c14044cd
 	github.com/caddyserver/certmagic v0.14.5
 	github.com/dhowden/tag v0.0.0-20201120070457-d52dcb253c63
 	github.com/h2non/filetype v1.1.1
