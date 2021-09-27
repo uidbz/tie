@@ -3,7 +3,7 @@ module git.sr.ht/~uid/tie/cmd/tie-serve
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20210925084131-da14c14044cd
+	git.sr.ht/~uid/tie/metadata v0.0.0-20210925203241-732d1eace6c7
 	github.com/caddyserver/certmagic v0.14.5
 	github.com/dhowden/tag v0.0.0-20201120070457-d52dcb253c63
 	github.com/h2non/filetype v1.1.1
@@ -16,7 +16,7 @@ require (
 	go.uber.org/zap v1.19.1 // indirect
 	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519 // indirect
 	golang.org/x/net v0.0.0-20210924151903-3ad01bbaa167 // indirect
-	golang.org/x/sys v0.0.0-20210925032602-92d5a993a665 // indirect
+	golang.org/x/sys v0.0.0-20210927052749-1cf2251ac284 // indirect
 	golang.org/x/text v0.3.7 // indirect
 )
 

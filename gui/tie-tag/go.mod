@@ -4,10 +4,10 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.1.0
-	git.sr.ht/~uid/tie/client v0.0.0-20210925084131-da14c14044cd
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20210925084131-da14c14044cd
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210925084131-da14c14044cd
-	git.sr.ht/~uid/tie/request v0.0.0-20210925084131-da14c14044cd
+	git.sr.ht/~uid/tie/client v0.0.0-20210925203241-732d1eace6c7
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20210925203241-732d1eace6c7
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20210925203241-732d1eace6c7
+	git.sr.ht/~uid/tie/request v0.0.0-20210925203241-732d1eace6c7
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
 	github.com/go-gl/gl v0.0.0-20210905235341-f7a045908259 // indirect
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20210727001814-0db043d8d5be // indirect
