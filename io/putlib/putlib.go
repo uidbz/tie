@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"git.sr.ht/~uid/tie/metadata"
 	"github.com/minio/highwayhash"
 )
 
@@ -161,9 +162,27 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	if errResp != nil {
 		return StatusItem{ErrorMsg: errResp.Error()}
 	}
-	return StatusItem{
-		Hash:     string(body),
-		Filename: path,
+	var hash string
+	if pc.JsonOutput {
+		info := metadata.Info{}
+		err := json.Unmarshal(body, &info)
+		if err != nil {
+			return StatusItem{
+				Filename: path,
+				ErrorMsg: "Upload error (json unmarshall):" + err.Error(),
+			}
+		}
+		hash = info.Hash
+		return StatusItem{
+			Hash:      hash,
+			Filename:  path,
+			MediaType: info.MediaType,
+		}
+	} else {
+		return StatusItem{
+			Hash:     string(body),
+			Filename: path,
+		}
 	}
 }
 
@@ -235,21 +254,8 @@ func upload(url string, file string, config PutConfig, status *Status) {
 }
 
 func (pc *PutConfig) Validate(localhash string, uploadStatus StatusItem, status *Status) {
-	if uploadStatus.ErrorMsg == "" {
-		if pc.JsonOutput {
-			h2 := StatusItem{}
-			if err := json.Unmarshal([]byte(uploadStatus.Hash), &h2); err != nil {
-				uploadStatus.ErrorMsg = "Unmashal error:" + err.Error()
-			}
-			if localhash != h2.Hash {
-				uploadStatus.ErrorMsg = "Upload checksum failed"
-			}
-			uploadStatus.MediaType = h2.MediaType
-		} else {
-			if localhash != uploadStatus.Hash {
-				uploadStatus.ErrorMsg = "Upload checksum failed"
-			}
-		}
+	if localhash != uploadStatus.Hash {
+		uploadStatus.ErrorMsg += "Upload checksum failed"
 	}
 	status.LastItem = uploadStatus
 

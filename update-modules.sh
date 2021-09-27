@@ -13,6 +13,7 @@ go mod tidy
 echo "Updating putlib..."
 cd ../io/putlib
 go get -u .
+go get git.sr.ht/~uid/tie/metadata@latest
 go mod tidy
 
 echo "Updating getlib..."

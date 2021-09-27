@@ -96,7 +96,7 @@ func main() {
 		inputHash:  *inputPtr,
 		args:       []string{*argsPtr},
 		tmpDir:     filepath.Join(*tmpDirPtr, *inputPtr+*settingsPtr),
-		processDir: *processDirPtr,''
+		processDir: *processDirPtr,
 	}
 	app.output = app.tmpDir + "-output"
 
