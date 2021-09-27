@@ -49,7 +49,9 @@ func main() {
 			rawJson, _ := json.Marshal(status)
 			fmt.Println(string(rawJson))
 		} else {
-			fmt.Println(status.LastItem.Hash + "\t" + status.LastItem.Filename)
+			for _, x := range status.UploadedItems {
+				fmt.Println(x.Hash + "\t" + x.Filename)
+			}
 		}
 	} else {
 		fmt.Println("Need file/dir to upload")

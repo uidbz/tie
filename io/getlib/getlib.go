@@ -53,10 +53,11 @@ func InitCache(customLocation string) Cache {
 			c.CacheDir, _ = os.UserCacheDir()
 
 		case "android":
-			c.CacheDir = filepath.Join(os.Getenv("FILESDIR"), "cache")
+			c.CacheDir = os.Getenv("FILESDIR")
 		}
 	}
 
+	c.CacheDir = filepath.Join(c.CacheDir, "tie-cache")
 	c.HistoryFile = filepath.Join(c.CacheDir, historyFile)
 
 	return c
@@ -78,9 +79,12 @@ func (c *Cache) ReadFile(url string, sourceHash string) (file io.Reader, err err
 			return nil, err
 		}
 		f, err2 := ReadFile(url, sourceHash)
+		if err2 != nil {
+			os.Remove(dest)
+			return nil, err2
+		}
 		r := io.TeeReader(f, out)
-
-		return r, err2
+		return r, nil
 	} else {
 		return os.Open(dest)
 	}

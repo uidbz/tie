@@ -114,6 +114,9 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	go func() {
 		partWriter, err := formWriter.CreateFormFile("file", path)
 		setErr(err)
+		if partWriter == nil || bufferedFileReader == nil {
+			return
+		}
 		_, err = io.Copy(partWriter, bufferedFileReader)
 		setErr(err)
 		setErr(formWriter.Close())
@@ -130,7 +133,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	if err != nil {
 		return StatusItem{
 			Filename: path,
-			ErrorMsg: err.Error(),
+			ErrorMsg: "Upload error:" + err.Error(),
 		}
 	}
 	req.Header.Add("Content-Type", formWriter.FormDataContentType())
@@ -141,11 +144,17 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	resp, err := http.DefaultClient.Do(req)
 
 	if writeErr != nil {
-		return StatusItem{ErrorMsg: writeErr.Error()}
+		return StatusItem{
+			Filename: path,
+			ErrorMsg: "Upload error:" + writeErr.Error(),
+		}
 	}
 
 	if err != nil {
-		return StatusItem{ErrorMsg: err.Error()}
+		return StatusItem{
+			Filename: path,
+			ErrorMsg: "Upload error:" + err.Error(),
+		}
 	}
 
 	body, errResp := io.ReadAll(resp.Body)
@@ -196,10 +205,11 @@ func Upload(url string, file string, config PutConfig) *Status {
 	return &status
 }
 
-func upload(url string, file string, config PutConfig, status *Status) StatusItem {
+func upload(url string, file string, config PutConfig, status *Status) {
 	fi, errStat := os.Lstat(file)
 	if errStat != nil {
-		return StatusItem{ErrorMsg: "Error stat file: " + file + errStat.Error()}
+		status.ErrorMsg += "Error stat file: " + file + errStat.Error()
+		return
 	}
 
 	if fi.IsDir() {
@@ -211,47 +221,41 @@ func upload(url string, file string, config PutConfig, status *Status) StatusIte
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
 			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
-			uploadStatus := upload(url, abs, config, status)
-			hashes += uploadStatus.Hash + "\t" + uploadStatus.Filename + "\n"
+			upload(url, abs, config, status)
+			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\n"
 		}
 		localhash, _ := config.AddressOf(strings.NewReader(hashes))
 		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), file)
-		if uploadStatus.ErrorMsg != "" {
-			uploadStatus.ErrorMsg = "Upload directory error:" + uploadStatus.ErrorMsg
-			return uploadStatus
-		}
-		return config.Validate(localhash, uploadStatus)
+		config.Validate(localhash, uploadStatus, status)
 	} else {
 		localhash, _ := config.AddressOfFile(file)
 		uploadStatus := config.UploadFile(url+localhash, file)
-		if uploadStatus.ErrorMsg != "" {
-			uploadStatus.ErrorMsg = "Upload error:" + uploadStatus.ErrorMsg
-			return uploadStatus
-		}
-		status.LastItem = config.Validate(localhash, uploadStatus)
-		if status.LastItem.ErrorMsg != "" {
-			status.ErrorMsg += status.LastItem.ErrorMsg + "\n"
-		}
-		status.UploadedItems = append(status.UploadedItems, status.LastItem)
-		return status.LastItem
+		config.Validate(localhash, uploadStatus, status)
 	}
 }
 
-func (pc *PutConfig) Validate(localhash string, uploadStatus StatusItem) StatusItem {
-	if pc.JsonOutput {
-		h2 := StatusItem{}
-		if err := json.Unmarshal([]byte(uploadStatus.Hash), &h2); err != nil {
-			uploadStatus.ErrorMsg = "Unmashal error:" + err.Error()
+func (pc *PutConfig) Validate(localhash string, uploadStatus StatusItem, status *Status) {
+	if uploadStatus.ErrorMsg == "" {
+		if pc.JsonOutput {
+			h2 := StatusItem{}
+			if err := json.Unmarshal([]byte(uploadStatus.Hash), &h2); err != nil {
+				uploadStatus.ErrorMsg = "Unmashal error:" + err.Error()
+			}
+			if localhash != h2.Hash {
+				uploadStatus.ErrorMsg = "Upload checksum failed"
+			}
+			uploadStatus.MediaType = h2.MediaType
+		} else {
+			if localhash != uploadStatus.Hash {
+				uploadStatus.ErrorMsg = "Upload checksum failed"
+			}
 		}
-		if localhash != h2.Hash {
-			uploadStatus.ErrorMsg = "Upload checksum failed"
-		}
-		uploadStatus.MediaType = h2.MediaType
-		return uploadStatus
-	} else {
-		if localhash != uploadStatus.Hash {
-			uploadStatus.ErrorMsg = "Upload checksum failed"
-		}
-		return uploadStatus
 	}
+	status.LastItem = uploadStatus
+
+	if status.LastItem.ErrorMsg != "" {
+		status.ErrorMsg += status.LastItem.ErrorMsg + "\n"
+	}
+
+	status.UploadedItems = append(status.UploadedItems, status.LastItem)
 }
