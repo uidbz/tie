@@ -538,31 +538,18 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 	return &ass
 }
 
-// func (ic *InternalCollection) SetToString(value string, s *Tree) *StringSliceSet {
-// 	return SetToString(value, s, ic, GetMainCollection)
-// }
-
-// TODO: Bug - does not return if no associations
-// func SetToString(value string, s *Tree, ic *InternalCollection, cf CollectionFunc) *StringSliceSet {
-// func (ic *InternalCollection) SetToString(value string, s *Tree) *StringSliceSet {
-// 	, valueCollection string,
-// }
 func (ic *InternalCollection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
-	size := s.Size()
-	// var e *Entry
-	// if valueCollection == nil {
-	// e := ic.GetEntryFromString(value)
-	// }
+	size := s.count
 
-	set := StringSliceSet{Item: value, //ic.GetValueStringFromEntry(e),
-		Key:         make([]string, size),
+	set := StringSliceSet{Item: value,
+		Key:    make([]string, size),
 		Value2: make([]string, size),
-		Value1:    make([]string, size)}
+		Value1: make([]string, size)}
 
 	associationTrees := make([]*Tree, size)
 
 	if size == 0 {
-		return &set, nil // TODO: Test if this fixes the bug
+		return &set, nil
 	}
 
 	// start := time.Now()
@@ -570,39 +557,27 @@ func (ic *InternalCollection) SetToString(value string, relationFilter string, s
 
 	v := &ChanVisitor{}
 	v.Ch = make(chan interface{}, 1000)
-	first := true
-	wg.Add(1)
-	var appendMutex sync.Mutex
+	wg.Add(size)
 	go func() {
 		i := 0
 		for t := range v.Ch {
-			// doing this because s.Walk can finish, before reaching here
-			if first {
-				first = false
-			} else {
-				wg.Add(1)
-			}
 			x := t.(*Association)
 
-			go func(i int, x *Association) {
-				defer wg.Done()
-
-				if i >= int(size) { //In case results change since size was calculated
-					appendMutex.Lock()
-					for j := len(set.Key); j <= i; j++ {
-						set.Key = append(set.Key, "")
-						set.Value2 = append(set.Value2, "")
-						set.Value1 = append(set.Value1, "")
-						associationTrees = append(associationTrees, &Tree{})
-					}
-					appendMutex.Unlock()
+			if i >= size { //In case results change since size was calculated
+				for j := size; j <= i; j++ {
+					set.Key = append(set.Key, "")
+					set.Value2 = append(set.Value2, "")
+					set.Value1 = append(set.Value1, "")
+					associationTrees = append(associationTrees, &Tree{})
+					wg.Add(1)
+					size++
 				}
-				set.Key[i] = ic.GetValueString(x.Level, x.EntryId)
-				set.Value2[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
-				associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
-				// fmt.Println("Associate to:", x.AssociationLevel, x.AssociateTo, ic.GetValueString(x.AssociationLevel, x.AssociateTo))
-				set.Value1[i] = ic.GetValueString(x.RelationLevel, x.Relation)
-			}(i, x)
+			}
+			set.Key[i] = ic.GetValueString(x.Level, x.EntryId)
+			set.Value2[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
+			associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
+			set.Value1[i] = ic.GetValueString(x.RelationLevel, x.Relation)
+			wg.Done()
 			i++
 		}
 	}()

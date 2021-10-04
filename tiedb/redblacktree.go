@@ -143,6 +143,7 @@ func StringComparator(o1, o2 interface{}) int {
 type Tree struct {
 	root        *Node      // tip of the tree
 	cmp         Comparator // required function to order keys
+	count       int
 	writeToDisk bool
 }
 
@@ -363,6 +364,7 @@ func (t *Tree) Put(key interface{}, data interface{}) error {
 	// 	logger.Printf("Put was prematurely aborted: %s\n", err.Error())
 	// 	return err
 	// }
+	t.count++
 
 	if t.root == nil {
 		t.root = &Node{key: key, color: BLACK, payload: data}
@@ -561,6 +563,7 @@ func (t *Tree) Delete(key interface{}) {
 		// logger.Printf("Delete: bail as no node exists for key %d\n", key)
 		return
 	}
+	t.count--
 	_, z := t.getNode(key)
 	// logger.Printf("Delete: attempt to delete %s\n", z)
 	y := z

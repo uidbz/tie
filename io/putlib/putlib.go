@@ -131,11 +131,9 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 		url += "-force-generate-thumbnails"
 	}
 	req, err := http.NewRequest(http.MethodPut, url, bodyReader)
+	var ErrorMsg string
 	if err != nil {
-		return StatusItem{
-			Filename: path,
-			ErrorMsg: "Upload error:" + err.Error(),
-		}
+		ErrorMsg = "Upload error:" + err.Error()
 	}
 	req.Header.Add("Content-Type", formWriter.FormDataContentType())
 
@@ -145,22 +143,18 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	resp, err := http.DefaultClient.Do(req)
 
 	if writeErr != nil {
-		return StatusItem{
-			Filename: path,
-			ErrorMsg: "Upload error:" + writeErr.Error(),
-		}
+		ErrorMsg = "Upload error:" + writeErr.Error()
 	}
 
 	if err != nil {
-		return StatusItem{
-			Filename: path,
-			ErrorMsg: "Upload error:" + err.Error(),
-		}
+		ErrorMsg = "Upload error:" + err.Error()
 	}
-
+	if resp == nil {
+		return StatusItem{ErrorMsg: ErrorMsg + "\n"}
+	}
 	body, errResp := io.ReadAll(resp.Body)
 	if errResp != nil {
-		return StatusItem{ErrorMsg: errResp.Error()}
+		return StatusItem{ErrorMsg: errResp.Error() + "\n"}
 	}
 	var hash string
 	if pc.JsonOutput {
@@ -176,11 +170,13 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 		return StatusItem{
 			Hash:      hash,
 			Filename:  path,
+			ErrorMsg:  ErrorMsg,
 			MediaType: info.MediaType,
 		}
 	} else {
 		return StatusItem{
 			Hash:     string(body),
+			ErrorMsg: ErrorMsg,
 			Filename: path,
 		}
 	}

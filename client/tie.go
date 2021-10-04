@@ -104,6 +104,9 @@ func Tag(path string, tags []string, options TagOptions, addHandler func(json.Ra
 	pc.JsonOutput = true
 	pc.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
 	status := putlib.Upload(CurrentState.ServeUrl, path, pc)
+	if status.ErrorMsg != "" {
+		fmt.Println("Error:", status.ErrorMsg)
+	}
 	if status.LastItem.Hash != "" {
 		info := status.LastItem
 		// uid := metalib.HashFunction + "/" + info.MediaType + "/" + info.Hash

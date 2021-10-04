@@ -54,7 +54,7 @@ func (tt *TieTag) Init() {
 func main() {
 	var hash string
 
-	// tie.Config = "2"
+	tie.Config = "config"
 	tie.InitConfig()
 	tie.CurrentState.Verbose = true
 	view := component.NewTieView()
@@ -75,11 +75,11 @@ func main() {
 	w := myApp.NewWindow("fileinfo")
 
 	tieview := view.MakeUI(w)
-	var tt TieTag
-	tt.data = binding.BindStringList(&[]string{"hej"})
-	tt.Init()
-
-	w.SetContent(tt.MakeUI(tieview))
+	// var tt TieTag
+	// tt.data = binding.BindStringList(&[]string{"hej"})
+	// tt.Init()
+	// w.SetContent(tt.MakeUI(tieview))
+	w.SetContent(tieview)
 
 	w.Resize(fyne.NewSize(1000, 1000))
 

@@ -55,9 +55,9 @@ func InitCache(customLocation string) Cache {
 		case "android":
 			c.CacheDir = os.Getenv("FILESDIR")
 		}
+		c.CacheDir = filepath.Join(c.CacheDir, "tie-cache")
 	}
 
-	c.CacheDir = filepath.Join(c.CacheDir, "tie-cache")
 	c.HistoryFile = filepath.Join(c.CacheDir, historyFile)
 
 	return c
@@ -73,6 +73,7 @@ func (c *Cache) ReadFile(url string, sourceHash string) (file io.Reader, err err
 	dir := dest
 	dest = filepath.Join(dest, sourceHash)
 	if _, exist := os.Stat(dest); os.IsNotExist(exist) {
+		fmt.Println("getlib (not exist):", dest)
 		os.MkdirAll(dir, 0755)
 		out, err := os.Create(dest)
 		if err != nil {

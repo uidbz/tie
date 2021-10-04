@@ -41,7 +41,7 @@ func main() {
 		pc := putlib.PutConfig{}
 		pc.JsonOutput = jsonOutput
 		status := putlib.Upload(url, file, pc)
-		if status.ErrorMsg != "" {
+		if status.ErrorMsg != "" && status.LastItem.Hash == "" {
 			fmt.Println(status.ErrorMsg)
 			return
 		}
