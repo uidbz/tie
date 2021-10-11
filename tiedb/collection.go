@@ -539,7 +539,7 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 }
 
 func (ic *InternalCollection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
-	size := s.count
+	size := s.Size()
 
 	set := StringSliceSet{Item: value,
 		Key:    make([]string, size),
