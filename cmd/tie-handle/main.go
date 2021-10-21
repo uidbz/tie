@@ -15,14 +15,15 @@ import (
 )
 
 type ExternalApp struct {
-	url          string
-	name         string
-	inputHash    string
-	args         []string
-	tmpDir       string
-	output       string
-	settingsFile string
-	processDir   bool
+	url        string
+	name       string
+	inputHash  string
+	args       []string
+	tmpDir     string
+	output     string
+	settings   string
+	processDir bool
+	debug      bool
 }
 
 func (app *ExternalApp) Run(file io.Reader, relPath string) (err error) {
@@ -48,15 +49,21 @@ func (app *ExternalApp) Run(file io.Reader, relPath string) (err error) {
 }
 
 func (app *ExternalApp) Process(path string) {
-	cmdArgs := append(app.args,
-		"-input", path,
-		"-settings", app.settingsFile,
-		"-output", app.output)
+	cmdArgs := []string{}
+	if len(app.args) != 0 {
+		cmdArgs = append(cmdArgs, app.args...)
+	}
+	if app.settings != "" {
+		cmdArgs = append(cmdArgs, app.settings)
+	}
+	cmdArgs = append(cmdArgs, "-input", path)
+	cmdArgs = append(cmdArgs, "-output", app.output)
 
-	fmt.Println(app.name, cmdArgs)
+	if app.debug {
+		fmt.Println(app.name, cmdArgs)
+	}
 	cmd := exec.Command(app.name, cmdArgs...)
-	// cmd.CombinedOutput()             // TODO: Capture output
-	out, err := cmd.CombinedOutput() // TODO: Capture output
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		fmt.Println(string(out))
 		fmt.Println("Error processing data:", err.Error())
@@ -71,21 +78,32 @@ func (app *ExternalApp) PrintDebugInfo() {
 	fmt.Println("Name:", app.name)
 	fmt.Println("Args:", app.args)
 	fmt.Println("Input hash:", app.inputHash)
-	fmt.Println("Settings hash:", app.settingsFile)
+	fmt.Println("Settings hash:", app.settings)
 	fmt.Println("Temp dir:", app.tmpDir)
 	fmt.Println("Ouptut dir:", app.output)
 	fmt.Println("Process dir:", app.processDir)
 }
 
+func (app *ExternalApp) VerifyCleanInput() error {
+	if app.name == "" {
+		return errors.New("Need -app flag to continue, see `tie-handle -help`")
+	}
+
+	if app.args[0] == "" {
+		app.args = []string{}
+	}
+
+	return nil
+}
+
 func main() {
 	urlPtr := flag.String("url", "http://localhost:1162", "tie-serve url")
-	appPtr := flag.String("app", "python", "application to execute")
-	argsPtr := flag.String("args", "script.py", "args to app")
-	//inputPtr := flag.String("input", "f72d4c34a7c7cc41bac64653ae4463d53891cb6d8577f5ebe3e483b6d5e02ac3", "input hash")
-	inputPtr := flag.String("input", "c88a38e5d18a42980e2698ea1227fcb458204934203dfe912d3da2274cf2a7e6", "input hash")
+	appPtr := flag.String("app", "", "application to execute")
+	argsPtr := flag.String("args", "", "args to app")
+	inputPtr := flag.String("input", "", "input hash")
 	settingsPtr := flag.String("settings", "", "settings file hash")
 	tmpDirPtr := flag.String("tempdir", "/tmp/tie-handle", "temp dir")
-	processDirPtr := flag.Bool("processdir", true, "process dir, instead of individidual files")
+	processDirPtr := flag.Bool("processdir", false, "process dir, instead of individidual files")
 	debugPtr := flag.Bool("debug", false, "Enable verbose output")
 
 	flag.Parse()
@@ -97,10 +115,16 @@ func main() {
 		args:       []string{*argsPtr},
 		tmpDir:     filepath.Join(*tmpDirPtr, *inputPtr+*settingsPtr),
 		processDir: *processDirPtr,
+		debug:      *debugPtr,
 	}
 	app.output = app.tmpDir + "-output"
 
-	if *debugPtr {
+	if e := app.VerifyCleanInput(); e != nil {
+		fmt.Println(e.Error())
+		return
+	}
+
+	if app.debug {
 		app.PrintDebugInfo()
 	}
 
@@ -110,8 +134,8 @@ func main() {
 	}
 
 	if *settingsPtr != "" {
-		app.settingsFile = filepath.Join(app.tmpDir, "tie-handle-settings.json")
-		err := getlib.DownloadFile(app.url, app.inputHash, app.settingsFile)
+		app.settings = filepath.Join(app.tmpDir, "tie-handle-settings.json")
+		err := getlib.DownloadFile(app.url, app.inputHash, app.settings)
 		if err != nil {
 			fmt.Println("Error downloading settings file:", err.Error())
 			return
