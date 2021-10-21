@@ -23,7 +23,7 @@ install_cmd() {
     cd $root/cmd/tie-handle
     go install
 
-    cd $root/cmd/tie-serve
+    cd $root/cmd/tie-filehost
     go install
     
     cd $root

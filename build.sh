@@ -26,7 +26,7 @@ build_cmd() {
     cd $root/cmd/tie-handle
     go build  -o $output_dir
 
-    cd $root/cmd/tie-serve
+    cd $root/cmd/tie-filehost
     go build  -o $output_dir
 }
 

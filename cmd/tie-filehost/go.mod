@@ -1,4 +1,4 @@
-module git.sr.ht/~uid/tie/cmd/tie-serve
+module git.sr.ht/~uid/tie/cmd/tie-filehost
 
 go 1.16
 
