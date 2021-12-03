@@ -35,3 +35,4 @@ cmd/tie-upload/tie-upload
 cmd/tie-serve/tie-serve
 cmd/tie-handle/tie-handle
 gui/tie-tag/tie-tag
+gui/tie-img/tie-img

@@ -36,12 +36,12 @@ func (tv *TieCreateView) Add() {
 	val1, _ := tv.SelectedValue1.Get()
 	val2, _ := tv.SelectedValue2.Get()
 	tie.TieAdd(key, val1, val2, tv.parent.AddHandler)
-	tv.parent.window.SetContent(tv.parent.MakeUI(tv.parent.window))
+	tv.parent.ShowMainPage()
 
 }
 
 func (tv *TieCreateView) Exit() {
-	tv.parent.window.SetContent(tv.parent.MakeUI(tv.parent.window))
+	tv.parent.ShowMainPage()
 }
 
 func (tv *TieCreateView) MakeUI(parent *TieView) fyne.CanvasObject {

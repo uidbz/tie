@@ -168,6 +168,9 @@ func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 	col := db.GetCollection(key)
 	success, msg := col.Delete(r.Key, r.Value1, r.Value2)
+	if success {
+		success, msg = col.Delete(r.Value2, r.Value1, r.Key)
+	}
 	reply := ReplyStatus{
 		Success:    success,
 		Message:    msg,

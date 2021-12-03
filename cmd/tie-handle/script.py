@@ -10,5 +10,8 @@ print(args.output)
 #import sys
 #print ('Argument List:', str(sys.argv))
 
-with open(args.output + '/readme.txt', 'w') as f:
-    f.write('readme')
+f = open(args.input,"r")
+lines = f.readlines()
+
+with open(args.output + '/result.txt', 'w') as f:
+    f.write(str(int(lines[0])*2))

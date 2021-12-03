@@ -35,6 +35,9 @@ build_gui() {
     
     cd $root/gui/tie-tag
     go build  -o $output_dir
+    
+    cd $root/gui/tie-img
+    go build  -o $output_dir
 
 }
 

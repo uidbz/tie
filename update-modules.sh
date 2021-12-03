@@ -72,6 +72,14 @@ go get git.sr.ht/~uid/tie/client@latest
 go get git.sr.ht/~uid/putlib@latest
 go mod tidy
 
+echo "Updating tie-img..."
+cd ../tie-img
+go get -u .
+go get git.sr.ht/~uid/tie/gui/component@latest
+go get git.sr.ht/~uid/tie/client@latest
+go get git.sr.ht/~uid/putlib@latest
+go mod tidy
+
 echo "Updating tie-upload..."
 cd ../../cmd/tie-upload
 go get -u .
@@ -84,8 +92,15 @@ go get -u .
 go get git.sr.ht/~uid/tie/io/getlib@latest
 go mod tidy
 
-echo "Updating tie-serve..."
-cd ../tie-serve
+echo "Updating tie-filehost..."
+cd ../tie-filehost
 go get -u .
 go get git.sr.ht/~uid/tie/metadata@latest
+go mod tidy
+
+echo "Updating example: tiedb-client-add-get..."
+cd ../../examples/tiedb-client-add-get
+go get -u .
+go get git.sr.ht/~uid/tie/client@latest
+go get git.sr.ht/~uid/tie/request@latest
 go mod tidy

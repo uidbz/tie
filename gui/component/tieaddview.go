@@ -177,12 +177,12 @@ func (tv *TieAddView) Add() {
 	for _, x := range tv.selectedTagsVal2 {
 		tie.TieAdd(key, "tag", x, tv.parent.AddHandler)
 	}
-	tv.parent.window.SetContent(tv.parent.MakeUI(tv.parent.window))
 
+	tv.parent.ShowMainPage()
 }
 
 func (tv *TieAddView) Exit() {
-	tv.parent.window.SetContent(tv.parent.MakeUI(tv.parent.window))
+	tv.parent.ShowMainPage()
 }
 
 func (tv *TieAddView) Del() {

@@ -74,12 +74,13 @@ func main() {
 	myApp := app.New()
 	w := myApp.NewWindow("fileinfo")
 
-	tieview := view.MakeUI(w)
+	c := container.NewMax()
+	view.MakeUI(c)
 	// var tt TieTag
 	// tt.data = binding.BindStringList(&[]string{"hej"})
 	// tt.Init()
 	// w.SetContent(tt.MakeUI(tieview))
-	w.SetContent(tieview)
+	w.SetContent(c)
 
 	w.Resize(fyne.NewSize(1000, 1000))
 

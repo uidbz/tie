@@ -39,6 +39,8 @@ type TieView struct {
 	list2 *widget.List
 
 	window       fyne.Window
+	parent       *fyne.Container
+	MainPage     fyne.CanvasObject
 	refreshTimer *time.Ticker
 }
 
@@ -168,6 +170,21 @@ func (tv *TieView) List2Select(id int) {
 
 }
 
+func (tv *TieView) UpdateUI(content fyne.CanvasObject) {
+	if len(tv.parent.Objects) > 0 {
+		tv.parent.Objects[0] = content
+	} else {
+		tv.parent.Objects = []fyne.CanvasObject{content}
+	}
+	tv.parent.Refresh()
+	// tv.window.SetContent()
+}
+
+func (tv *TieView) ShowMainPage() {
+	tv.parent.Objects[0] = tv.MainPage
+	tv.parent.Refresh()
+}
+
 func (tv *TieView) Add() {
 	key, _ := tv.SelectedKey.Get()
 	// a := request.Add{
@@ -182,14 +199,14 @@ func (tv *TieView) Add() {
 	addView.SetData([]string{}, []string{})
 	addView.GetTags()
 
-	tv.window.SetContent(addView.MakeUI(tv))
+	tv.UpdateUI(addView.MakeUI(tv))
 }
 
 func (tv *TieView) Create() {
 	key, _ := tv.SelectedKey.Get()
 	createView := NewTieCreateView()
 	createView.SetKey(key)
-	tv.window.SetContent(createView.MakeUI(tv))
+	tv.UpdateUI(createView.MakeUI(tv))
 }
 
 func (tv *TieView) Update(newValue2 string) {
@@ -225,8 +242,8 @@ func (tv *TieView) ImportFile() {
 	tie.Tag(tv.CurrentFilePath, []string{}, options, tv.AddHandler)
 }
 
-func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
-	tv.window = w
+func (tv *TieView) MakeUI(parent *fyne.Container) {
+	tv.parent = parent
 	tv.list1 = widget.NewListWithData(tv.data1,
 		func() fyne.CanvasObject {
 			return widget.NewLabel("template")
@@ -305,7 +322,10 @@ func (tv *TieView) MakeUI(w fyne.Window) fyne.CanvasObject {
 	entryFields := container.NewGridWithColumns(2, txtValue1, txtValue2)
 	bottom := container.NewGridWithRows(2, entryFields, buttons)
 
-	return container.NewBorder(top, bottom, nil, nil, split)
+	tv.MainPage = container.NewBorder(top, bottom, nil, nil, split)
+	tv.MainPage.Refresh()
+
+	tv.UpdateUI(tv.MainPage)
 }
 
 func (tv *TieView) AddHandler(resp json.RawMessage) {
