@@ -4,12 +4,12 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.1.1
-	git.sr.ht/~uid/tie/client v0.0.0-20211021072118-10d9aee6037e
-	git.sr.ht/~uid/tie/request v0.0.0-20211021072118-10d9aee6037e
-	github.com/srwiley/oksvg v0.0.0-20210519022825-9fc0c575d5fe // indirect
+	git.sr.ht/~uid/tie/client v0.0.0-20211026072142-3f546ca4c972
+	git.sr.ht/~uid/tie/request v0.0.0-20211026072142-3f546ca4c972
+	github.com/srwiley/oksvg v0.0.0-20211120171407-1837d6608d8c // indirect
 	github.com/srwiley/rasterx v0.0.0-20210519020934-456a8d69b780 // indirect
-	github.com/yuin/goldmark v1.4.2 // indirect
-	golang.org/x/image v0.0.0-20210628002857-a66eb6448b8d // indirect
+	github.com/yuin/goldmark v1.4.4 // indirect
+	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
 	golang.org/x/text v0.3.7 // indirect
 )
 
