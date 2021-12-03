@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	fyne.io/fyne/v2 v2.1.1
-	git.sr.ht/~uid/tie/client v0.0.0-20211026072142-3f546ca4c972
+	git.sr.ht/~uid/tie/client v0.0.0-20211203083252-aa1b8c856023
 	git.sr.ht/~uid/tie/gui/component v0.0.0-20211203083031-2aed8badebfd
 	git.sr.ht/~uid/tie/io/putlib v0.0.0-20211026072142-3f546ca4c972
 	github.com/disintegration/gift v1.2.1
@@ -15,7 +15,7 @@ require (
 
 require (
 	git.sr.ht/~uid/tie/metadata v0.0.0-20211026072142-3f546ca4c972 // indirect
-	git.sr.ht/~uid/tie/request v0.0.0-20211026072142-3f546ca4c972 // indirect
+	git.sr.ht/~uid/tie/request v0.0.0-20211203083031-2aed8badebfd // indirect
 	git.sr.ht/~uid/tie/tiedb v0.0.0-20211026072142-3f546ca4c972 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v0.0.0-20181227131451-3dcfdacbaaf3 // indirect
