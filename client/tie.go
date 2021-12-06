@@ -193,7 +193,7 @@ func SendToWebservice(command string, body json.RawMessage, handler func(json.Ra
 	handler(resp.Body())
 }
 
-func Run(requestType uint, tieRequest interface{}) (*request.Reply, error) {
+func Run(tieRequest request.Request) (*request.Reply, error) {
 	if len(CurrentState.Webservice) < 5 {
 		e := request.CreateReply(request.ReplyTypeEmpty)
 		return &e, errors.New("Webservice not set")
@@ -211,7 +211,7 @@ func Run(requestType uint, tieRequest interface{}) (*request.Reply, error) {
 		e := request.CreateReply(request.ReplyTypeEmpty)
 		return &e, errMarshal
 	}
-	var reply = request.CreateReply(requestType)
+	var reply = request.CreateReply(tieRequest.RequestType())
 	resp, err := r.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(body).

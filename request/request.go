@@ -28,6 +28,7 @@ type Reply struct {
 
 type Request interface {
 	Reply(*tiedb.Tree, tiedb.CollectionKey) (Reply, error)
+	RequestType() uint
 }
 
 func CreateReply(requestType uint) Reply {
@@ -64,10 +65,52 @@ func (r *Reply) DataBatch() *ReplyBatch {
 	return r.ReplyStruct.(*ReplyBatch)
 }
 
+func NewAddRequest(key, value1, value2 string) *Add {
+	return &Add{
+		Key:         key,
+		Value1:      value1,
+		Value2:      value2,
+		requestType: RequestTypeAdd,
+	}
+}
+
+func NewGetRequest(keys []string) *Get {
+	return &Get{
+		Values:      keys,
+		requestType: RequestTypeGet,
+	}
+}
+
+func NewDeleteRequest(key, value1, value2 string) *Delete {
+	return &Delete{
+		Key:         key,
+		Value1:      value1,
+		Value2:      value2,
+		requestType: RequestTypeDelete,
+	}
+}
+
+func NewUpdateRequest() *Update {
+	return &Update{
+		requestType: RequestTypeUpdate,
+	}
+}
+
+func NewBatchRequest() *Batch {
+	return &Batch{
+		requestType: RequestTypeBatch,
+	}
+}
+
 type Add struct {
-	Key    string
-	Value1 string
-	Value2 string
+	Key         string
+	Value1      string
+	Value2      string
+	requestType uint
+}
+
+func (a *Add) RequestType() uint {
+	return a.requestType
 }
 
 type Get struct {
@@ -75,12 +118,22 @@ type Get struct {
 	NextLevelValues []string
 	Filter          string
 	MaxAssociations int
+	requestType     uint
+}
+
+func (g *Get) RequestType() uint {
+	return g.requestType
 }
 
 type Delete struct {
-	Key    string
-	Value1 string
-	Value2 string
+	Key         string
+	Value1      string
+	Value2      string
+	requestType uint
+}
+
+func (d *Delete) RequestType() uint {
+	return d.requestType
 }
 
 type Update struct {
@@ -89,13 +142,23 @@ type Update struct {
 	Value2       string
 	NewValue2    string
 	AddOnFailure bool
+	requestType  uint
+}
+
+func (u *Update) RequestType() uint {
+	return u.requestType
 }
 
 type Batch struct {
-	Add    []Add
-	Get    []Get
-	Delete []Delete
-	Update []Update
+	Add         []*Add
+	Get         []*Get
+	Delete      []*Delete
+	Update      []*Update
+	requestType uint
+}
+
+func (b *Batch) RequestType() uint {
+	return b.requestType
 }
 
 type ReplyGetSlice []struct {

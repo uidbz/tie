@@ -3,6 +3,7 @@ package component
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 
 	"fyne.io/fyne/v2"
 
@@ -35,6 +36,9 @@ type TieAddView struct {
 	list1   *widget.List
 	list2   *widget.List
 	selTags *widget.List
+
+	ImportAddClose bool
+	HashCalculated chan bool
 
 	parent *TieView
 }
@@ -107,7 +111,6 @@ func (tv *TieAddView) GetHandler(resp json.RawMessage) {
 		fmt.Println("Error handling Get reponse:", err)
 	}
 
-	fmt.Println(result)
 	if len(result) > 0 {
 		tv.SetData(result[0].Value1, result[0].Value2)
 	}
@@ -163,6 +166,10 @@ func (tv *TieAddView) RemoveTag(id int) {
 }
 
 func (tv *TieAddView) Add() {
+	if tv.ImportAddClose {
+		tv.parent.ImportFile()
+		<-tv.HashCalculated
+	}
 	key, _ := tv.SelectedKey.Get()
 	// tv.selectedTags.Set(tv.selectedTagsList)
 	// tv.Object.Refresh()
@@ -178,7 +185,11 @@ func (tv *TieAddView) Add() {
 		tie.TieAdd(key, "tag", x, tv.parent.AddHandler)
 	}
 
-	tv.parent.ShowMainPage()
+	if tv.ImportAddClose {
+		os.Exit(0)
+	} else {
+		tv.parent.ShowMainPage()
+	}
 }
 
 func (tv *TieAddView) Exit() {
@@ -198,7 +209,7 @@ func (tv *TieAddView) GetObj() fyne.CanvasObject {
 }
 
 func (tv *TieAddView) UpdateTextTag(row int, obj fyne.CanvasObject) {
-	obj.(*widget.Label).SetText(tv.selectedTagsVal1[row] + "/t" + tv.selectedTagsVal2[row])
+	obj.(*widget.Label).SetText(tv.selectedTagsVal1[row] + "\t" + tv.selectedTagsVal2[row])
 }
 
 func (tv *TieAddView) MakeUI(parent *TieView) fyne.CanvasObject {
@@ -247,6 +258,14 @@ func (tv *TieAddView) MakeUI(parent *TieView) fyne.CanvasObject {
 	txtValue1 := widget.NewEntryWithData(tv.SelectedValue1)
 	txtValue1.Disable()
 	txtValue2 := widget.NewEntryWithData(tv.SelectedValue2)
+	txtValue2.OnSubmitted = func(val2 string) {
+		val1, err := tv.SelectedValue1.Get()
+		if err == nil && val1 != "" {
+			tie.TieAdd("tag", val1, val2, tv.parent.AddHandler)
+			tv.list1.Unselect(tv.SelectedValue1ID)
+			tv.GetTags()
+		}
+	}
 	buttons := container.NewGridWithColumns(3, exit, del, add)
 	entryFields := container.NewGridWithColumns(2, txtValue1, txtValue2)
 	bottom := container.NewGridWithRows(2, entryFields, buttons)

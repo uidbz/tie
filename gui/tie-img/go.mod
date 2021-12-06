@@ -4,9 +4,9 @@ go 1.17
 
 require (
 	fyne.io/fyne/v2 v2.1.1
-	git.sr.ht/~uid/tie/client v0.0.0-20211203083252-aa1b8c856023
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20211203083031-2aed8badebfd
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20211026072142-3f546ca4c972
+	git.sr.ht/~uid/tie/client v0.0.0-20211203084034-9d28a8705a27
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20211203084034-9d28a8705a27
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20211203084034-9d28a8705a27
 	github.com/disintegration/gift v1.2.1
 	github.com/disintegration/imaging v1.6.2
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
@@ -14,9 +14,9 @@ require (
 )
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20211026072142-3f546ca4c972 // indirect
-	git.sr.ht/~uid/tie/request v0.0.0-20211203083031-2aed8badebfd // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20211026072142-3f546ca4c972 // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20211203084034-9d28a8705a27 // indirect
+	git.sr.ht/~uid/tie/request v0.0.0-20211203084034-9d28a8705a27 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20211203084034-9d28a8705a27 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v0.0.0-20181227131451-3dcfdacbaaf3 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
@@ -32,7 +32,7 @@ require (
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/yuin/goldmark v1.4.4 // indirect
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
-	golang.org/x/net v0.0.0-20211201190559-0a0e4e1bb54c // indirect
+	golang.org/x/net v0.0.0-20211203184738-4852103109b8 // indirect
 	golang.org/x/sys v0.0.0-20211124211545-fe61309f8881 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect

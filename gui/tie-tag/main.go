@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"git.sr.ht/~uid/tie/request"
 
@@ -14,6 +13,7 @@ import (
 	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/gui/component"
 	"git.sr.ht/~uid/tie/io/putlib"
+	"github.com/spf13/cobra"
 )
 
 type TieTag struct {
@@ -36,10 +36,8 @@ func GetListData(key string) {
 }
 
 func (tt *TieTag) Init() {
-	get := request.Get{
-		Values: []string{"music"},
-	}
-	reply, err := tie.Run(request.RequestTypeGet, get)
+	get := request.NewGetRequest([]string{"music"})
+	reply, err := tie.Run(get)
 	if err != nil {
 		fmt.Println(err.Error())
 	} else {
@@ -54,17 +52,34 @@ func (tt *TieTag) Init() {
 func main() {
 	var hash string
 
-	tie.Config = "config"
-	tie.InitConfig()
-	tie.CurrentState.Verbose = true
 	view := component.NewTieView()
+	addView := component.NewTieAddView()
 
-	if len(os.Args) > 1 {
-		pc := putlib.PutConfig{}
-		hash, _ = pc.AddressOfFile(os.Args[1])
-		view.CurrentFilePath = os.Args[1]
+	var rootCmd = &cobra.Command{Use: "tie-tag"}
+	rootCmd.PersistentFlags().StringVarP(&tie.Config, "config", "c", "config", "Config file to load")
+	rootCmd.PersistentFlags().StringVarP(&view.CurrentFilePath, "input", "i", "", "File to tag")
+	rootCmd.PersistentFlags().BoolVarP(&addView.ImportAddClose, "add", "a", false, "Go directly to 'add' view")
+	rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", true, "Verbose output")
+
+	rootCmd.Execute()
+
+	tie.InitConfig()
+
+	pc := putlib.PutConfig{}
+
+	if view.CurrentFilePath != "" {
+		if addView.ImportAddClose {
+			go func() {
+				addView.HashCalculated = make(chan bool, 1)
+				hash, _ = pc.AddressOfFile(view.CurrentFilePath)
+				view.SetKey(hash)
+				addView.SetKey(hash)
+				addView.HashCalculated <- true
+			}()
+		} else {
+			hash, _ = pc.AddressOfFile(view.CurrentFilePath)
+		}
 	} else {
-		pc := putlib.PutConfig{}
 		hash, _ = pc.AddressOfFile("main.go")
 		view.CurrentFilePath = "main.go"
 	}
@@ -76,6 +91,11 @@ func main() {
 
 	c := container.NewMax()
 	view.MakeUI(c)
+	if addView.ImportAddClose {
+		addView.SetData([]string{}, []string{})
+		addView.GetTags()
+		view.UpdateUI(addView.MakeUI(view))
+	}
 	// var tt TieTag
 	// tt.data = binding.BindStringList(&[]string{"hej"})
 	// tt.Init()
@@ -83,6 +103,7 @@ func main() {
 	w.SetContent(c)
 
 	w.Resize(fyne.NewSize(1000, 1000))
+	view.Refresh()
 
 	w.ShowAndRun()
 }

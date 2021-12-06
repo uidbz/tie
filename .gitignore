@@ -32,7 +32,8 @@ cmd/tie/tie
 cmd/tie-daemon/tie-daemon
 cmd/tie-download/tie-download
 cmd/tie-upload/tie-upload
-cmd/tie-serve/tie-serve
+cmd/tie-filehost/tie-filehost
 cmd/tie-handle/tie-handle
+examples/tiedb-client-add-get/tiedb-client-add-get
 gui/tie-tag/tie-tag
 gui/tie-img/tie-img

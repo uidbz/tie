@@ -55,22 +55,12 @@ func cmdList() []*cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			if minArgs == 2 {
 				for _, x := range stdin {
-					a := request.Add{
-						x.hash,
-						args[0],
-						args[1],
-					}
-					b, _ := json.Marshal(a)
-					tie.SendToWebservice("Add", b, AddHandler)
+					a := request.NewAddRequest(x.hash, args[0], args[1])
+					AddHandler(tie.Run(a))
 				}
 			} else {
-				a := request.Add{
-					args[0],
-					args[1],
-					args[2],
-				}
-				b, _ := json.Marshal(a)
-				tie.SendToWebservice("Add", b, AddHandler)
+				a := request.NewAddRequest(args[0], args[1], args[2])
+				AddHandler(tie.Run(a))
 			}
 		},
 	}
@@ -83,16 +73,14 @@ func cmdList() []*cobra.Command {
 		Long:  "Return tie with [key] or Join multiple keys on their 'associated' value",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := request.Get{}
-			a.Values = args
-			a.MaxAssociations = 0
+			a := request.NewGetRequest(args)
 			if len(args) > 1 {
 				a.Filter = tiedb.ASSOCIATED
 			}
 			if getFilter != "" {
 				a.Filter = getFilter
 			}
-			GetHandler(tie.Run(request.RequestTypeGet, a))
+			GetHandler(tie.Run(a))
 		},
 	}
 	cmdGet.Flags().StringVarP(&getFilter, "filter", "f", "", "Relation filter")
@@ -105,12 +93,8 @@ func cmdList() []*cobra.Command {
 		Long:  `Delete tie`,
 		Args:  cobra.MinimumNArgs(3),
 		Run: func(cmd *cobra.Command, args []string) {
-			a := request.Delete{
-				args[0],
-				args[1],
-				args[2],
-			}
-			DeleteHandler(tie.Run(request.RequestTypeDelete, a))
+			a := request.NewDeleteRequest(args[0], args[1], args[2])
+			DeleteHandler(tie.Run(a))
 		},
 	}
 	cmds = append(cmds, cmdDel)
@@ -140,10 +124,10 @@ func cmdList() []*cobra.Command {
 			options := tie.TagOptions{}
 			if minArgsTag == 0 {
 				for _, x := range stdin {
-					tie.Tag(x.hash, args, options, AddHandler)
+					tie.Tag(x.hash, args, options, OldAddHandler)
 				}
 			} else {
-				tie.Tag(args[0], args[1:], options, AddHandler)
+				tie.Tag(args[0], args[1:], options, OldAddHandler)
 			}
 		},
 	}
@@ -155,7 +139,7 @@ func cmdList() []*cobra.Command {
 		Long:  "batch requests (probably temp command)",
 		Args:  cobra.MinimumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			b := request.Batch{}
+			b := request.NewBatchRequest()
 			for _, x := range args {
 				part := strings.Split(x, ":")
 
@@ -166,9 +150,7 @@ func cmdList() []*cobra.Command {
 
 				switch strings.ToLower(part[0]) {
 				case "get":
-					a := request.Get{}
-					a.Values = []string{strings.Join(part[1:], ":")}
-					a.MaxAssociations = 0
+					a := request.NewGetRequest([]string{strings.Join(part[1:], ":")})
 					// if len(args) > 1 {
 					// 	a.Filter = tiedb.ASSOCIATED
 					// }
@@ -179,7 +161,7 @@ func cmdList() []*cobra.Command {
 				}
 			}
 
-			BatchHandler(tie.Run(request.RequestTypeBatch, b))
+			BatchHandler(tie.Run(b))
 		},
 	}
 	cmdBatch.Flags().StringVarP(&getFilter, "filter", "f", "", "Relation filter")
@@ -188,7 +170,7 @@ func cmdList() []*cobra.Command {
 	return cmds
 }
 
-func AddHandler(resp json.RawMessage) {
+func OldAddHandler(resp json.RawMessage) {
 	s := request.ReplyStatus{}
 	if err := json.Unmarshal(resp, &s); err == nil {
 		if tie.CurrentState.Verbose || !s.Success {
@@ -198,6 +180,20 @@ func AddHandler(resp json.RawMessage) {
 		fmt.Println("Error unmarshalling response:", err, resp)
 	}
 
+}
+
+func AddHandler(reply *request.Reply, err error) {
+	if err != nil {
+		fmt.Println("Error handling 'Add' reponse:", err.Error())
+		fmt.Println("Received:", string(reply.ReplyRawResponse))
+	}
+	if tie.CurrentState.Verbose {
+		fmt.Println(string(reply.ReplyRawResponse))
+	}
+	var result = *reply.DataStatus()
+	if !result.Success {
+		fmt.Println("Success:", result.Success, "Message:", result.Message)
+	}
 }
 
 func GetHandler(reply *request.Reply, err error) {

@@ -1,12 +1,12 @@
-git.sr.ht/~uid/tie/metadata v0.0.0-20211026072142-3f546ca4c972 h1:q/iZV2XLnM+z1ODhA/0VwLwsvHZlGj5tHS1ai6o7cVc=
-git.sr.ht/~uid/tie/metadata v0.0.0-20211026072142-3f546ca4c972/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/metadata v0.0.0-20211203084034-9d28a8705a27 h1:qybp8sU+QKMakyEu2rCsj6RPzR19+Mp3mOIWOZ+9uss=
+git.sr.ht/~uid/tie/metadata v0.0.0-20211203084034-9d28a8705a27/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/go-resty/resty/v2 v2.7.0 h1:me+K9p3uhSmXtrBZ4k9jcEAfJmuC8IivWHwaLZwPrFY=
 github.com/go-resty/resty/v2 v2.7.0/go.mod h1:9PWDzw47qPphMRFfhsyk0NnSgvluHcljSMVIq3w7q0I=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=
 github.com/minio/highwayhash v1.0.2/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
 golang.org/x/net v0.0.0-20211029224645-99673261e6eb/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
-golang.org/x/net v0.0.0-20211201190559-0a0e4e1bb54c h1:WtYZ93XtWSO5KlOMgPZu7hXY9WhMZpprvlm5VwvAl8c=
-golang.org/x/net v0.0.0-20211201190559-0a0e4e1bb54c/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
+golang.org/x/net v0.0.0-20211203184738-4852103109b8 h1:PFkPt/jI9Del3hmFplBtRp8tDhSRpFu7CyRs7VmEC0M=
+golang.org/x/net v0.0.0-20211203184738-4852103109b8/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/sys v0.0.0-20190130150945-aca44879d564/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=

@@ -31,6 +31,11 @@ func (tv *TieCreateView) SetKey(key string) {
 	tv.SelectedKey.Set(key)
 }
 
+func (tv *TieCreateView) SetTag(value1 string) {
+	tv.SelectedKey.Set("tag")
+	tv.SelectedValue1.Set(value1)
+}
+
 func (tv *TieCreateView) Add() {
 	key, _ := tv.SelectedKey.Get()
 	val1, _ := tv.SelectedValue1.Get()
