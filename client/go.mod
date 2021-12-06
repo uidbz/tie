@@ -7,7 +7,7 @@ require (
 	git.sr.ht/~uid/tie/request v0.0.0-20211203084034-9d28a8705a27
 	git.sr.ht/~uid/tie/tiedb v0.0.0-20211203084034-9d28a8705a27
 	github.com/go-resty/resty/v2 v2.7.0
-	golang.org/x/net v0.0.0-20211203184738-4852103109b8 // indirect
+	golang.org/x/net v0.0.0-20211205041911-012df41ee64c // indirect
 )
 
 replace git.sr.ht/~uid/tie/request => ../request
