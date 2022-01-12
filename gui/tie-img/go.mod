@@ -4,9 +4,9 @@ go 1.17
 
 require (
 	fyne.io/fyne/v2 v2.1.2
-	git.sr.ht/~uid/tie/client v0.0.0-20211203084034-9d28a8705a27
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20211203084034-9d28a8705a27
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20211203084034-9d28a8705a27
+	git.sr.ht/~uid/tie/client v0.0.0-20211206214737-0d583b9f07b4
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20220112073810-652cc9e95a17
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20211206214737-0d583b9f07b4
 	github.com/disintegration/gift v1.2.1
 	github.com/disintegration/imaging v1.6.2
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
@@ -14,14 +14,14 @@ require (
 )
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20211203084034-9d28a8705a27 // indirect
-	git.sr.ht/~uid/tie/request v0.0.0-20211203084034-9d28a8705a27 // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20211203084034-9d28a8705a27 // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20211206214737-0d583b9f07b4 // indirect
+	git.sr.ht/~uid/tie/request v0.0.0-20211206214737-0d583b9f07b4 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20211206214737-0d583b9f07b4 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v0.0.0-20181227131451-3dcfdacbaaf3 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
-	github.com/go-gl/gl v0.0.0-20211025173605-bda47ffaa784 // indirect
-	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20211204153444-caad923f49f4 // indirect
+	github.com/go-gl/gl v0.0.0-20211210172815-726fda9656d6 // indirect
+	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20211213063430-748e38ca8aec // indirect
 	github.com/go-resty/resty/v2 v2.7.0 // indirect
 	github.com/godbus/dbus/v5 v5.0.6 // indirect
 	github.com/goki/freetype v0.0.0-20181231101311-fa8a33aabaff // indirect
@@ -32,8 +32,8 @@ require (
 	github.com/stretchr/testify v1.7.0 // indirect
 	github.com/yuin/goldmark v1.4.4 // indirect
 	golang.org/x/image v0.0.0-20211028202545-6944b10bf410 // indirect
-	golang.org/x/net v0.0.0-20211205041911-012df41ee64c // indirect
-	golang.org/x/sys v0.0.0-20211205182925-97ca703d548d // indirect
+	golang.org/x/net v0.0.0-20220111093109-d55c255bac03 // indirect
+	golang.org/x/sys v0.0.0-20220111092808-5a964db01320 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
