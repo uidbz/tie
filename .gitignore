@@ -35,5 +35,6 @@ cmd/tie-upload/tie-upload
 cmd/tie-filehost/tie-filehost
 cmd/tie-handle/tie-handle
 examples/tiedb-client-add-get/tiedb-client-add-get
+examples/tiedb-client-batch/tiedb-client-batch
 gui/tie-tag/tie-tag
 gui/tie-img/tie-img

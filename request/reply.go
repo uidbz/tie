@@ -13,7 +13,7 @@ func (r *Batch) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 
 	for _, x := range r.Update {
 		reply, err := x.Reply(db, key)
-		if err != nil {
+		if err == nil {
 			batch.Update = append(batch.Update, reply.ReplyStruct.(ReplyStatus))
 		} else {
 			return Reply{
@@ -25,7 +25,7 @@ func (r *Batch) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 
 	for _, x := range r.Delete {
 		reply, err := x.Reply(db, key)
-		if err != nil {
+		if err == nil {
 			batch.Delete = append(batch.Delete, reply.ReplyStruct.(ReplyStatus))
 		} else {
 			return Reply{
@@ -37,7 +37,7 @@ func (r *Batch) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 
 	for _, x := range r.Add {
 		reply, err := x.Reply(db, key)
-		if err != nil {
+		if err == nil {
 			batch.Add = append(batch.Add, reply.ReplyStruct.(ReplyStatus))
 		} else {
 			return Reply{

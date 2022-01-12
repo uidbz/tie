@@ -104,3 +104,10 @@ go get -u .
 go get git.sr.ht/~uid/tie/client@latest
 go get git.sr.ht/~uid/tie/request@latest
 go mod tidy
+
+echo "Updating example: tiedb-client-batch..."
+cd ../examples/tiedb-client-batch
+go get -u .
+go get git.sr.ht/~uid/tie/client@latest
+go get git.sr.ht/~uid/tie/request@latest
+go mod tidy
