@@ -63,18 +63,34 @@ func AddressOf(key []byte, input io.Reader) (string, error) { // function to com
 	return hex.EncodeToString(dest), err
 }
 
-func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	h := p.ByName("hash")
-	jsonOut := p.ByName("json")
-	log.Println("Receiving file:", h)
+func MakeDestinationPath(hash string) string {
 	var dest string = destination
 
 	max := lvlDeep * dirWidth
 	for i := 0; i <= max; i = i + dirWidth {
-		dest = filepath.Join(dest, h[i:i+dirWidth])
+		dest = filepath.Join(dest, hash[i:i+dirWidth])
 	}
 	os.MkdirAll(dest, 0755)
-	dest = filepath.Join(dest, h)
+
+	return filepath.Join(dest, hash)
+}
+
+func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	h := p.ByName("hash")
+	jsonOut := p.ByName("json")
+	log.Println("Receiving file:", h)
+	var dest string
+
+	if h == "" {
+		var errTmp error
+		if dest, errTmp = os.MkdirTemp("", "tie-filehost"); errTmp != nil {
+			fmt.Fprint(w, "Error creating temp dir on server:", errTmp)
+			return
+		}
+		dest = filepath.Join(dest, "tempfile")
+	} else {
+		dest = MakeDestinationPath(h)
+	}
 
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		jsonData, _, _ := GetMetadata(dest, h)
@@ -113,12 +129,22 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 
 	}
 	hashHex, _ := AddressOfFile(key, dest)
-	if hashHex != h {
+	if h != "" && hashHex != h {
 		log.Println("Checksum error! Expected:", h, "Calculated:", hashHex)
 		log.Println("Deleting file:", dest)
 		if err := os.Remove(dest); err != nil {
 			log.Println("Error deleting bad file:", dest, "Error message:", err.Error())
 		}
+	}
+	if h == "" {
+		h = hashHex
+		dest2 := MakeDestinationPath(h)
+		if errMove := os.Rename(dest, dest2); errMove != nil {
+			fmt.Fprint(w, "Error saving file on server:", err)
+			os.Remove(dest)
+			return
+		}
+		dest = dest2
 	}
 	log.Println("Calculated hash:", hashHex)
 	jsonData, mediatype, _ := GetMetadata(dest, hashHex)

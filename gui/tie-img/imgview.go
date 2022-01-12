@@ -34,6 +34,8 @@ type ImgView struct {
 func NewImgView(path string, focusFunc func(fyne.Focusable)) *ImgView {
 	img := ReadImage(path)
 	orig := canvas.NewImageFromImage(CloneToRGBA(img.Image))
+	img.ScaleMode = canvas.ImageScaleFastest
+	orig.ScaleMode = canvas.ImageScaleFastest
 
 	dirPath, dir, index := ReadDir(path)
 	iv := &ImgView{

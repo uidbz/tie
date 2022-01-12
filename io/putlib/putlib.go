@@ -134,6 +134,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	var ErrorMsg string
 	if err != nil {
 		ErrorMsg = "Upload error:" + err.Error()
+		return StatusItem{ErrorMsg: ErrorMsg}
 	}
 	req.Header.Add("Content-Type", formWriter.FormDataContentType())
 
@@ -182,18 +183,28 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	}
 }
 
-func Upload(url string, file string, config PutConfig) *Status {
+func ValidateURL(url string, status *Status) string {
 	if len(url) < 5 {
-		status := Status{
-			ErrorMsg: "Url to short",
-		}
-		return &status
+		status.ErrorMsg = "Url to short"
+		return url
 	}
 	if url[len(url)-1] == '/' {
 		url += "upload/"
 	} else {
 		url += "/upload/"
 	}
+
+	return url
+}
+
+func Upload(url string, file string, config PutConfig) *Status {
+	status := &Status{}
+
+	url = ValidateURL(url, status)
+	if status.ErrorMsg != "" {
+		return status
+	}
+
 	// Change workdir temporarily to input dir, to get relative paths in dir enumeration
 	if config.PathToWorkdir {
 		wd, _ := os.Getwd()
@@ -214,10 +225,26 @@ func Upload(url string, file string, config PutConfig) *Status {
 		}
 	}
 
-	status := Status{}
-	upload(url, file, config, &status)
+	upload(url, file, config, status)
 
-	return &status
+	return status
+}
+
+// Upload without calculating hash on the client
+func UploadNoHash(url string, file io.Reader, config PutConfig) *Status {
+	status := &Status{}
+
+	// url = ValidateURL(url, status)
+	// if status.ErrorMsg != "" {
+	// 	return status
+	// }
+
+	s := config.UploadMultipart(url, file, "")
+
+	// When uploading from reader we don't calculate local hash
+	config.Validate(s.Hash, s, status)
+
+	return status
 }
 
 func upload(url string, file string, config PutConfig, status *Status) {
