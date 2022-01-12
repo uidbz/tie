@@ -1,5 +1,5 @@
-git.sr.ht/~uid/tie/metadata v0.0.0-20211206214737-0d583b9f07b4 h1:xu3cM74ppcyp44S2xxurgistH0gR7kAVdRvcIudbLwY=
-git.sr.ht/~uid/tie/metadata v0.0.0-20211206214737-0d583b9f07b4/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220112073942-66ae131b3d6d h1:rfZLyfX35OljsfKe+GFIddVOwrqqhEwaoZGlzy4+CqA=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220112073942-66ae131b3d6d/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/go-resty/resty/v2 v2.7.0 h1:me+K9p3uhSmXtrBZ4k9jcEAfJmuC8IivWHwaLZwPrFY=
 github.com/go-resty/resty/v2 v2.7.0/go.mod h1:9PWDzw47qPphMRFfhsyk0NnSgvluHcljSMVIq3w7q0I=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=

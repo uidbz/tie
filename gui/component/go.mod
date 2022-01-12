@@ -4,8 +4,8 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.1.2
-	git.sr.ht/~uid/tie/client v0.0.0-20211206214737-0d583b9f07b4
-	git.sr.ht/~uid/tie/request v0.0.0-20211206214737-0d583b9f07b4
+	git.sr.ht/~uid/tie/client v0.0.0-20220112073942-66ae131b3d6d
+	git.sr.ht/~uid/tie/request v0.0.0-20220112073942-66ae131b3d6d
 	github.com/srwiley/oksvg v0.0.0-20211120171407-1837d6608d8c // indirect
 	github.com/srwiley/rasterx v0.0.0-20210519020934-456a8d69b780 // indirect
 	github.com/yuin/goldmark v1.4.4 // indirect
