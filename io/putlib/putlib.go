@@ -133,7 +133,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	req, err := http.NewRequest(http.MethodPut, url, bodyReader)
 	var ErrorMsg string
 	if err != nil {
-		ErrorMsg = "Upload error:" + err.Error()
+		ErrorMsg = "Upload error: " + err.Error()
 		return StatusItem{ErrorMsg: ErrorMsg}
 	}
 	req.Header.Add("Content-Type", formWriter.FormDataContentType())
@@ -144,11 +144,11 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	resp, err := http.DefaultClient.Do(req)
 
 	if writeErr != nil {
-		ErrorMsg = "Upload error:" + writeErr.Error()
+		ErrorMsg = "Upload error: " + writeErr.Error()
 	}
 
 	if err != nil {
-		ErrorMsg = "Upload error:" + err.Error()
+		ErrorMsg = "Upload error: " + err.Error()
 	}
 	if resp == nil {
 		return StatusItem{ErrorMsg: ErrorMsg + "\n"}
@@ -239,7 +239,7 @@ func UploadNoHash(url string, file io.Reader, config PutConfig) *Status {
 	// 	return status
 	// }
 
-	s := config.UploadMultipart(url, file, "")
+	s := config.UploadMultipart(url, file, "dummyfilename")
 
 	// When uploading from reader we don't calculate local hash
 	config.Validate(s.Hash, s, status)

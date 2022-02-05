@@ -92,7 +92,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		dest = MakeDestinationPath(h)
 	}
 
-	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+	if _, err := os.Stat(dest); os.IsExist(err) {
 		jsonData, _, _ := GetMetadata(dest, h)
 		switch jsonOut {
 		case "json":
@@ -118,6 +118,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 
 	f, _, errFormFile := r.FormFile("file")
 	if errFormFile != nil {
+		fmt.Println("whut")
 		fmt.Fprint(w, h)
 		log.Println(errFormFile.Error())
 		return
@@ -139,10 +140,15 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 	if h == "" {
 		h = hashHex
 		dest2 := MakeDestinationPath(h)
-		if errMove := os.Rename(dest, dest2); errMove != nil {
-			fmt.Fprint(w, "Error saving file on server:", err)
-			os.Remove(dest)
-			return
+		if _, err := os.Stat(dest2); os.IsNotExist(err) {
+			fmt.Println("Moving ", dest, "to", dest2)
+			if errMove := os.Rename(dest, dest2); errMove != nil {
+				fmt.Fprint(w, "Error saving file on server:", err)
+				os.RemoveAll(filepath.Dir(dest))
+				return
+			}
+		} else {
+			os.RemoveAll(filepath.Dir(dest)) // file existed previously, delete tmp file
 		}
 		dest = dest2
 	}
