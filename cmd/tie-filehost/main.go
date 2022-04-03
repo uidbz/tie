@@ -92,7 +92,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		dest = MakeDestinationPath(h)
 	}
 
-	if _, err := os.Stat(dest); os.IsExist(err) {
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		jsonData, _, _ := GetMetadata(dest, h)
 		switch jsonOut {
 		case "json":
