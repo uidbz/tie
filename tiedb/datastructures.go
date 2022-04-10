@@ -48,6 +48,7 @@ type CollectionKey struct {
 type Collection interface {
 	Collection(name string) Collection
 	Add(key, value1, value2 string) *Association
+	Get(key string, value1 string) (bool, *StringSliceSet)
 	GetAssociations(value string) (bool, *Tree)
 	GetAssociationsExt(value string, entryCollection string) (bool, *Tree)
 	SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree)

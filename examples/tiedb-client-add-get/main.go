@@ -38,7 +38,7 @@ func GetHandler(reply *request.Reply, err error) {
 func main() {
 	tie.InitConfig()
 
-	a := request.NewAddRequest("MyKey", "Some value 1", "Some value 2")
+	a := request.NewAddRequest("MyKey", "Some value 1", "Some value 5")
 	AddHandler(tie.Run(a))
 
 	b := request.NewGetRequest([]string{"MyKey"})

@@ -456,6 +456,20 @@ func (ic *InternalCollection) Add(key string, value1 string, value2 string) *Ass
 	return ic.AssociateExt(key, ic.DBName, value1, ic.DBName, value2)
 }
 
+func (ic *InternalCollection) Get(key string, value1 string) (bool, *StringSliceSet) {
+	found, tree := ic.GetAssociations(key)
+	if found {
+		data, _ := ic.SetToString(key, value1, tree)
+		if data != nil {
+			return true, data
+		} else {
+			return false, nil
+		}
+	} else {
+		return false, nil
+	}
+}
+
 func (ic *InternalCollection) GetUniqueAssociation(key *Entry, value1 *Entry, value2 *Entry) (bool, *Association) {
 	asses := ic.GetAssociationsFromEntry(key)
 
