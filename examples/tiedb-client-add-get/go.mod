@@ -3,18 +3,18 @@ module tiedb-client-add-get
 go 1.17
 
 require (
-	git.sr.ht/~uid/tie/client v0.0.0-20220403213716-e60d780c3cf2
-	git.sr.ht/~uid/tie/request v0.0.0-20220403213716-e60d780c3cf2
+	git.sr.ht/~uid/tie/client v0.0.0-20220410090716-e3aa23812e09
+	git.sr.ht/~uid/tie/request v0.0.0-20220410090716-e3aa23812e09
 )
 
 require (
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20220403213716-e60d780c3cf2 // indirect
-	git.sr.ht/~uid/tie/metadata v0.0.0-20220403213716-e60d780c3cf2 // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20220403213716-e60d780c3cf2 // indirect
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20220410090716-e3aa23812e09 // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20220410090716-e3aa23812e09 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20220410090716-e3aa23812e09 // indirect
 	github.com/go-resty/resty/v2 v2.7.0 // indirect
 	github.com/minio/highwayhash v1.0.2 // indirect
-	golang.org/x/net v0.0.0-20220403103023-749bd193bc2b // indirect
-	golang.org/x/sys v0.0.0-20220403205710-6acee93ad0eb // indirect
+	golang.org/x/net v0.0.0-20220407224826-aac1ed45d8e3 // indirect
+	golang.org/x/sys v0.0.0-20220408201424-a24fb2fb8a0f // indirect
 )
 
 replace git.sr.ht/~uid/tie/client => ../../client
