@@ -435,12 +435,14 @@ func (ic *InternalCollection) SimpleUpdate(key string, value1 string, newValue2 
 
 // Update first occurence of a value2
 func (ic *InternalCollection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string) {
-	if len(set.Value1) != len(set.Value2) {
-		return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
-	}
-	for i, x := range set.Value1 {
-		if x == value1 {
-			return ic.Update(key, value1, set.Value2[i], newValue2)
+	if set != nil && set.Value1 != nil && set.Value2 != nil {
+		if len(set.Value1) != len(set.Value2) {
+			return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
+		}
+		for i, x := range set.Value1 {
+			if x == value1 {
+				return ic.Update(key, value1, set.Value2[i], newValue2)
+			}
 		}
 	}
 	if addOnFail {
