@@ -54,6 +54,8 @@ type Collection interface {
 	SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree)
 	Update(key string, value1 string, value2 string, newValue2 string) (bool, string)
 	UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string)
+	SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string)
+	SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string)
 	Delete(key string, value1 string, value2 string) (bool, string)
 	CloseDB()
 }

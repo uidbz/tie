@@ -413,6 +413,43 @@ func (ic *InternalCollection) UpdateAdd(key string, value1 string, value2 string
 	}
 }
 
+// Update first occurence of a value2. More expensive SimpleUpdateUsingSet - use that if udating many values
+func (ic *InternalCollection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string) {
+	found, set := ic.Get(key, value1)
+	if found {
+		if len(set.Value1) != len(set.Value2) {
+			return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
+		}
+		for i, x := range set.Value1 {
+			if x == value1 {
+				return ic.Update(key, value1, set.Value2[i], newValue2)
+			}
+		}
+	}
+	if addOnFail {
+		ic.Add(key, value1, newValue2)
+		return true, ""
+	}
+	return false, "'" + key + "' with value1: '" + value1 + "' does not exist."
+}
+
+// Update first occurence of a value2
+func (ic *InternalCollection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string) {
+	if len(set.Value1) != len(set.Value2) {
+		return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
+	}
+	for i, x := range set.Value1 {
+		if x == value1 {
+			return ic.Update(key, value1, set.Value2[i], newValue2)
+		}
+	}
+	if addOnFail {
+		ic.Add(key, value1, newValue2)
+		return true, ""
+	}
+	return false, "'" + key + "' with value1: '" + value1 + "' does not exist."
+}
+
 func (ic *InternalCollection) DeleteEntry(e *Entry) {
 	ic.Entries[e.Level].Delete(e.Id) //TODO: Make thread safe
 
