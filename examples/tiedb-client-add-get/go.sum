@@ -1,10 +1,10 @@
-git.sr.ht/~uid/tie/io/putlib v0.0.0-20220410090907-a8464ea42d4b h1:Pgus1Cc6DXvCXl+WbdMde4FcZhbMgbvlvnL5pDbqQ7E=
-git.sr.ht/~uid/tie/io/putlib v0.0.0-20220410090907-a8464ea42d4b/go.mod h1:ROD0+tdteJABnFxygN554q0xIyb6tIOga1dgeL6JwkE=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220410090716-e3aa23812e09/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220410090907-a8464ea42d4b h1:2ECWIv6wPpcPus4Cc/cd/zlXm2fwOrHJBDu4pws8RUU=
+git.sr.ht/~uid/tie/io/putlib v0.0.0-20220410140021-5c1999095f73 h1:nlmhD5efTJkHZsczv5NlMGRjKAME9zPb4I8rw7DCvGE=
+git.sr.ht/~uid/tie/io/putlib v0.0.0-20220410140021-5c1999095f73/go.mod h1:r21i95g9oCcxBgdjYLgkSM1ilZOQgPC11nZdu/zZMLc=
 git.sr.ht/~uid/tie/metadata v0.0.0-20220410090907-a8464ea42d4b/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20220410090907-a8464ea42d4b h1:l3wGqqdslV46dIuMrR/SfWlmjyy0KqX9PStIsxNH5NY=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20220410090907-a8464ea42d4b/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220410140021-5c1999095f73 h1:VJF1I3Jf315PLJ/BkWDkT7TOXXybAVRSH7XRu5SCytw=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220410140021-5c1999095f73/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20220410140021-5c1999095f73 h1:ruF1SUAweE3OkrmsqYsV/TGXGqqFN5uhc8klmQYsyog=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20220410140021-5c1999095f73/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 github.com/go-resty/resty/v2 v2.7.0 h1:me+K9p3uhSmXtrBZ4k9jcEAfJmuC8IivWHwaLZwPrFY=
 github.com/go-resty/resty/v2 v2.7.0/go.mod h1:9PWDzw47qPphMRFfhsyk0NnSgvluHcljSMVIq3w7q0I=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=

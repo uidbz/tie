@@ -3,7 +3,7 @@ module git.sr.ht/~uid/tie/cmd/tie-filehost
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20220410090907-a8464ea42d4b
+	git.sr.ht/~uid/tie/metadata v0.0.0-20220410140021-5c1999095f73
 	github.com/caddyserver/certmagic v0.16.0
 	github.com/dhowden/tag v0.0.0-20201120070457-d52dcb253c63
 	github.com/h2non/filetype v1.1.3
