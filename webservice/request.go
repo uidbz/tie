@@ -36,3 +36,20 @@ type ReplyStatus struct {
 	Success bool
 	Message string
 }
+
+func (r ReplyStatus) GetSuccess() bool {
+	return r.Success
+}
+
+func (r ReplyStatus) GetMessage() string {
+	return r.Message
+}
+
+type ReplyInterface interface {
+	GetSuccess() bool
+	GetMessage() string
+}
+
+func ReadReply[T ReplyInterface](reply *Reply) *T{
+	return reply.ReplyStructPtr.(*T)
+}
