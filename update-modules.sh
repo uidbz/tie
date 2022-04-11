@@ -5,6 +5,11 @@ cd tiedb
 go get -u .
 go mod tidy
 
+echo "Updating webservice..."
+cd ../webservice
+go get -u .
+go mod tidy
+
 echo "Updating metadata..."
 cd ../metadata
 go get -u .
