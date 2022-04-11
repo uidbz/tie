@@ -4,8 +4,8 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.1.4
-	git.sr.ht/~uid/tie/client v0.0.0-20220410141147-8046611e3de9
-	git.sr.ht/~uid/tie/request v0.0.0-20220410141147-8046611e3de9
+	git.sr.ht/~uid/tie/client v0.0.0-20220411153446-ffb8e92ef0f0
+	git.sr.ht/~uid/tie/request v0.0.0-20220411153446-ffb8e92ef0f0
 	github.com/goki/freetype v0.0.0-20220119013949-7a161fd3728c // indirect
 	github.com/srwiley/oksvg v0.0.0-20220128195007-1f435e4c2b44 // indirect
 	github.com/srwiley/rasterx v0.0.0-20220128185129-2efea2b9ea41 // indirect

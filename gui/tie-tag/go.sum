@@ -1,7 +1,7 @@
 fyne.io/fyne/v2 v2.1.4 h1:bt1+28++kAzRzPB0GM2EuSV4cnl8rXNX4cjfd8G06Rc=
 fyne.io/fyne/v2 v2.1.4/go.mod h1:p+E/Dh+wPW8JwR2DVcsZ9iXgR9ZKde80+Y+40Is54AQ=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220410141147-8046611e3de9 h1:GYoLDbHAS2R2YD5A06rzjk7SnGLIxmxrcLkQrgyJaxE=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220410141147-8046611e3de9/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220411153446-ffb8e92ef0f0 h1:p6sQkjkDUFPRWjuCDGWp4+asJwqFmr1ERvyV4rXV2V4=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220411153446-ffb8e92ef0f0/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/toml v0.4.1/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
 github.com/Kodeworks/golang-image-ico v0.0.0-20141118225523-73f0f4cfade9/go.mod h1:7uhhqiBaR4CpN0k9rMjOtjpcfGd6DG2m04zQxKnWQ0I=

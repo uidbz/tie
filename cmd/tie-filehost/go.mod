@@ -3,7 +3,7 @@ module git.sr.ht/~uid/tie/cmd/tie-filehost
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20220410141147-8046611e3de9
+	git.sr.ht/~uid/tie/metadata v0.0.0-20220411153446-ffb8e92ef0f0
 	github.com/caddyserver/certmagic v0.16.0
 	github.com/dhowden/tag v0.0.0-20201120070457-d52dcb253c63
 	github.com/h2non/filetype v1.1.3
@@ -17,6 +17,7 @@ require (
 	golang.org/x/net v0.0.0-20220407224826-aac1ed45d8e3 // indirect
 	golang.org/x/sys v0.0.0-20220408201424-a24fb2fb8a0f // indirect
 	golang.org/x/tools v0.1.10 // indirect
+	golang.org/x/xerrors v0.0.0-20220411194840-2f41105eb62f // indirect
 )
 
 replace git.sr.ht/~uid/tie/metadata => ../../metadata
