@@ -51,7 +51,7 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 	}
 
 	replyStructPtr := request.GetReplyStructPtr()
-	errUnmarshal := json.Unmarshal(resp.Body(), &replyStructPtr)
+	errUnmarshal := json.Unmarshal(resp.Body(), replyStructPtr)
 	if errUnmarshal != nil {
 		return nil, errUnmarshal
 	}

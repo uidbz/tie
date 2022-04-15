@@ -171,6 +171,22 @@ type StringSliceSet struct {
 // 	Values []string
 // }
 
+// Returns first Value1 or empty string if non-existant
+func (set *StringSliceSet) FirstValue1() string {
+	if set != nil && len(set.Value1) > 0 {
+		return set.Value1[0]
+	}
+	return ""
+}
+
+// Returns first Value2 or empty string if non-existant
+func (set *StringSliceSet) FirstValue2() string {
+	if set != nil && len(set.Value2) > 0 {
+		return set.Value2[0]
+	}
+	return ""
+}
+
 type FileEntry interface {
 	ToBytes() []byte
 	SetPosition(int64)
