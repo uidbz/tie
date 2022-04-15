@@ -3,14 +3,14 @@ module tie-handle
 go 1.17
 
 require (
-	git.sr.ht/~uid/tie/io/getlib v0.0.0-20220411153446-ffb8e92ef0f0
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20220411153446-ffb8e92ef0f0
+	git.sr.ht/~uid/tie/io/getlib v0.0.0-20220415093055-65579d4670d9
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20220415093055-65579d4670d9
 )
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20220411153446-ffb8e92ef0f0 // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20220415093055-65579d4670d9 // indirect
 	github.com/minio/highwayhash v1.0.2 // indirect
-	golang.org/x/sys v0.0.0-20220408201424-a24fb2fb8a0f // indirect
+	golang.org/x/sys v0.0.0-20220412211240-33da011f77ad // indirect
 )
 
 replace git.sr.ht/~uid/tie/io/putlib => ../../io/putlib
