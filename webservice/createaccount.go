@@ -42,6 +42,7 @@ func (reply *Reply) DataCreateAccount() *CreateAccountReply {
 func NewCreateAccountRequest() *CreateAccountRequest {
 	request := &CreateAccountRequest{}
 	request.Id = IdCreateAccount
+	request.ReplyStructPtr = &CreateAccountReply{}
 
 	return request
 }
