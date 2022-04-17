@@ -3,7 +3,7 @@ module git.sr.ht/~uid/tie/webservice
 go 1.18
 
 require (
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20220415093055-65579d4670d9
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20220417162521-6ab633f69d4d
 	github.com/caddyserver/certmagic v0.16.0
 	github.com/go-resty/resty/v2 v2.7.0
 	github.com/julienschmidt/httprouter v1.3.0

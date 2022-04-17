@@ -1,5 +1,5 @@
-git.sr.ht/~uid/tie/metadata v0.0.0-20220415093055-65579d4670d9 h1:jBRwKGImGDX95KYB+Q6s2ilG91gAi8DxtVQZz1JRl0g=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220415093055-65579d4670d9/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220417162521-6ab633f69d4d h1:1CKwaxsBjC4iN2kXrFx0XI50in8xC/wHp4kb0eh3Qvs=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220417162521-6ab633f69d4d/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/cpuguy83/go-md2man/v2 v2.0.1/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/go-resty/resty/v2 v2.7.0 h1:me+K9p3uhSmXtrBZ4k9jcEAfJmuC8IivWHwaLZwPrFY=
 github.com/go-resty/resty/v2 v2.7.0/go.mod h1:9PWDzw47qPphMRFfhsyk0NnSgvluHcljSMVIq3w7q0I=
