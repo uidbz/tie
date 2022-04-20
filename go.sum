@@ -1,5 +1,5 @@
-git.sr.ht/~uid/tie/metadata v0.0.0-20220417162521-6ab633f69d4d h1:1CKwaxsBjC4iN2kXrFx0XI50in8xC/wHp4kb0eh3Qvs=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220417162521-6ab633f69d4d/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220417162659-7bbeb6d035c3 h1:7JfPQcYs3s/AC9QeF3L4C1k+HX6p4LMleUjfi5RiZmk=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220417162659-7bbeb6d035c3/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/cpuguy83/go-md2man/v2 v2.0.1/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/go-resty/resty/v2 v2.7.0 h1:me+K9p3uhSmXtrBZ4k9jcEAfJmuC8IivWHwaLZwPrFY=
 github.com/go-resty/resty/v2 v2.7.0/go.mod h1:9PWDzw47qPphMRFfhsyk0NnSgvluHcljSMVIq3w7q0I=
@@ -13,8 +13,8 @@ github.com/spf13/cobra v1.4.0/go.mod h1:Wo4iy3BUC+X2Fybo0PDqwJIv3dNRiZLHQymsfxlB
 github.com/spf13/pflag v1.0.5 h1:iy+VFUOCP1a+8yFto/drg2CJ5u0yRoB7fZw3DKv/JXA=
 github.com/spf13/pflag v1.0.5/go.mod h1:McXfInJRrz4CZXVZOBLb0bTZqETkiAhM9Iw0y3An2Bg=
 golang.org/x/net v0.0.0-20211029224645-99673261e6eb/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
-golang.org/x/net v0.0.0-20220412020605-290c469a71a5 h1:bRb386wvrE+oBNdF1d/Xh9mQrfQ4ecYhW5qJ5GvTGT4=
-golang.org/x/net v0.0.0-20220412020605-290c469a71a5/go.mod h1:CfG3xpIq0wQ8r1q4Su4UZFWDARRcnwPjda9FqA0JpMk=
+golang.org/x/net v0.0.0-20220420153159-1850ba15e1be h1:yx80W7nvY5ySWpaU8UWaj5o9e23YgO9BRhQol7Lc+JI=
+golang.org/x/net v0.0.0-20220420153159-1850ba15e1be/go.mod h1:CfG3xpIq0wQ8r1q4Su4UZFWDARRcnwPjda9FqA0JpMk=
 golang.org/x/sys v0.0.0-20190130150945-aca44879d564/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
 golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=
 golang.org/x/sys v0.0.0-20210423082822-04245dca01da/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=

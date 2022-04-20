@@ -3,8 +3,8 @@ module git.sr.ht/~uid/tie/cmd/tie-daemon
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/request v0.0.0-20220417162521-6ab633f69d4d
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20220417162521-6ab633f69d4d
+	git.sr.ht/~uid/tie/request v0.0.0-20220417162659-7bbeb6d035c3
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20220417162659-7bbeb6d035c3
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/yuin/goldmark v1.4.11
 )

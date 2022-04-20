@@ -1,7 +1,7 @@
-git.sr.ht/~uid/tie/io/getlib v0.0.0-20220417162521-6ab633f69d4d h1:dFT9iUlkak/+iCzas1KZWXUcEBCrQUZXeRT5vGCD4rU=
-git.sr.ht/~uid/tie/io/getlib v0.0.0-20220417162521-6ab633f69d4d/go.mod h1:JA9Ac4qVLh6WIgNMpyI9ZCATMe5EzWP+As6IR+qrA+M=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220417162521-6ab633f69d4d h1:1CKwaxsBjC4iN2kXrFx0XI50in8xC/wHp4kb0eh3Qvs=
-git.sr.ht/~uid/tie/metadata v0.0.0-20220417162521-6ab633f69d4d/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/io/getlib v0.0.0-20220417162659-7bbeb6d035c3 h1:/oZXmxKoB14+piVb7o1eSRUqx3NV3OrJ6q22vc7sPRg=
+git.sr.ht/~uid/tie/io/getlib v0.0.0-20220417162659-7bbeb6d035c3/go.mod h1:JA9Ac4qVLh6WIgNMpyI9ZCATMe5EzWP+As6IR+qrA+M=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220417162659-7bbeb6d035c3 h1:7JfPQcYs3s/AC9QeF3L4C1k+HX6p4LMleUjfi5RiZmk=
+git.sr.ht/~uid/tie/metadata v0.0.0-20220417162659-7bbeb6d035c3/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=
 github.com/minio/highwayhash v1.0.2/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
 golang.org/x/sys v0.0.0-20190130150945-aca44879d564/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=

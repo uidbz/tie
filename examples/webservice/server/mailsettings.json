@@ -1,0 +1,1 @@
+{"Server":"smtp.something.com:587","From":"somebody@something.com","Subject":"Your code is: [CODE]","Username":"usernameForMailAccount","Password":"secret","Message":"Blablabla, here is your temporary account creation code: [CODE]"}

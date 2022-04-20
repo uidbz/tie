@@ -36,5 +36,8 @@ cmd/tie-filehost/tie-filehost
 cmd/tie-handle/tie-handle
 examples/tiedb-client-add-get/tiedb-client-add-get
 examples/tiedb-client-batch/tiedb-client-batch
+examples/webservice/server/server
+examples/webservice/server/authentication
+examples/webservice/client/client
 gui/tie-tag/tie-tag
 gui/tie-img/tie-img

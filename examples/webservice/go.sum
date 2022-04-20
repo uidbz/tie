@@ -1,3 +1,7 @@
+git.sr.ht/~uid/tie/tiedb v0.0.0-20220417162659-7bbeb6d035c3 h1:H/8cqksATYbj5Ehrv8NH9CXlROD3xULD87mivnn4IsU=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20220417162659-7bbeb6d035c3/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/webservice v0.0.0-20220417162659-7bbeb6d035c3 h1:9U65tRSG+ryTm0RzRWS3FH6rNM7DAKCi9k0mUmOq9GA=
+git.sr.ht/~uid/tie/webservice v0.0.0-20220417162659-7bbeb6d035c3/go.mod h1:hqV8zIh36GIQuo+Fw4erckvDiwSq17zV8Xj2OJcQm0o=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
