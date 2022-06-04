@@ -4,17 +4,19 @@ go 1.16
 
 require (
 	fyne.io/fyne/v2 v2.1.4
-	git.sr.ht/~uid/tie/client v0.0.0-20220417162659-7bbeb6d035c3
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20220417162659-7bbeb6d035c3
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20220417162659-7bbeb6d035c3
-	git.sr.ht/~uid/tie/request v0.0.0-20220417162659-7bbeb6d035c3
-	github.com/fsnotify/fsnotify v1.5.1 // indirect
+	git.sr.ht/~uid/tie/client v0.0.0-20220604100514-aa1375770049
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20220604100514-aa1375770049
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20220604100514-aa1375770049
+	git.sr.ht/~uid/tie/request v0.0.0-20220604100514-aa1375770049
+	github.com/fsnotify/fsnotify v1.5.4 // indirect
 	github.com/go-gl/gl v0.0.0-20211210172815-726fda9656d6 // indirect
-	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20220320163800-277f93cfa958 // indirect
+	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20220516021902-eb3e265c7661 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/spf13/cobra v1.4.0
 	github.com/stretchr/testify v1.7.1 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	github.com/yuin/goldmark v1.4.12 // indirect
+	golang.org/x/image v0.0.0-20220601225756-64ec528b34cd // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
 replace git.sr.ht/~uid/tie/gui/component => ../component
