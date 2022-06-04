@@ -179,6 +179,34 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params
 	http.ServeFile(w, r, path)
 }
 
+func NamedDownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
+	hash := p.ByName("hash")
+	filename := p.ByName("filename")
+	var path string = destination
+	if len(hash) != 64 {
+		fmt.Println("Invalid hash:", hash)
+		fmt.Fprint(w, "Invalid hash:", hash)
+		return
+	}
+	max := lvlDeep * dirWidth
+	for i := 0; i <= max; i = i + dirWidth {
+		path = filepath.Join(path, hash[i:i+dirWidth])
+	}
+	path = filepath.Join(path, hash)
+	fmt.Println("Client want:", hash)
+	info, err := os.Stat(path)
+	if err != nil {
+		fmt.Fprint(w, "Error happened")
+		return
+	}
+	reader, err2 := os.Open(path)
+	if err2 != nil {
+		fmt.Fprint(w, "Error happened")
+		return
+	}
+	http.ServeContent(w, r, filename, info.ModTime(), reader)
+}
+
 func main() {
 	var insecure = flag.Bool("insecure", false, "Use HTTP instead of HTTPS.")
 	var certFile = flag.String("tls-cert", "", "Root certificate filename.")

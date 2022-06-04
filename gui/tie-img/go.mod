@@ -14,9 +14,9 @@ require (
 )
 
 require (
-	git.sr.ht/~uid/tie/metadata v0.0.0-20220417162659-7bbeb6d035c3 // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20220420203747-3a4f1a1d5db6 // indirect
 	git.sr.ht/~uid/tie/request v0.0.0-20220417162659-7bbeb6d035c3 // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20220417162659-7bbeb6d035c3 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20220420203747-3a4f1a1d5db6 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v0.0.0-20181227131451-3dcfdacbaaf3 // indirect
 	github.com/fsnotify/fsnotify v1.5.1 // indirect
@@ -33,7 +33,7 @@ require (
 	github.com/yuin/goldmark v1.4.11 // indirect
 	golang.org/x/image v0.0.0-20220413100746-70e8d0d3baa9 // indirect
 	golang.org/x/net v0.0.0-20220420153159-1850ba15e1be // indirect
-	golang.org/x/sys v0.0.0-20220412211240-33da011f77ad // indirect
+	golang.org/x/sys v0.0.0-20220513210249-45d2b4557a2a // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
