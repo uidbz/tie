@@ -7,7 +7,8 @@ import (
 	"sync"
 )
 
-var mutex sync.Mutex
+var collectionLock sync.Mutex
+var insertLock sync.Mutex
 
 func (ic *InternalCollection) Collection(name string) Collection {
 	return ic.InternalCollectionFromString(name)
@@ -25,8 +26,8 @@ func (ic *InternalCollection) InternalCollection(level int, id uint64) *Internal
 	if level == ic.Level && id == ic.Id {
 		return ic
 	}
-	mutex.Lock()
-	defer mutex.Unlock()
+	collectionLock.Lock()
+	defer collectionLock.Unlock()
 	if found, col := ic.SubCollections[level].Get(id); !found {
 		subdir := ic.DBPath + "/" + ic.DBName + "-sub-collections"
 		os.Mkdir(subdir, 0777)
@@ -82,8 +83,8 @@ func (ic *InternalCollection) ValueExists(level int, parentId uint64, value []by
 }
 
 func (ic *InternalCollection) Insert(value string) *Entry {
-	mutex.Lock()
-	defer mutex.Unlock()
+	insertLock.Lock()
+	defer insertLock.Unlock()
 
 	var lastParent *Entry = &ic.Root
 	bytes := []byte(value)
@@ -107,7 +108,7 @@ func (ic *InternalCollection) Insert(value string) *Entry {
 		}
 	}
 
-	ic.Sync()
+	ic.Sync() // Why was this here?
 
 	return lastParent
 }
@@ -465,7 +466,10 @@ func (ic *InternalCollection) DeleteEntry(e *Entry) {
 }
 
 func (ic *InternalCollection) DeleteAssociation(tree *Tree, key UniqueAssociation, a *Association) {
-	tree.Delete(key) //TODO: Make thread safe
+	// ic.mutexAssociation.Lock()
+	// defer ic.mutexAssociation.Unlock()
+
+	tree.Delete(key) //TODO: Test if thread safe
 
 	if ic.WriteToDisk {
 		m := FileMod{
@@ -558,7 +562,7 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 
 	ic.InsertAssociation(ass.Level, &ass)
 
-	ic.Sync()
+	ic.Sync() // Why was this here?
 
 	localIC := (ic.DBName == entry2_collection) && (ic.DBName == relation_collection)
 	if !localIC {
@@ -585,7 +589,7 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 
 		ic.InsertAssociationExt(assExt.RelationCollectionLevel, &assExt)
 
-		ic.Sync()
+		ic.Sync() // Why was this here?
 	}
 
 	return &ass

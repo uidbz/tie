@@ -63,10 +63,10 @@ type Collection interface {
 type InternalCollection struct {
 	TotalEntries             uint64
 	TotalAsses               uint64
-	mu                       sync.Mutex // TODO: Better names
-	mu2                      sync.Mutex // TODO: Better names
-	mutexAssociation         sync.Mutex // TODO: Better names
-	mutexInsert              sync.Mutex // TODO: Better names
+	mu                       sync.Mutex   // TODO: Better names
+	mu2                      sync.Mutex   // TODO: Better names
+	mutexAssociation         sync.RWMutex // TODO: Better names
+	mutexInsert              sync.Mutex   // TODO: Better names
 	InserterWG               sync.WaitGroup
 	InserterWGAssociation    sync.WaitGroup
 	InserterWGAssociationExt sync.WaitGroup

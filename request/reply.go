@@ -186,6 +186,15 @@ func (r *Delete) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 }
 
 func (r *Update) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
+	if r == nil {
+		return Reply{
+			ReplyType: ReplyTypeStatus,
+			ReplyStruct: ReplyStatus{
+				Success: false,
+				Message: "Received nil request",
+			},
+		}, errors.New("Received nil request")
+	}
 	col := db.GetCollection(key)
 	var success bool
 	var msg string

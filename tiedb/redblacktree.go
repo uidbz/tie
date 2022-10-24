@@ -36,7 +36,7 @@ import (
 	"sync"
 )
 
-var modifyMutex sync.Mutex
+var mutex sync.RWMutex
 
 // Color of a redblack tree node is either
 // `Black` (true) & `Red` (false)
@@ -192,6 +192,8 @@ func (t *Tree) Get(key interface{}) (bool, interface{}) {
 	// 	logger.Printf("Get was prematurely aborted: %s\n", err.Error())
 	// 	return false, nil
 	// }
+	mutex.RLock()
+	defer mutex.RUnlock()
 
 	ok, node := t.getNode(key)
 	if ok {
@@ -206,6 +208,8 @@ func (t *Tree) GetKey(key interface{}) (bool, interface{}) {
 	// 	logger.Printf("Get was prematurely aborted: %s\n", err.Error())
 	// 	return false, nil
 	// }
+	mutex.RLock()
+	defer mutex.RUnlock()
 
 	ok, node := t.getNode(key)
 	if ok {
@@ -358,8 +362,8 @@ func (t *Tree) RotateLeft(x *Node) {
 // If a mapping identified by `key` already exists, it is overwritten.
 // Constraint: Not everything can be a key.
 func (t *Tree) Put(key interface{}, data interface{}) error {
-	modifyMutex.Lock()
-	defer modifyMutex.Unlock()
+	mutex.Lock()
+	defer mutex.Unlock()
 	// if err := mustBeValidKey(key); err != nil {
 	// 	logger.Printf("Put was prematurely aborted: %s\n", err.Error())
 	// 	return err
@@ -518,6 +522,8 @@ func (t *Tree) Has(key interface{}) bool {
 	// 	logger.Printf("Has was prematurely aborted: %s\n", err.Error())
 	// 	return false
 	// }
+	// mutex.RLock()
+	// defer mutex.RUnlock()
 	found, _, _ := t.internalLookup(nil, t.root, key, NODIR)
 	return found
 }
@@ -556,8 +562,8 @@ func (t *Tree) transplant(u *Node, v *Node) {
 // Delete removes the item identified by the supplied key.
 // Delete is a noop if the supplied key doesn't exist.
 func (t *Tree) Delete(key interface{}) {
-	modifyMutex.Lock()
-	defer modifyMutex.Unlock()
+	mutex.Lock()
+	defer mutex.Unlock()
 
 	if !t.Has(key) {
 		// logger.Printf("Delete: bail as no node exists for key %d\n", key)
