@@ -157,6 +157,8 @@ type AssociationExt struct {
 	Position                   int64
 }
 
+type Set map[string]map[string]map[string]bool
+
 type StringSliceSet struct {
 	Item   string
 	Key    []string

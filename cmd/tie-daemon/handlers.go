@@ -3,17 +3,30 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"git.sr.ht/~uid/tie/request"
 	"git.sr.ht/~uid/tie/tiedb"
 	"github.com/julienschmidt/httprouter"
 )
+
+var (
+	RequestsToAnswer chan *Request
+)
+
+type Request struct {
+	AnswerTo    http.ResponseWriter
+	RawData     []byte
+	RequestType request.Request
+	Key         tiedb.CollectionKey
+	Wait        sync.WaitGroup
+}
 
 func Index(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	fmt.Fprint(w, "It works!\n")
@@ -97,36 +110,55 @@ func GetHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 }
 
 func RequestHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	raw_data, _ := ioutil.ReadAll(r.Body)
+	raw_data, _ := io.ReadAll(r.Body)
 	key := tiedb.CollectionKey{
 		Database:   filepath.Join(dbPath, ps.ByName("database")),
 		Collection: ps.ByName("collection"),
 	}
 
+	req := &Request{
+		AnswerTo: w,
+		RawData:  raw_data,
+		Key:      key,
+	}
+
 	switch ps.ByName("type") {
 	case "Add":
 		log.Println("Request from " + r.RemoteAddr + ": Add")
-		AnswerRequest(w, raw_data, &request.Add{}, key)
+		req.RequestType = &request.Add{}
 
 	case "Get":
 		log.Println("Request from " + r.RemoteAddr + ": Get")
-		AnswerRequest(w, raw_data, &request.Get{}, key)
+		req.RequestType = &request.Get{}
 
 	case "Delete":
 		log.Println("Request from " + r.RemoteAddr + ": Delete")
-		AnswerRequest(w, raw_data, &request.Delete{}, key)
+		req.RequestType = &request.Delete{}
 
 	case "Update":
 		log.Println("Request from " + r.RemoteAddr + ": Update")
-		AnswerRequest(w, raw_data, &request.Update{}, key)
+		req.RequestType = &request.Update{}
 
 	case "Batch":
 		log.Println("Request from " + r.RemoteAddr + ": Batch")
-		AnswerRequest(w, raw_data, &request.Batch{}, key)
+		req.RequestType = &request.Batch{}
 
 	default:
 		log.Println("Unrecognized request from " + r.RemoteAddr + ": " + ps.ByName("type"))
 	}
+
+	req.Wait.Add(1)
+	RequestsToAnswer <- req
+	req.Wait.Wait() // Wait until request is answered otherwise ResponseWriter will be closed
+}
+
+func StartRequestAnswerer() {
+	go func() {
+		for req := range RequestsToAnswer {
+			AnswerRequest(req)
+			req.Wait.Done()
+		}
+	}()
 }
 
 func ErrorToJsonString(prepend string, err error) string {
@@ -143,26 +175,26 @@ func ErrorToJsonString(prepend string, err error) string {
 	return string(json_reply)
 }
 
-func AnswerRequest(w http.ResponseWriter, raw_data []byte, r request.Request, key tiedb.CollectionKey) {
-	errRequest := json.Unmarshal(raw_data, r)
+func AnswerRequest(req *Request) {
+	errRequest := json.Unmarshal(req.RawData, req.RequestType)
 	if errRequest != nil {
 		log.Println(errRequest)
 		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
-		fmt.Fprint(w, msg)
+		fmt.Fprint(req.AnswerTo, msg)
 		return
 	}
 
-	reply, errReply := r.Reply(db, key)
+	reply, errReply := req.RequestType.Reply(db, req.Key)
 	if errReply != nil {
 		msg := ErrorToJsonString("Error:", errReply)
-		fmt.Fprint(w, msg)
+		fmt.Fprint(req.AnswerTo, msg)
 	} else {
 		json_reply, errMarshal := json.Marshal(reply.ReplyStruct)
 		if errMarshal != nil {
 			msg := ErrorToJsonString("Internal error:", errMarshal)
-			fmt.Fprint(w, msg)
+			fmt.Fprint(req.AnswerTo, msg)
 		} else {
-			fmt.Fprint(w, string(json_reply))
+			fmt.Fprint(req.AnswerTo, string(json_reply))
 		}
 	}
 }

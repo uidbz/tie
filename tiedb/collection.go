@@ -7,8 +7,10 @@ import (
 	"sync"
 )
 
-var collectionLock sync.Mutex
-var insertLock sync.Mutex
+var (
+	collectionLock sync.Mutex
+	changeLock     sync.Mutex
+)
 
 func (ic *InternalCollection) Collection(name string) Collection {
 	return ic.InternalCollectionFromString(name)
@@ -83,8 +85,8 @@ func (ic *InternalCollection) ValueExists(level int, parentId uint64, value []by
 }
 
 func (ic *InternalCollection) Insert(value string) *Entry {
-	insertLock.Lock()
-	defer insertLock.Unlock()
+	changeLock.Lock()
+	defer changeLock.Unlock()
 
 	var lastParent *Entry = &ic.Root
 	bytes := []byte(value)
@@ -371,6 +373,9 @@ func (ic *InternalCollection) Sync() {
 }
 
 func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (bool, string) {
+	changeLock.Lock()
+	defer changeLock.Unlock()
+
 	found, asses := ic.GetAssociations(key)
 	if found {
 		f1, e2 := ic.GetEntryFromString(value2)
@@ -596,6 +601,76 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 }
 
 func (ic *InternalCollection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
+	size := int(s.Size())
+
+	set := StringSliceSet{Item: value,
+		Key:    make([]string, size),
+		Value2: make([]string, size),
+		Value1: make([]string, size)}
+
+	associationTrees := make([]*Tree, size)
+
+	if size == 0 {
+		return &set, nil
+	}
+
+	// start := time.Now()
+	var wg sync.WaitGroup
+
+	v := &ChanVisitor{}
+	v.Ch = make(chan interface{}, 1000)
+	wg.Add(size)
+	go func() {
+		i := 0
+		for t := range v.Ch {
+			x := t.(*Association)
+
+			if i >= size { //In case results change since size was calculated
+				for j := size; j <= i; j++ {
+					set.Key = append(set.Key, "")
+					set.Value2 = append(set.Value2, "")
+					set.Value1 = append(set.Value1, "")
+					associationTrees = append(associationTrees, &Tree{})
+					wg.Add(1)
+					size++
+				}
+			}
+			set.Key[i] = ic.GetValueString(x.Level, x.EntryId)
+			set.Value2[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
+			associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
+			set.Value1[i] = ic.GetValueString(x.RelationLevel, x.Relation)
+			wg.Done()
+			i++
+		}
+	}()
+	s.Walk(v)
+	wg.Wait()
+	close(v.Ch)
+
+	//Filters - probably should be done differently
+
+	if relationFilter != "" {
+		n := 0
+
+		for i, x := range set.Value1 {
+			if x == relationFilter {
+				set.Value1[n] = x
+				set.Value2[n] = set.Value2[i]
+				associationTrees[n] = associationTrees[i]
+				n++
+			}
+		}
+		set.Value2 = set.Value2[:n]
+		set.Value1 = set.Value1[:n]
+		associationTrees = associationTrees[:n]
+	}
+
+	// fmt.Println("--- ", time.Since(start), " ---")
+	return &set, associationTrees
+}
+
+// New implementation of SetToString using new output format
+func (ic *InternalCollection) SetToString2(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
 	size := int(s.Size())
 
 	set := StringSliceSet{Item: value,

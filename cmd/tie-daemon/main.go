@@ -76,6 +76,8 @@ func main() {
 
 	router := httprouter.New()
 	routes(router)
+	RequestsToAnswer = make(chan *Request, 1000)
+	StartRequestAnswerer()
 
 	if *insecure {
 		fmt.Println("Listening on http://0.0.0.0:1161\n")
