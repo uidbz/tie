@@ -3,10 +3,11 @@ module git.sr.ht/~uid/tie
 go 1.16
 
 require (
-	git.sr.ht/~uid/tie/client v0.0.0-20220604100723-7141445d2e5e
-	git.sr.ht/~uid/tie/request v0.0.0-20220604100723-7141445d2e5e
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072707-e9d3c2d8e9bf
-	github.com/spf13/cobra v1.6.0
+	git.sr.ht/~uid/tie/client v0.0.0-20221024072834-4e948d6ac84e
+	git.sr.ht/~uid/tie/request v0.0.0-20221024072834-4e948d6ac84e
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/spf13/cobra v1.6.1
 )
 
 replace git.sr.ht/~uid/tie/client => ./client
