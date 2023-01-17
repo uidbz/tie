@@ -1,7 +1,5 @@
 module git.sr.ht/~uid/tie/cmd/tie-download
 
-go 1.16
+go 1.18
 
-require git.sr.ht/~uid/tie/io/getlib v0.0.0-20230106084800-144edbfaae3b
-
-replace git.sr.ht/~uid/tie/io/getlib => ../../io/getlib
+require git.sr.ht/~uid/tie/io/getlib v0.0.0-20230106084935-4f6fb37490e3

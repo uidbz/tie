@@ -1,17 +1,17 @@
 module git.sr.ht/~uid/tie/client
 
-go 1.16
+go 1.18
 
 require (
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20221024072834-4e948d6ac84e
-	git.sr.ht/~uid/tie/request v0.0.0-20221024072834-4e948d6ac84e
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20230106084935-4f6fb37490e3
+	git.sr.ht/~uid/tie/request v0.0.0-20230106084935-4f6fb37490e3
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3
 	github.com/go-resty/resty/v2 v2.7.0
-	golang.org/x/net v0.5.0 // indirect
 )
 
-replace git.sr.ht/~uid/tie/request => ../request
-
-replace git.sr.ht/~uid/tie/tiedb => ../tiedb
-
-replace git.sr.ht/~uid/tie/io/putlib => ../io/putlib
+require (
+	git.sr.ht/~uid/tie/metadata v0.0.0-20230106084935-4f6fb37490e3 // indirect
+	github.com/minio/highwayhash v1.0.2 // indirect
+	golang.org/x/net v0.5.0 // indirect
+	golang.org/x/sys v0.4.0 // indirect
+)

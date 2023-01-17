@@ -3,8 +3,8 @@ module webservice
 go 1.18
 
 require (
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e
-	git.sr.ht/~uid/tie/webservice v0.0.0-20230106084800-144edbfaae3b
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3
+	git.sr.ht/~uid/tie/webservice v0.0.0-20230106084935-4f6fb37490e3
 	github.com/julienschmidt/httprouter v1.3.0
 )
 

@@ -69,6 +69,13 @@ func (r *Batch) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 func (r *Get) Reply(db *tiedb.Tree, key tiedb.CollectionKey) (Reply, error) {
 	col := db.GetCollection(key)
 
+	if len(r.Values) == 0 {
+		return Reply{
+			ReplyType:   ReplyTypeGet,
+			ReplyStruct: make([]*tiedb.StringSliceSet, 0),
+		}, nil
+	}
+
 	if len(r.Values) == 1 { // GET
 		found, assPtr := col.GetAssociations(r.Values[0])
 

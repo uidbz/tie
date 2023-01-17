@@ -1,0 +1,24 @@
+go 1.19
+
+use (
+	.
+	./client
+	./cmd/tie
+	./cmd/tie-daemon
+	./cmd/tie-download
+	./cmd/tie-filehost
+	./cmd/tie-handle
+	./cmd/tie-upload
+	./examples/tiedb-client-add-get
+	./examples/tiedb-client-batch
+	./examples/webservice
+	./gui/component
+	./gui/tie-img
+	./gui/tie-tag
+	./io/getlib
+	./io/putlib
+	./metadata
+	./request
+	./tiedb
+	./webservice
+)

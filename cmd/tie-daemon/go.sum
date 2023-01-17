@@ -1,3 +1,8 @@
+git.sr.ht/~uid/tie/request v0.0.0-20230106084935-4f6fb37490e3 h1:ZAAxNw7jHXNFFx2wPZQz6S30VTNASQVXgEFldsMiWbU=
+git.sr.ht/~uid/tie/request v0.0.0-20230106084935-4f6fb37490e3/go.mod h1:e5dn9TDvnKHGd5rmG/U6eNqq1aA6GMS5YhvM078S3hc=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3 h1:u5K1T0j7GPgNBjuh8is+pQMs89OWznFE+yqG8jgkMEg=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
 github.com/julienschmidt/httprouter v1.3.0 h1:U0609e9tgbseu3rBINet9P48AI/D3oJs4dN7jwJOQ1U=
 github.com/julienschmidt/httprouter v1.3.0/go.mod h1:JR6WtHb+2LUe8TCKY3cZOxFyyO8IZAc4RVcycCCAKdM=
 github.com/yuin/goldmark v1.5.3 h1:3HUJmBFbQW9fhQOzMgseU134xfi6hU+mjWywx5Ty+/M=

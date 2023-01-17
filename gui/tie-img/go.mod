@@ -4,9 +4,9 @@ go 1.17
 
 require (
 	fyne.io/fyne/v2 v2.3.0
-	git.sr.ht/~uid/tie/client v0.0.0-20221024072834-4e948d6ac84e
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20230106084800-144edbfaae3b
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20221024072834-4e948d6ac84e
+	git.sr.ht/~uid/tie/client v0.0.0-20230106084935-4f6fb37490e3
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20230106084935-4f6fb37490e3
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20230106084935-4f6fb37490e3
 	github.com/disintegration/gift v1.2.1
 	github.com/disintegration/imaging v1.6.2
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
@@ -15,9 +15,9 @@ require (
 
 require (
 	fyne.io/systray v1.10.1-0.20221115204952-d16a6177e6f1 // indirect
-	git.sr.ht/~uid/tie/metadata v0.0.0-20221024072834-4e948d6ac84e // indirect
-	git.sr.ht/~uid/tie/request v0.0.0-20221024072834-4e948d6ac84e // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20230106084935-4f6fb37490e3 // indirect
+	git.sr.ht/~uid/tie/request v0.0.0-20230106084935-4f6fb37490e3 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3 // indirect
 	github.com/benoitkugler/textlayout v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v1.0.0 // indirect
@@ -48,15 +48,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	honnef.co/go/js/dom v0.0.0-20221001195520-26252dedbe70 // indirect
 )
-
-replace git.sr.ht/~uid/tie/gui/component => ../component
-
-replace git.sr.ht/~uid/tie/client => ../../client
-
-replace git.sr.ht/~uid/tie/io/putlib => ../../io/putlib
-
-replace git.sr.ht/~uid/tie/request => ../../request
-
-replace git.sr.ht/~uid/tie/metadata => ../../metadata
-
-replace git.sr.ht/~uid/tie/tiedb => ../../tiedb

@@ -1,7 +1,7 @@
-git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e h1:vTLZ2qD7k2sdQTUe+QSFUNFAblneTq8/azYwuFlCm10=
-git.sr.ht/~uid/tie/tiedb v0.0.0-20221024072834-4e948d6ac84e/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
-git.sr.ht/~uid/tie/webservice v0.0.0-20230106084800-144edbfaae3b h1:vq0ONWgLRejkXMVVKpddN5iNvywOOkr3UpMkefnaxuE=
-git.sr.ht/~uid/tie/webservice v0.0.0-20230106084800-144edbfaae3b/go.mod h1:uzE/i84jyjOn1jCxPyARgUnCpvcUlQGranyU62RGu3s=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3 h1:u5K1T0j7GPgNBjuh8is+pQMs89OWznFE+yqG8jgkMEg=
+git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3/go.mod h1:s8f6ldl0lyZCM1ZtMKSBKYh8BERAQMR4JQmNLyEPTdk=
+git.sr.ht/~uid/tie/webservice v0.0.0-20230106084935-4f6fb37490e3 h1:dMeq4Zgqt5tjRgkO1ZXnaoH/K1EGecUHFCbfM2/8Ogo=
+git.sr.ht/~uid/tie/webservice v0.0.0-20230106084935-4f6fb37490e3/go.mod h1:WBjnxeF0TgeWwsVKrqAfR/XuzMCTCBFDS7EYnXS2ZtA=
 github.com/benbjohnson/clock v1.1.0 h1:Q92kusRqC1XV2MjkWETPvjJVqKetz1OzxZB7mHJLju8=
 github.com/benbjohnson/clock v1.1.0/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/caddyserver/certmagic v0.17.2 h1:o30seC1T/dBqBCNNGNHWwj2i5/I/FMjBbTAhjADP3nE=
