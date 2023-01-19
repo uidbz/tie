@@ -4,9 +4,9 @@ go 1.17
 
 require (
 	fyne.io/fyne/v2 v2.3.0
-	git.sr.ht/~uid/tie/client v0.0.0-20230106084935-4f6fb37490e3
-	git.sr.ht/~uid/tie/gui/component v0.0.0-20230106084935-4f6fb37490e3
-	git.sr.ht/~uid/tie/io/putlib v0.0.0-20230106084935-4f6fb37490e3
+	git.sr.ht/~uid/tie/client v0.0.0-20230117185330-f35fb5a6e890
+	git.sr.ht/~uid/tie/gui/component v0.0.0-20230117185330-f35fb5a6e890
+	git.sr.ht/~uid/tie/io/putlib v0.0.0-20230117185330-f35fb5a6e890
 	github.com/disintegration/gift v1.2.1
 	github.com/disintegration/imaging v1.6.2
 	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646
@@ -15,9 +15,9 @@ require (
 
 require (
 	fyne.io/systray v1.10.1-0.20221115204952-d16a6177e6f1 // indirect
-	git.sr.ht/~uid/tie/metadata v0.0.0-20230106084935-4f6fb37490e3 // indirect
-	git.sr.ht/~uid/tie/request v0.0.0-20230106084935-4f6fb37490e3 // indirect
-	git.sr.ht/~uid/tie/tiedb v0.0.0-20230106084935-4f6fb37490e3 // indirect
+	git.sr.ht/~uid/tie/metadata v0.0.0-20230117185330-f35fb5a6e890 // indirect
+	git.sr.ht/~uid/tie/request v0.0.0-20230119181938-c9ec8fa0f812 // indirect
+	git.sr.ht/~uid/tie/tiedb v0.0.0-20230117185330-f35fb5a6e890 // indirect
 	github.com/benoitkugler/textlayout v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v1.0.0 // indirect

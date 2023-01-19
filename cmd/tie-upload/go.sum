@@ -1,8 +1,7 @@
-git.sr.ht/~uid/tie/io/putlib v0.0.0-20230106084935-4f6fb37490e3 h1:DW9S5EWSRlCL2olPXElvnEXEYg8F2efpebGdgvRWzpc=
-git.sr.ht/~uid/tie/io/putlib v0.0.0-20230106084935-4f6fb37490e3/go.mod h1:2DyqXyGR1qShT4tXFSevgrW6vsiSFUWk8yS8W1657L0=
-git.sr.ht/~uid/tie/metadata v0.0.0-20221024072834-4e948d6ac84e/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
-git.sr.ht/~uid/tie/metadata v0.0.0-20230106084935-4f6fb37490e3 h1:3vTpIZKIuURO3/f1qDAVceFJp6j3phpGu553prA9vnM=
-git.sr.ht/~uid/tie/metadata v0.0.0-20230106084935-4f6fb37490e3/go.mod h1:Vy88ZwZ++vvgpgQInjwsWb5szAm599aOO0Zl8r1/hvU=
+git.sr.ht/~uid/tie/io/putlib v0.0.0-20230117185330-f35fb5a6e890 h1:MFukZDSzJOaXYIEFI4cQo8WoPyYsxp48fRtEm5FjWzg=
+git.sr.ht/~uid/tie/io/putlib v0.0.0-20230117185330-f35fb5a6e890/go.mod h1:raRrNqCeS92egem3WVCi8xoGepjBSo49fCH5pLQ7P20=
+git.sr.ht/~uid/tie/metadata v0.0.0-20230117185330-f35fb5a6e890 h1:+nSJDpv5bbvhtvFefv0hLiRc1BTTTO+X8As5xnEcHnI=
+git.sr.ht/~uid/tie/metadata v0.0.0-20230117185330-f35fb5a6e890/go.mod h1:IxQqxpZcThQ6MrGDvOGMuCv09gm6rb/llpzEvzHfth0=
 github.com/minio/highwayhash v1.0.2 h1:Aak5U0nElisjDCfPSG79Tgzkn2gl66NxOMspRrKnA/g=
 github.com/minio/highwayhash v1.0.2/go.mod h1:BQskDq+xkJ12lmlUUi7U0M5Swg3EWR+dLTk+kldvVxY=
 golang.org/x/sys v0.0.0-20190130150945-aca44879d564/go.mod h1:STP8DvDyc/dI5b8T5hshtkjS+E42TnysNCUPdjciGhY=
