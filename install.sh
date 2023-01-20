@@ -29,28 +29,4 @@ install_cmd() {
     cd $root
 }
 
-install_gui() {
-    echo "Installing gui..."
-    
-    cd $root/gui/tie-tag
-    go install
-
-}
-
-case "$1" in
-"cmd")
-    $root/build.sh cmd
-    install_cmd
-    ;;
-
-"gui")
-    $root/build.sh cmd
-    install_gui
-    ;;
-    
-"")
-    $root/build.sh
-    install_cmd
-    install_gui
-    
-esac
+install_cmd

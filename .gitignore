@@ -39,5 +39,3 @@ examples/tiedb-client-batch/tiedb-client-batch
 examples/webservice/server/server
 examples/webservice/server/authentication
 examples/webservice/client/client
-gui/tie-tag/tie-tag
-gui/tie-img/tie-img

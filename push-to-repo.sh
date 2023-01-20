@@ -1,11 +1,8 @@
 #!/usr/bin/env sh
 
+go get -u .
+go mod tidy
+
 git add -A
 git commit -m "$@"
-git push
-
-./update-modules.sh
-
-git add -A
-git commit -m "Update modules to latest versions"
 git push
