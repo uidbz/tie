@@ -45,60 +45,61 @@ type CollectionKey struct {
 	Collection string
 }
 
-type Collection interface {
-	Collection(name string) Collection
-	Add(key, value1, value2 string) *Association
-	Get(key string, value1 string) (bool, *StringSliceSet)
-	GetAssociations(value string) (bool, *Tree)
-	GetAssociationsExt(value string, entryCollection string) (bool, *Tree)
-	SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree)
-	Update(key string, value1 string, value2 string, newValue2 string) (bool, string)
-	UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string)
-	SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string)
-	SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string)
-	Delete(key string, value1 string, value2 string) (bool, string)
-	CloseDB()
-}
+// type Collection interface {
+// 	Collection(name string) Collection
+// 	Add(key, value1, value2 string) *Association
+// 	Get(key string, value1 string) (bool, *StringSliceSet)
+// 	GetAssociations(value string) (bool, *Tree)
+// 	GetAssociationsExt(value string, entryCollection string) (bool, *Tree)
+// 	SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree)
+// 	SetToString2(value string, relationFilter string, s *Tree) (*TrippleSet, []*Tree)
+// 	Update(key string, value1 string, value2 string, newValue2 string) (bool, string)
+// 	UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string)
+// 	SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string)
+// 	SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string)
+// 	Delete(key string, value1 string, value2 string) (bool, string)
+// 	CloseDB()
+// }
 
-type InternalCollection struct {
-	TotalEntries             uint64
-	TotalAsses               uint64
+type Collection struct {
+	totalEntries             uint64
+	totalAsses               uint64
 	mu                       sync.Mutex   // TODO: Better names
 	mu2                      sync.Mutex   // TODO: Better names
 	mutexAssociation         sync.RWMutex // TODO: Better names
 	mutexInsert              sync.Mutex   // TODO: Better names
-	InserterWG               sync.WaitGroup
-	InserterWGAssociation    sync.WaitGroup
-	InserterWGAssociationExt sync.WaitGroup
-	InserterWGDynTrie        sync.WaitGroup
+	inserterWG               sync.WaitGroup
+	inserterWGAssociation    sync.WaitGroup
+	inserterWGAssociationExt sync.WaitGroup
+	inserterWGDynTrie        sync.WaitGroup
 	data                     chan []byte    // TODO: Better names
 	wg                       sync.WaitGroup // TODO: Better names
 
-	Root                Entry
-	RootAss             Association
-	Entries             []*Tree
-	EntryAdder          []chan *Entry
-	AssociationAdder    []chan *Association
-	AssociationExtAdder []chan *AssociationExt
-	UniqueValues        []*Tree
-	Values              *Tree
-	Associations        []*Tree
-	AssociationsExt     []*Tree
-	SubCollections      []*Tree
-	Freespace           chan FileEntry
-	DBPath              string
-	DBName              string
-	DBFullPath          string
-	DBWriteQueue        chan FileMod
-	DBCloseWriter       chan bool
-	WriteToDisk         bool
+	root                Entry
+	rootAss             Association
+	entries             []*Tree
+	entryAdder          []chan *Entry
+	associationAdder    []chan *Association
+	associationExtAdder []chan *AssociationExt
+	uniqueValues        []*Tree
+	values              *Tree
+	associations        []*Tree
+	associationsExt     []*Tree
+	subCollections      []*Tree
+	freespace           chan FileEntry
+	dBPath              string
+	dBName              string
+	dBFullPath          string
+	dBWriteQueue        chan FileMod
+	dBCloseWriter       chan bool
+	writeToDisk         bool
 	// Finished            chan bool
-	Finished sync.WaitGroup
+	finished sync.WaitGroup
 	// DBUpdateQueue    chan FileEntry
 	// DBDeleteQueue    chan FileEntry
 	db_size int64
-	Level   int
-	Id      uint64
+	level   int
+	id      uint64
 }
 
 type UniqueValue struct {
@@ -189,10 +190,85 @@ func (set *StringSliceSet) FirstValue2() string {
 	return ""
 }
 
+type Unit struct{}
+type Value2 map[string]Unit
+type Value1 map[string]Value2
+type TripleSet map[string]Value1
+
+func (s TripleSet) Has(key string) bool {
+	_, ok := s[key]
+	return ok
+}
+
+func (s TripleSet) ForEachKey(do func(key string)) {
+	for key, _ := range s {
+		do(key)
+	}
+}
+
+func (s TripleSet) ForEachValue1(do func(key, value1 string)) {
+	for key, keys := range s {
+		for value1, _ := range keys {
+			do(key, value1)
+		}
+	}
+}
+
+func (s TripleSet) ForEachValue2(do func(key, value1, value2 string)) {
+	for key, keys := range s {
+		for value1, value1s := range keys {
+			for value2, _ := range value1s {
+				do(key, value1, value2)
+			}
+		}
+	}
+}
+
+func (s Value1) Has(value1 string) bool {
+	_, ok := s[value1]
+	return ok
+}
+
+func (s Value1) ForEach(do func(value1 string)) {
+	for value1, _ := range s {
+		do(value1)
+	}
+}
+
+func (s Value1) ForEachValue2(do func(value1, value2 string)) {
+	for value1, value1s := range s {
+		for value2, _ := range value1s {
+			do(value1, value2)
+		}
+	}
+}
+
+// There must exist exactly 1 value2 for the provided value1! Otherwise it will return (empty string, false)")
+func (s Value2) One() (string, bool) {
+	if len(s) != 1 {
+		return "", false
+	}
+	for value2, _ := range s {
+		return value2, true
+	}
+	return "", false
+}
+
+func (s Value2) Has(value2 string) bool {
+	_, ok := s[value2]
+	return ok
+}
+
+func (s Value2) ForEach(do func(value2 string)) {
+	for value2, _ := range s {
+		do(value2)
+	}
+}
+
 type FileEntry interface {
-	ToBytes() []byte
-	SetPosition(int64)
-	GetPosition() int64
+	toBytes() []byte
+	setPosition(int64)
+	getPosition() int64
 }
 
 type FileMod struct {
@@ -200,7 +276,7 @@ type FileMod struct {
 	Entry FileEntry
 }
 
-func (e *Entry) ToBytes() []byte {
+func (e *Entry) toBytes() []byte {
 	datatype := make([]byte, SIZE_DATATYPE)
 	level := make([]byte, SIZE_LEVEL)
 	id := make([]byte, SIZE_ID)
@@ -222,15 +298,15 @@ func (e *Entry) ToBytes() []byte {
 	return out
 }
 
-func (e *Entry) SetPosition(pos int64) {
+func (e *Entry) setPosition(pos int64) {
 	e.Position = pos
 }
 
-func (e *Entry) GetPosition() int64 {
+func (e *Entry) getPosition() int64 {
 	return e.Position
 }
 
-func (a *Association) ToBytes() []byte {
+func (a *Association) toBytes() []byte {
 	datatype := make([]byte, SIZE_DATATYPE)
 	entry_level := make([]byte, SIZE_LEVEL)
 	entry_id := make([]byte, SIZE_ID)
@@ -259,15 +335,15 @@ func (a *Association) ToBytes() []byte {
 	return out
 }
 
-func (a *Association) SetPosition(pos int64) {
+func (a *Association) setPosition(pos int64) {
 	a.Position = pos
 }
 
-func (a *Association) GetPosition() int64 {
+func (a *Association) getPosition() int64 {
 	return a.Position
 }
 
-func (a *AssociationExt) ToBytes() []byte {
+func (a *AssociationExt) toBytes() []byte {
 	datatype := make([]byte, SIZE_DATATYPE)
 	association := make([]byte, SIZE_ID)
 	relation := make([]byte, SIZE_ID)
@@ -296,10 +372,10 @@ func (a *AssociationExt) ToBytes() []byte {
 	return out
 }
 
-func (a *AssociationExt) SetPosition(pos int64) {
+func (a *AssociationExt) setPosition(pos int64) {
 	a.Position = pos
 }
 
-func (a *AssociationExt) GetPosition() int64 {
+func (a *AssociationExt) getPosition() int64 {
 	return a.Position
 }

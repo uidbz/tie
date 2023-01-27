@@ -1,16 +1,21 @@
-package tie
+package client
 
 import (
-	"git.sr.ht/~uid/tie/request"
+	ws "git.sr.ht/~uid/tie/webservice"
 )
+
+type TieClient struct {
+	client *ws.Client
+	Config Config
+}
 
 type TieOutput map[string]map[string]map[string]bool
 
-type TieOutput2 struct {
-	// Tripplets []Tripplet
-	Columns []string
-	Data    []request.ReplyGet
-}
+// type TieOutput2 struct {
+// 	// Tripplets []Tripplet
+// 	Columns []string
+// 	Data    []request.ReplyGet
+// }
 
 // type Tripplet {
 // 	Key string
@@ -25,7 +30,11 @@ type AuthError struct {
 	/* variables */
 }
 
-type State struct {
+type Config struct {
+	configDir     string
+	configPath    string
+	Username      string
+	Password      string
 	Namespace     string
 	Collection    string
 	Webservice    string

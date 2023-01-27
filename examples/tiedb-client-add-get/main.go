@@ -3,44 +3,35 @@ package main
 import (
 	"fmt"
 
+	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/client"
-	"git.sr.ht/~uid/tie/request"
 )
 
-func AddHandler(reply *request.Reply, err error) {
-	if err != nil {
-		fmt.Println("Error handling 'Add' reponse:", err.Error())
-		fmt.Println("Received:", string(reply.ReplyRawResponse))
-	}
-
-	var result = *reply.DataStatus()
-	fmt.Println("Success:", result.Success, "Message:", result.Message)
-}
-
-func GetHandler(reply *request.Reply, err error) {
-	if err != nil {
-		fmt.Println("Error handling 'Get' reponse:", err.Error())
-		fmt.Println("Received:", string(reply.ReplyRawResponse))
-	}
-
-	var result = *reply.DataGet()
-	for _, x := range result {
-		for i, _ := range x.Value2 {
-			key := x.Item
-			value1 := x.Value1[i]
-			value2 := x.Value2[i]
-
-			fmt.Println(key + "\t" + value1 + "\t" + value2)
-		}
+func HandleAddError(reply *api.AddReply) {
+	if !reply.Success {
+		fmt.Println("Error adding triple to database:", reply.Message)
 	}
 }
 
 func main() {
-	tie.InitConfig()
+	config := client.DefaultConfig()
+	tie := client.NewTieClient(config)
 
-	a := request.NewAddRequest("MyKey", "Some value 1", "Some value 5")
-	AddHandler(tie.Run(a))
+	tie.Add("MyKey", "Category", "Some value 2", HandleAddError)
+	tie.Add("MyKey", "Category", "Some other value 2", HandleAddError)
+	tie.Add("MyKey", "AnotherCategory", "Value 333", HandleAddError)
 
-	b := request.NewGetRequest([]string{"MyKey"})
-	GetHandler(tie.Run(b))
+	tie.Get("MyKey", func(reply *api.GetReply) {
+		if reply.Success {
+			cat := reply.Result["MyKey"]["Category"]
+			cat.ForEach(func(value2 string) {
+				fmt.Println(value2)
+			})
+			if value2, ok := reply.Result["MyKey"]["AnotherCategory"].One(); ok {
+				fmt.Println(value2)
+			}
+		} else {
+			fmt.Println("Error getting result:", reply.Message)
+		}
+	})
 }

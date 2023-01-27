@@ -13,6 +13,8 @@ import (
 var (
 	stdin         []Stdin
 	outputAsTable bool
+	configFile    string
+	tie           *client.TieClient
 )
 
 type Stdin struct {
@@ -49,12 +51,15 @@ func main() {
 			log.Println(err)
 		}
 	}
-	cobra.OnInitialize(tie.InitConfig)
+	cobra.OnInitialize(func() {
+		config := client.ReadConfig(configFile)
+		tie = client.NewTieClient(config)
+	})
 
 	var rootCmd = &cobra.Command{Use: "tie"}
 	rootCmd.AddCommand(cmdList()...)
-	rootCmd.PersistentFlags().StringVarP(&tie.Config, "config", "c", "config", "Config file to load")
-	rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")
+	rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config", "Config file to load")
+	// rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")
 	rootCmd.PersistentFlags().BoolVarP(&outputAsTable, "table", "t", false, "Output as table")
 
 	rootCmd.Execute()

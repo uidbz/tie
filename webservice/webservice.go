@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -16,13 +17,22 @@ import (
 )
 
 type Webservice struct {
+	Config           WebserviceConfig
 	router           *httprouter.Router
-	config           WebserviceConfig
 	requests         []RequestInterface
 	validationCodes  map[string]string
 	validationTimers map[string]*time.Timer
 	validationMutex  sync.Mutex
 	db               *tiedb.Tree
+	requestsToAnswer chan *RequestToAnswer
+}
+
+type RequestToAnswer struct {
+	AnswerTo http.ResponseWriter
+	RawData  []byte
+	Request  RequestInterface
+	Username string
+	Wait     *sync.WaitGroup
 }
 
 const (
@@ -52,6 +62,7 @@ type WebserviceConfig struct {
 	UserNamespace string
 	AuthFile      string
 	authKey       tiedb.CollectionKey
+	DbPath        string
 }
 
 type MailSettings struct {
@@ -66,33 +77,36 @@ type MailSettings struct {
 func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webservice {
 	ws := &Webservice{}
 	ws.router = httprouter.New()
-	ws.config = config
-	ws.config.authKey = tiedb.CollectionKey{config.AuthNamespace, config.AuthFile}
+	ws.Config = config
+	ws.Config.authKey = tiedb.CollectionKey{ws.DbPath(config.AuthNamespace), config.AuthFile}
 	ws.requests = requests
 	ws.db = tiedb.NewDB(true)
 	ws.validationCodes = make(map[string]string)
 	ws.validationTimers = make(map[string]*time.Timer)
 	rand.Seed(time.Now().UnixNano())
+	ws.requestsToAnswer = make(chan *RequestToAnswer, 10000)
+	ws.startRequestAnswerer()
 
 	return ws
 }
 
 func (ws *Webservice) ListenAndServe(routes func(*httprouter.Router)) {
 	routes(ws.router)
-	if ws.config.Insecure {
-		fmt.Println("Listening on http://" + ws.config.ListenOn + "\n")
-		log.Fatal(http.ListenAndServe(ws.config.ListenOn, ws.router))
+
+	if ws.Config.Insecure {
+		fmt.Println("Listening on http://" + ws.Config.ListenOn + "\n")
+		log.Fatal(http.ListenAndServe(ws.Config.ListenOn, ws.router))
 	} else {
-		if ws.config.UseCertmagic {
-			log.Fatal(certmagic.HTTPS([]string{ws.config.CertmagicHost}, ws.router))
+		if ws.Config.UseCertmagic {
+			log.Fatal(certmagic.HTTPS([]string{ws.Config.CertmagicHost}, ws.router))
 		} else {
-			if ws.config.CertFile == "" || ws.config.KeyFile == "" {
+			if ws.Config.CertFile == "" || ws.Config.KeyFile == "" {
 				fmt.Println("Error: Please provide --tls-cert <file.crt> and --tls-key <file.key> or set --insecure.")
 				fmt.Println("Exiting.")
 				return
 			}
-			fmt.Println("Listening on https://" + ws.config.ListenOn + "\n")
-			log.Fatal(http.ListenAndServeTLS(ws.config.ListenOn, ws.config.CertFile, ws.config.KeyFile, ws.router))
+			fmt.Println("Listening on https://" + ws.Config.ListenOn + "\n")
+			log.Fatal(http.ListenAndServeTLS(ws.Config.ListenOn, ws.Config.CertFile, ws.Config.KeyFile, ws.router))
 		}
 	}
 }
@@ -109,13 +123,13 @@ func (ws *Webservice) BasicAuth(h httprouter.Handle) httprouter.Handle {
 				raw_data, _ := io.ReadAll(r.Body)
 				valid := NewValidationCodeRequest()
 				valid.getValidationCode = ws.GetValidationCode
-				ws.AnswerRequest(w, raw_data, valid, user)
+				ws.AnswerRequest(&RequestToAnswer{w, raw_data, valid, user, nil})
 			case REQUESTCREATEACCOUNT:
 				raw_data, _ := io.ReadAll(r.Body)
 				account := NewCreateAccountRequest()
 				account.validate = ws.Validate
 				account.addUser = ws.AddUser
-				ws.AnswerRequest(w, raw_data, account, user)
+				ws.AnswerRequest(&RequestToAnswer{w, raw_data, account, user, nil})
 			default:
 				h(w, r, ps)
 			}
@@ -131,13 +145,11 @@ func (ws *Webservice) GetPassword(user string) (exists bool, password string) {
 	if user == REQUESTVALIDATIONCODE || user == REQUESTCREATEACCOUNT {
 		return true, ""
 	}
-	col := ws.db.GetCollection(ws.config.authKey)
+	col := ws.db.GetCollection(ws.Config.authKey)
 	userExists, userdata := col.Get(user, PASSWORDFIELD)
 	pw := ""
 	if userExists {
-		if len(userdata.Value2) >= 1 {
-			pw = userdata.Value2[0]
-		}
+		pw, _ = userdata[user][PASSWORDFIELD].One()
 		// if password == "" then do something appropriate
 	}
 
@@ -194,36 +206,43 @@ func (ws *Webservice) Validate(user, code string) bool {
 	return false
 }
 
-func (ws *Webservice) GetAccount(account string) tiedb.Collection {
-	key := tiedb.CollectionKey{ws.config.UserNamespace, account}
-	if account == MAILSETTINGSDB {
-		key = tiedb.CollectionKey{ws.config.AuthNamespace, MAILSETTINGSDB}
-	}
+func (ws *Webservice) DbPath(namespace string) string {
+	return filepath.Join(ws.Config.DbPath, namespace)
+}
+
+func (ws *Webservice) GetAccount(account string) *tiedb.Collection {
+	key := tiedb.CollectionKey{ws.DbPath(ws.Config.UserNamespace), account}
+
+	return ws.db.GetCollection(key)
+}
+
+func (ws *Webservice) GetCollection(namespace, collection string) *tiedb.Collection {
+	key := tiedb.CollectionKey{ws.DbPath(namespace), collection}
 
 	return ws.db.GetCollection(key)
 }
 
 func (ws *Webservice) AddUser(username, password string) {
-	col := ws.db.GetCollection(ws.config.authKey)
+	col := ws.db.GetCollection(ws.Config.authKey)
 	col.Add(username, PASSWORDFIELD, password)
 }
 
 func (ws *Webservice) DelUser(username, password string) bool {
-	col := ws.db.GetCollection(ws.config.authKey)
+	col := ws.db.GetCollection(ws.Config.authKey)
 	success, _ := col.Delete(username, PASSWORDFIELD, password)
 
 	return success
 }
 
 func (ws *Webservice) UpdatePassword(username, password, newpassword string) bool {
-	col := ws.db.GetCollection(ws.config.authKey)
+	col := ws.db.GetCollection(ws.Config.authKey)
 	success, _ := col.Update(username, PASSWORDFIELD, password, newpassword)
 
 	return success
 }
 
 func (ws *Webservice) SetMailSettings(mail MailSettings) {
-	key := tiedb.CollectionKey{ws.config.AuthNamespace, MAILSETTINGSDB}
+	key := tiedb.CollectionKey{ws.Config.AuthNamespace, MAILSETTINGSDB}
 	col := ws.db.GetCollection(key)
 
 	col.SimpleUpdate(MAIL, SERVER, mail.Server, true)
@@ -240,14 +259,33 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request, ps 
 	log.Println("Request from " + r.RemoteAddr + ": " + reqName)
 	username, _, _ := r.BasicAuth() // Credentials already validated
 
+	req := &RequestToAnswer{
+		AnswerTo: w,
+		RawData:  raw_data,
+		Username: username,
+		Wait:     &sync.WaitGroup{},
+	}
+
 	for _, x := range ws.requests {
 		if reqName == x.GetId() {
-			ws.AnswerRequest(w, raw_data, x, username)
+			req.Request = x
+			req.Wait.Add(1)
+			ws.requestsToAnswer <- req
+			req.Wait.Wait() // Wait until request is answered otherwise ResponseWriter will be closed
 			return
 		}
 	}
 
 	log.Println("Unrecognized request from " + r.RemoteAddr + ": " + ps.ByName("type"))
+}
+
+func (ws *Webservice) startRequestAnswerer() {
+	go func() {
+		for req := range ws.requestsToAnswer {
+			ws.AnswerRequest(req)
+			req.Wait.Done()
+		}
+	}()
 }
 
 func ErrorToJsonString(prepend string, err error) string {
@@ -264,26 +302,27 @@ func ErrorToJsonString(prepend string, err error) string {
 	return string(json_reply)
 }
 
-func (ws *Webservice) AnswerRequest(w http.ResponseWriter, raw_data []byte, r RequestInterface, username string) {
-	errRequest := json.Unmarshal(raw_data, r)
+// func (ws *Webservice) AnswerRequest(w http.ResponseWriter, raw_data []byte, r RequestInterface, username string) {
+func (ws *Webservice) AnswerRequest(req *RequestToAnswer) {
+	errRequest := json.Unmarshal(req.RawData, req.Request)
 	if errRequest != nil {
 		log.Println(errRequest)
 		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
-		fmt.Fprint(w, msg)
+		fmt.Fprint(req.AnswerTo, msg)
 		return
 	}
 
-	reply, errReply := r.Reply(username, ws.GetAccount)
+	reply, errReply := req.Request.Reply(&Environment{req.Username, ws.GetAccount, ws.GetCollection, ws})
 	if errReply != nil {
 		msg := ErrorToJsonString("Error:", errReply)
-		fmt.Fprint(w, msg)
+		fmt.Fprint(req.AnswerTo, msg)
 	} else {
 		json_reply, errMarshal := json.Marshal(reply.ReplyStructPtr)
 		if errMarshal != nil {
 			msg := ErrorToJsonString("Internal error:", errMarshal)
-			fmt.Fprint(w, msg)
+			fmt.Fprint(req.AnswerTo, msg)
 		} else {
-			fmt.Fprint(w, string(json_reply))
+			fmt.Fprint(req.AnswerTo, string(json_reply))
 		}
 	}
 }

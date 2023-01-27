@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"webservice/api"
+	"git.sr.ht/~uid/tie/examples/webservice/api"
 
 	ws "git.sr.ht/~uid/tie/webservice"
 )

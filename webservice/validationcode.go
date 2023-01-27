@@ -50,24 +50,15 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 	return nil, nil
 }
 
-func ReadMailSettings(result *tiedb.StringSliceSet, code string) MailSettings {
+func ReadMailSettings(result tiedb.TripleSet, code string) MailSettings {
 	mail := MailSettings{}
-	for i, x := range result.Value1 {
-		switch x {
-		case SERVER:
-			mail.Server = result.Value2[i]
-		case FROM:
-			mail.From = result.Value2[i]
-		case SUBJECT:
-			mail.Subject = result.Value2[i]
-		case USERNAME:
-			mail.Username = result.Value2[i]
-		case PASSWORD:
-			mail.Password = result.Value2[i]
-		case MESSAGE:
-			mail.Message = result.Value2[i]
-		}
-	}
+
+	mail.Server, _ = result[MAIL][SERVER].One()
+	mail.From, _ = result[MAIL][FROM].One()
+	mail.Subject, _ = result[MAIL][SUBJECT].One()
+	mail.Username, _ = result[MAIL][USERNAME].One()
+	mail.Password, _ = result[MAIL][PASSWORD].One()
+	mail.Message, _ = result[MAIL][MESSAGE].One()
 
 	mail.Subject = strings.ReplaceAll(mail.Subject, "[CODE]", code)
 	mail.Message = strings.ReplaceAll(mail.Message, "[CODE]", code)
@@ -75,7 +66,7 @@ func ReadMailSettings(result *tiedb.StringSliceSet, code string) MailSettings {
 	return mail
 }
 
-func (request *ValidationCodeRequest) Reply(username string, account func(string) tiedb.Collection) (Reply, error) {
+func (request *ValidationCodeRequest) Reply(env *Environment) (Reply, error) {
 	reply := ValidationCodeReply{}
 
 	email, errEmail := mail.ParseAddress(request.Email)
@@ -84,7 +75,7 @@ func (request *ValidationCodeRequest) Reply(username string, account func(string
 		reply.Success = false
 		reply.Message = "Bad e-mail address provided."
 	} else {
-		found, result := account(MAILSETTINGSDB).Get(MAIL, "")
+		found, result := env.Collection(env.Webservice.Config.AuthNamespace, MAILSETTINGSDB).Get(MAIL, "")
 		if found {
 			code := request.getValidationCode(email.Address)
 			mail := ReadMailSettings(result, code)

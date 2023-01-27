@@ -1,9 +1,5 @@
 package webservice
 
-import (
-	"git.sr.ht/~uid/tie/tiedb"
-)
-
 const (
 	IdCreateAccount = "CreateAccount"
 )
@@ -21,7 +17,7 @@ type CreateAccountReply struct {
 	ReplyStatus
 }
 
-func (request *CreateAccountRequest) Reply(username string, account func(string) tiedb.Collection) (Reply, error) {
+func (request *CreateAccountRequest) Reply(env *Environment) (Reply, error) {
 	reply := CreateAccountReply{}
 
 	if request.validate(request.Email, request.ValidationCode) {

@@ -18,6 +18,8 @@ const (
 
 type DummyRequest struct {
 	ws.Request
+	CollectionInfo
+
 	SomeData string
 }
 
@@ -34,9 +36,11 @@ func (request *DummyRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
-func NewDummyRequest() *DummyRequest {
+func (c CollectionInfo) NewDummyRequest() *DummyRequest {
 	request := &DummyRequest{}
 	request.Id = IdDummy
+	request.Namespace = c.Namespace
+	request.CollectionId = c.CollectionId
 	request.ReplyStructPtr = &DummyReply{}
 
 	return request

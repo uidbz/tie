@@ -9,52 +9,52 @@ import (
 var colMutex sync.Mutex
 
 func NewDB(writeToDisk bool) *Tree {
-	return NewTreeWith(KeyComparator, writeToDisk)
+	return newTreeWith(KeyComparator, writeToDisk)
 }
 
-func Initialize(path string, dbname string, clearExistingDB bool, writeToDisk bool) *InternalCollection {
-	ic := InternalCollection{}
+func initialize(path string, dbname string, clearExistingDB bool, writeToDisk bool) *Collection {
+	ic := Collection{}
 
-	ic.WriteToDisk = writeToDisk
-	ic.DBPath = path
-	ic.DBName = dbname
-	ic.DBFullPath = path + "/" + dbname + ".tie"
-	fmt.Println("Initializing", ic.DBFullPath)
+	ic.writeToDisk = writeToDisk
+	ic.dBPath = path
+	ic.dBName = dbname
+	ic.dBFullPath = path + "/" + dbname + ".tie"
+	fmt.Println("Initializing", ic.dBFullPath)
 	if writeToDisk {
 		os.MkdirAll(path, 0777)
-		ic.Freespace = make(chan FileEntry, MaxFreespace)
+		ic.freespace = make(chan FileEntry, MaxFreespace)
 	}
 	// ic.Values = NewTreeWith(PointerValueComparator)
-	ic.Values = NewTreeWith(ValueComparator, writeToDisk)
+	ic.values = newTreeWith(ValueComparator, writeToDisk)
 
 	if writeToDisk {
 		if clearExistingDB {
-			os.Remove(ic.DBFullPath)
+			os.Remove(ic.dBFullPath)
 		}
-		ok, dbFile := OpenDBRead(ic.DBFullPath)
+		ok, dbFile := openDBRead(ic.dBFullPath)
 		if ok {
-			ic.LoadDB(dbFile)
+			ic.loadDB(dbFile)
 		}
 
-		ic.DBWriter()
+		ic.dBWriter()
 	}
-	e := ic.Insert(dbname)
+	e := ic.insert(dbname)
 
-	ic.Level = e.Level
-	ic.Id = e.Id
+	ic.level = e.Level
+	ic.id = e.Id
 
 	return &ic
 }
 
-func (db *Tree) GetCollection(key CollectionKey) Collection {
+func (db *Tree) GetCollection(key CollectionKey) *Collection {
 	colMutex.Lock()
 	defer colMutex.Unlock()
 
 	found, col := db.Get(key)
 	if !found {
-		col = Initialize(key.Database, key.Collection, false, db.writeToDisk)
-		db.Put(key, col)
+		col = initialize(key.Database, key.Collection, false, db.writeToDisk)
+		db.put(key, col)
 	}
 
-	return col.(Collection)
+	return col.(*Collection)
 }

@@ -1,281 +1,173 @@
-package tie
+package client
 
 import (
-	"crypto/tls"
-	"encoding/hex"
-	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"log"
-	"os"
-	"os/user"
-
-	// "strconv"
-	"strings"
-
-	"path/filepath"
-
-	"github.com/go-resty/resty/v2"
-
-	"git.sr.ht/~uid/tie/io/putlib"
-	// "git.sr.ht/~uid/tie/metadata"
-	"git.sr.ht/~uid/tie/request"
+	"git.sr.ht/~uid/tie/api"
+	ws "git.sr.ht/~uid/tie/webservice"
 )
 
-var (
-	CurrentState State
-	Config       string
-	ConfigDir    string
-	ConfigPath   string
-)
+// Default values
+var config = Config{
+	Username:      "defaultuser",
+	Password:      "defaultpassword",
+	Webservice:    "https://localhost:1161",
+	Namespace:     "Collections",
+	Collection:    "Main",
+	ServeUrl:      "https://localhost:1162",
+	DataHost:      "/data",
+	ThumbnailHost: "/mnt/thumbnails",
+	Key:           InitKey(),
+}
 
 const (
-	tieKey = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
+	tieKey            = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
+	defaultConfigFile = "config"
 )
 
-func InitKey() []byte {
-	k, err := hex.DecodeString(tieKey)
-	if err != nil {
-		fmt.Printf("Cannot decode hex key: %v", err) // add error handling
-		return nil
+func NewTieClient(config Config) (client *TieClient) {
+	client = &TieClient{
+		Config: config,
+		client: ws.NewClient(config.Webservice, config.Username, config.Password),
 	}
 
-	return k
+	return client
 }
 
-func InitConfig() {
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-	if ConfigDir, err := os.Getwd(); err == nil {
-		ConfigPath = ConfigDir + "/" + Config + ".json"
-	}
-	// If config file does not exist in workdir, then assume config will be in $HOME/.config/tie
-	if _, err := os.Stat(ConfigPath); os.IsNotExist(err) {
-		ConfigDir = filepath.Join(usr.HomeDir, ".config", "tie")
-		ConfigPath = ConfigDir + "/" + Config + ".json"
-
-		if _, err := os.Stat(ConfigPath); os.IsNotExist(err) {
-			if _, err2 := os.Stat(ConfigDir); os.IsNotExist(err2) {
-				if os.MkdirAll(ConfigDir, 0777) != nil {
-					panic("Can't create " + ConfigDir + "\nExiting...")
-				}
-			}
-			// Default values
-			s := State{
-				Webservice:    "https://localhost:1161",
-				Namespace:     "Collections",
-				Collection:    "Main",
-				ServeUrl:      "http://localhost:1162",
-				DataHost:      "/data",
-				ThumbnailHost: "/mnt/thumbnails",
-			}
-			CurrentState = s
-
-			SaveJSON(ConfigPath, CurrentState)
-			PrintState()
-			return
-		}
-	}
-	LoadJSON(ConfigPath, &CurrentState)
-	CurrentState.Key = InitKey()
-	PrintState()
+func (tc *TieClient) CollectionInfo() api.CollectionInfo {
+	return api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 }
 
-func TieAdd(Entry1, Relation, Entry2 string, addHandler func(json.RawMessage)) {
-	// type Association struct {
-	// 	Key    string
-	// 	Value1 string
-	// 	Value2 string
-	// }
-	a := request.Add{
-		Key:    Entry1,
-		Value1: Relation,
-		Value2: Entry2,
-	}
-	b, _ := json.Marshal(a)
-	SendToWebservice("Add", b, addHandler)
-}
+func (tc *TieClient) Add(key, value1, value2 string, handler func(reply *api.AddReply)) {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewAddRequest(key, value1, value2)
 
-func Tag(path string, tags []string, options TagOptions, addHandler func(json.RawMessage)) {
-	pc := putlib.PutConfig{}
-	pc.JsonOutput = true
-	pc.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
-	status := putlib.Upload(CurrentState.ServeUrl, path, pc)
-	if status.ErrorMsg != "" {
-		fmt.Println("Error:", status.ErrorMsg)
-	}
-	if status.LastItem.Hash != "" {
-		info := status.LastItem
-		// uid := metalib.HashFunction + "/" + info.MediaType + "/" + info.Hash
-		base := filepath.Base(path)
-		TieAdd("file", "highway-hash", info.Hash, addHandler)
-		TieAdd(info.Hash, "context", "tiehashv1", addHandler)
-		TieAdd(info.Hash, "filename", base, addHandler)
-		TieAdd(info.Hash, "media-type", info.MediaType, addHandler)
-		if options.AddOriginalPath {
-			TieAdd(info.Hash, "original-path", path, addHandler)
-		}
-		for _, x := range tags {
-			TieAdd(info.Hash, "tag", x, addHandler)
-		}
-		if len(tags) != 0 {
-			fmt.Println(info.Hash, "tag", tags)
-		} else {
-			fmt.Println(info.Hash)
-		}
-		p := strings.Split(info.MediaType, "/")
-		if len(p) == 2 {
-			switch p[0] {
-			case "video":
-				if height := GetVideoHeight(path); height != "" {
-					TieAdd(info.Hash, "tag", height, addHandler)
-				}
-
-			case "image":
-
-			case "audio":
-				// FIXME
-				// audio := metadata.Audio{}
-				// if err := json.Unmarshal([]byte(output), &audio); err == nil {
-				// 	if audio.Album != "" {
-				// 		TieAdd(audio.Hash, "album", audio.Album, addHandler)
-				// 	}
-				// 	if audio.Artist != "" {
-				// 		TieAdd(audio.Hash, "artist", audio.Artist, addHandler)
-				// 	}
-				// 	if audio.Title != "" {
-				// 		TieAdd(audio.Hash, "title", audio.Title, addHandler)
-				// 	}
-				// 	if audio.Track != 0 {
-				// 		TieAdd(audio.Hash, "track", strconv.Itoa(audio.Track), addHandler)
-				// 	}
-				// 	if audio.Year != 0 {
-				// 		TieAdd(audio.Hash, "year", strconv.Itoa(audio.Year), addHandler)
-				// 	}
-				// }
-			}
-		}
-	}
-}
-
-func printOutput(resp *resty.Response, err error) {
-	if CurrentState.Verbose {
-		fmt.Println("Response from Web Service:")
-		fmt.Println(string(resp.Body()))
-	}
-	if err != nil {
-		fmt.Println("Error communicating with web service:", resp, err)
-	}
-}
-
-func SendToWebservice(command string, body json.RawMessage, handler func(json.RawMessage)) {
-	if len(CurrentState.Webservice) < 5 {
-		return
-	}
-	var r *resty.Client
-	if CurrentState.Webservice[0:5] == "https" {
-		t := tls.Config{}
-		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
-		r = resty.New().SetTLSClientConfig(&t)
+	if genericReply, err := tc.client.Run(request); err != nil {
+		reply := &api.AddReply{}
+		reply.Success = false
+		reply.Message = err.Error()
+		handler(reply)
 	} else {
-		r = resty.New()
+		reply := ws.ReadReply[api.AddReply](genericReply)
+		handler(reply)
 	}
-	resp, err := r.R().
-		SetHeader("Content-Type", "application/json").
-		SetBody(body).
-		SetResult(AuthSuccess{}).
-		Post(CurrentState.Webservice + "/" + CurrentState.Namespace + "/" + CurrentState.Collection + "/" + command)
-
-	printOutput(resp, err)
-	handler(resp.Body())
 }
 
-func Run(tieRequest request.Request) (*request.Reply, error) {
-	if len(CurrentState.Webservice) < 5 {
-		e := request.CreateReply(request.ReplyTypeEmpty)
-		return &e, errors.New("Webservice not set")
-	}
-	var r *resty.Client
-	if CurrentState.Webservice[0:5] == "https" {
-		t := tls.Config{}
-		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
-		r = resty.New().SetTLSClientConfig(&t)
+func (tc *TieClient) Get(key string, handler func(reply *api.GetReply)) {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewGetRequest(key)
+
+	if genericReply, err := tc.client.Run(request); err != nil {
+		reply := &api.GetReply{}
+		reply.Success = false
+		reply.Message = err.Error()
+		handler(reply)
 	} else {
-		r = resty.New()
+		reply := ws.ReadReply[api.GetReply](genericReply)
+		handler(reply)
 	}
-	body, errMarshal := json.Marshal(tieRequest)
-	if errMarshal != nil {
-		e := request.CreateReply(request.ReplyTypeEmpty)
-		return &e, errMarshal
-	}
-	var reply = request.CreateReply(tieRequest.RequestType())
-	resp, err := r.R().
-		SetHeader("Content-Type", "application/json").
-		SetBody(body).
-		Post(CurrentState.Webservice + "/" + CurrentState.Namespace + "/" + CurrentState.Collection + "/" + reply.RequestString)
-
-	printOutput(resp, err)
-
-	var errUnmarshal error
-	switch reply.ReplyType {
-	case request.ReplyTypeGet:
-		var res []request.ReplyGet
-		errUnmarshal = json.Unmarshal(resp.Body(), &res)
-		reply.ReplyStruct = &res
-
-	case request.ReplyTypeBatch:
-		var res request.ReplyBatch
-		errUnmarshal = json.Unmarshal(resp.Body(), &res)
-		reply.ReplyStruct = &res
-
-	case request.ReplyTypeStatus:
-		var res request.ReplyStatus
-		errUnmarshal = json.Unmarshal(resp.Body(), &res)
-		reply.ReplyStruct = &res
-
-	default:
-		errUnmarshal = errors.New("Error unmarshalling: Unknown ReplyType")
-
-	}
-
-	if errUnmarshal != nil {
-		return nil, errUnmarshal
-	}
-
-	return &reply, err
 }
 
-func LoadJSON(inputFile string, dest interface{}) bool {
-	file, err := os.Open(inputFile)
+func (tc *TieClient) Delete(key, value1, value2 string, handler func(reply *api.DeleteReply)) {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewDeleteRequest(key, value1, value2)
 
-	if err != nil {
-		log.Fatal(err)
-		return false
+	if genericReply, err := tc.client.Run(request); err != nil {
+		reply := &api.DeleteReply{}
+		reply.Success = false
+		reply.Message = err.Error()
+		handler(reply)
 	} else {
-		input, err2 := io.ReadAll(file)
-		json.Unmarshal(input, &dest)
-		if err2 != nil {
-			log.Fatal(err2)
-			return false
-		} else {
-			if CurrentState.Verbose {
-				log.Println("Loading succeeded: " + inputFile)
-			}
-			return true
-		}
+		reply := ws.ReadReply[api.DeleteReply](genericReply)
+		handler(reply)
 	}
 }
 
-func SaveJSON(outputFile string, source interface{}) bool {
-	b, _ := json.Marshal(source)
-	err := os.WriteFile(outputFile, b, 0766)
-	if err != nil {
-		log.Fatal(err)
-		return false
+func (tc *TieClient) Update(update api.Update, handler func(reply *api.UpdateReply)) {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewUpdateRequest(update)
+
+	if genericReply, err := tc.client.Run(request); err != nil {
+		reply := &api.UpdateReply{}
+		reply.Success = false
+		reply.Message = err.Error()
+		handler(reply)
 	} else {
-		return true
+		reply := ws.ReadReply[api.UpdateReply](genericReply)
+		handler(reply)
 	}
 }
+
+func (tc *TieClient) Batch(batch *api.Batch, handler func(reply *api.BatchReply)) {
+	request := api.NewBatchRequest(batch)
+
+	if genericReply, err := tc.client.Run(request); err != nil {
+		reply := &api.BatchReply{}
+		reply.Success = false
+		reply.Message = err.Error()
+		handler(reply)
+	} else {
+		reply := ws.ReadReply[api.BatchReply](genericReply)
+		handler(reply)
+	}
+}
+
+// func (tc *TieClient) Tag(path string, tags []string, options TagOptions, addHandler func(json.RawMessage)) {
+// 	pc := putlib.PutConfig{}
+// 	pc.JsonOutput = true
+// 	pc.ForceGenerateThumbnails = options.PutlibForceGenerateThumbnails
+// 	status := putlib.Upload(config.State.ServeUrl, path, pc)
+// 	if status.ErrorMsg != "" {
+// 		fmt.Println("Error:", status.ErrorMsg)
+// 	}
+// 	if status.LastItem.Hash != "" {
+// 		info := status.LastItem
+// 		// uid := metalib.HashFunction + "/" + info.MediaType + "/" + info.Hash
+// 		base := filepath.Base(path)
+// 		TieAdd("file", "highway-hash", info.Hash, addHandler)
+// 		TieAdd(info.Hash, "context", "tiehashv1", addHandler)
+// 		TieAdd(info.Hash, "filename", base, addHandler)
+// 		TieAdd(info.Hash, "media-type", info.MediaType, addHandler)
+// 		if options.AddOriginalPath {
+// 			TieAdd(info.Hash, "original-path", path, addHandler)
+// 		}
+// 		for _, x := range tags {
+// 			TieAdd(info.Hash, "tag", x, addHandler)
+// 		}
+// 		if len(tags) != 0 {
+// 			fmt.Println(info.Hash, "tag", tags)
+// 		} else {
+// 			fmt.Println(info.Hash)
+// 		}
+// 		p := strings.Split(info.MediaType, "/")
+// 		if len(p) == 2 {
+// 			switch p[0] {
+// 			case "video":
+// 				if height := GetVideoHeight(path); height != "" {
+// 					TieAdd(info.Hash, "tag", height, addHandler)
+// 				}
+
+// 			case "image":
+
+// 			case "audio":
+// 				// FIXME
+// 				// audio := metadata.Audio{}
+// 				// if err := json.Unmarshal([]byte(output), &audio); err == nil {
+// 				// 	if audio.Album != "" {
+// 				// 		TieAdd(audio.Hash, "album", audio.Album, addHandler)
+// 				// 	}
+// 				// 	if audio.Artist != "" {
+// 				// 		TieAdd(audio.Hash, "artist", audio.Artist, addHandler)
+// 				// 	}
+// 				// 	if audio.Title != "" {
+// 				// 		TieAdd(audio.Hash, "title", audio.Title, addHandler)
+// 				// 	}
+// 				// 	if audio.Track != 0 {
+// 				// 		TieAdd(audio.Hash, "track", strconv.Itoa(audio.Track), addHandler)
+// 				// 	}
+// 				// 	if audio.Year != 0 {
+// 				// 		TieAdd(audio.Hash, "year", strconv.Itoa(audio.Year), addHandler)
+// 				// 	}
+// 				// }
+// 			}
+// 		}
+// 	}
+// }

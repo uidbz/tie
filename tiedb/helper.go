@@ -26,11 +26,11 @@ func Info(value string) {
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 // Used for testing worst-case scenario
-func (t *InternalCollection) WriteRandomDB(filename string) {
+func (t *Collection) WriteRandomDB(filename string) {
 	fmt.Println("Writing random database")
 	rand.Seed(time.Now().UnixNano())
 	for i := 0; i < 100000; i++ {
-		t.Insert(randSeq(100))
+		t.insert(randSeq(100))
 	}
 	fmt.Println("Done writing.")
 }
@@ -42,16 +42,16 @@ func randSeq(n int) string {
 	return string(b)
 }
 
-func (ic *InternalCollection) GetTotalEntries() uint64 {
-	return ic.TotalEntries
+func (ic *Collection) GetTotalEntries() uint64 {
+	return ic.totalEntries
 }
 
-func (ic *InternalCollection) NextID() uint64 {
+func (ic *Collection) nextID() uint64 {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
-	ic.TotalEntries = ic.TotalEntries + 1
+	ic.totalEntries = ic.totalEntries + 1
 
-	return ic.TotalEntries
+	return ic.totalEntries
 }
 
 func KeyComparator(o1, o2 interface{}) int {

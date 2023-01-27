@@ -181,7 +181,7 @@ func NewTree(writeToDisk bool) *Tree {
 }
 
 // NewTreeWith returns an empty Tree with a supplied `Comparator`.
-func NewTreeWith(c Comparator, writeToDisk bool) *Tree {
+func newTreeWith(c Comparator, writeToDisk bool) *Tree {
 	return &Tree{root: nil, cmp: c, writeToDisk: writeToDisk}
 }
 
@@ -361,7 +361,7 @@ func (t *Tree) RotateLeft(x *Node) {
 // Put saves the mapping (key, data) into the tree.
 // If a mapping identified by `key` already exists, it is overwritten.
 // Constraint: Not everything can be a key.
-func (t *Tree) Put(key interface{}, data interface{}) error {
+func (t *Tree) put(key interface{}, data interface{}) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 	// if err := mustBeValidKey(key); err != nil {
@@ -539,7 +539,7 @@ func (t *Tree) HasKeyComparator(cmp Comparator, key interface{}) bool {
 
 // Returns intersection of two trees
 func (t1 *Tree) InnerJoin(t2 *Tree, cmp Comparator) *Tree {
-	result := InnerJoinVisitor{Tree: NewTreeWith(AssociationComparator, t1.writeToDisk)}
+	result := InnerJoinVisitor{Tree: newTreeWith(AssociationComparator, t1.writeToDisk)}
 
 	result.Visit(cmp, t1.root, t2)
 
@@ -777,7 +777,7 @@ func (v *InnerJoinVisitor) Visit(cmp Comparator, node *Node, tree *Tree) {
 	}
 	v.Visit(cmp, node.left, tree)
 	if tree.HasKeyComparator(cmp, node.key) {
-		v.Tree.Put(node.key, node.payload)
+		v.Tree.put(node.key, node.payload)
 	}
 	v.Visit(cmp, node.right, tree)
 }

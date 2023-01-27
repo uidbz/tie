@@ -82,7 +82,7 @@ func TestReOpen(t *testing.T) {
 	col.Add("superkey", "value1", "file0")
 	col.Add("superkey", "value2", "file1")
 
-	col.CloseDB()
+	col.closeDB()
 	db = NewDB(true)
 	col = db.GetCollection(CollectionKey{"Collections", "test4"})
 

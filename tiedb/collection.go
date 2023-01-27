@@ -12,374 +12,90 @@ var (
 	changeLock     sync.Mutex
 )
 
-func (ic *InternalCollection) Collection(name string) Collection {
-	return ic.InternalCollectionFromString(name)
-}
+// func (ic *Collection) Collection(name string) Collection {
+// 	return ic.InternalCollectionFromString(name)
+// }
 
-func (ic *InternalCollection) InternalCollectionFromString(name string) *InternalCollection {
-	if ic.DBName == name {
+func (ic *Collection) Collection(name string) *Collection {
+	if ic.dBName == name {
 		return ic
 	}
-	e := ic.Insert(name)
-	return ic.InternalCollection(e.Level, e.Id)
+	e := ic.insert(name)
+	return ic.internalCollection(e.Level, e.Id)
 }
 
-func (ic *InternalCollection) InternalCollection(level int, id uint64) *InternalCollection {
-	if level == ic.Level && id == ic.Id {
+func (ic *Collection) internalCollection(level int, id uint64) *Collection {
+	if level == ic.level && id == ic.id {
 		return ic
 	}
 	collectionLock.Lock()
 	defer collectionLock.Unlock()
-	if found, col := ic.SubCollections[level].Get(id); !found {
-		subdir := ic.DBPath + "/" + ic.DBName + "-sub-collections"
+	if found, col := ic.subCollections[level].Get(id); !found {
+		subdir := ic.dBPath + "/" + ic.dBName + "-sub-collections"
 		os.Mkdir(subdir, 0777)
-		name := ic.GetValueString(level, id)
-		ic2 := Initialize(subdir, name, false, ic.WriteToDisk)
-		ic2.Level = level
-		ic2.Id = id
-		ic.SubCollections[level].Put(id, ic2)
+		name := ic.getValueString(level, id)
+		ic2 := initialize(subdir, name, false, ic.writeToDisk)
+		ic2.level = level
+		ic2.id = id
+		ic.subCollections[level].put(id, ic2)
 
 		return ic2
 	} else {
-		return col.(*InternalCollection)
+		return col.(*Collection)
 	}
 }
 
-func (ic *InternalCollection) SecureLevelInIndex(level int) {
-	levels := len(ic.Entries)
-
-	for i := levels; i <= level; i++ {
-		ic.EntryAdder = append(ic.EntryAdder, make(chan *Entry, 1000))
-		ic.AssociationAdder = append(ic.AssociationAdder, make(chan *Association, 1000))
-		ic.AssociationExtAdder = append(ic.AssociationExtAdder, make(chan *AssociationExt, 1000))
-
-		ic.Entries = append(ic.Entries, NewTreeWith(UInt64Comparator, ic.WriteToDisk))
-		ic.UniqueValues = append(ic.UniqueValues, NewTreeWith(UniqueValueComparator, ic.WriteToDisk))
-		ic.Associations = append(ic.Associations, NewTreeWith(UInt64Comparator, ic.WriteToDisk))
-		ic.AssociationsExt = append(ic.AssociationsExt, NewTreeWith(UniqueAssociationComparator, ic.WriteToDisk))
-		ic.SubCollections = append(ic.SubCollections, NewTreeWith(UInt64Comparator, ic.WriteToDisk))
-
-		go ic.InsertEntryAdder(i)
-		go ic.InsertAssociationAdder(i)
-		go ic.InsertAssociationExtAdder(i)
-	}
+func (ic *Collection) Add(key string, value1 string, value2 string) *Association {
+	ic.mutexAssociation.Lock()
+	defer ic.mutexAssociation.Unlock()
+	return ic.associateExt(key, ic.dBName, value1, ic.dBName, value2)
 }
 
-func (ic *InternalCollection) ValueExists(level int, parentId uint64, value []byte) (bool, *Entry) {
-	ic.SecureLevelInIndex(level)
-
-	if len(value) != SIZE_VALUE {
-		fmt.Println("Assertion: ValueExists: Expected", SIZE_VALUE, "bytes, got", len(value))
-		return false, nil
-	}
-	foundVal, valPtr := ic.Values.Get(value)
-	if !foundVal {
-		return false, nil
-	}
-	found, entry := ic.UniqueValues[level].Get(UniqueValue{parentId, valPtr.(*[]byte)})
-	if !found {
-		return false, nil
-	} else {
-		return found, entry.(*Entry)
-	}
-}
-
-func (ic *InternalCollection) Insert(value string) *Entry {
-	changeLock.Lock()
-	defer changeLock.Unlock()
-
-	var lastParent *Entry = &ic.Root
-	bytes := []byte(value)
-	checkExistance := true
-	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
-	bytes = append(bytes, align...)
-
-	var tmp *Entry
-	for i := 0; i < len(bytes); i = i + SIZE_VALUE {
-		end := i + SIZE_VALUE
-		level := i / SIZE_VALUE
-
-		if checkExistance {
-			checkExistance, tmp = ic.ValueExists(level, lastParent.Id, bytes[i:end])
-		}
-		if checkExistance {
-			lastParent = tmp
-		} else {
-			checkExistance = false
-			lastParent = ic.InsertValue(level, lastParent.Id, bytes[i:end])
-		}
-	}
-
-	ic.Sync() // Why was this here?
-
-	return lastParent
-}
-
-func (ic *InternalCollection) GetEntryFromString(value string) (bool, *Entry) {
-	bytes := []byte(value)
-
-	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
-	bytes = append(bytes, align...)
-
-	var lastParentId uint64
-	var lastLevel int
-
-	for i := 0; i < len(bytes); i = i + SIZE_VALUE {
-		end := i + SIZE_VALUE
-		level := i / SIZE_VALUE
-
-		if exists, tmp := ic.ValueExists(level, lastParentId, bytes[i:end]); exists {
-			lastParentId = tmp.Id
-			lastLevel = level
+func (ic *Collection) Get(key string, value1 string) (bool, TripleSet) {
+	found, tree := ic.GetAssociations(key)
+	if found {
+		data, _ := ic.SetToString(key, value1, tree)
+		if data != nil {
+			return true, data
 		} else {
 			return false, nil
 		}
-	}
-
-	return true, ic.GetEntry(lastLevel, lastParentId)
-}
-
-func (ic *InternalCollection) InsertValue(level int, parentId uint64, value []byte) *Entry {
-	tmp := make([]byte, SIZE_VALUE)
-	copy(tmp, value) // This copy is extremely important!!
-	// It will give very very hard to debug problems if it is not here
-	// and if value is directly used as key.
-
-	found, valPtr := ic.Values.Get(tmp)
-	if !found {
-		ic.Values.Put(tmp, &tmp)
-		valPtr = &tmp
-	}
-
-	e := &Entry{Id: ic.NextID(),
-		Level:       level,
-		UniqueValue: UniqueValue{parentId, valPtr.(*[]byte)},
-	}
-
-	if ic.WriteToDisk {
-		m := FileMod{
-			Mode:  FILE_APPEND,
-			Entry: e,
-		}
-		if len(ic.Freespace) > 0 {
-			tmp := <-ic.Freespace
-			pos := tmp.GetPosition()
-			e.SetPosition(pos)
-			m.Mode = FILE_UPDATE
-		}
-		ic.DBWriteQueue <- m
-	}
-	ic.InsertEntry(level, e)
-
-	return e
-}
-
-func (t *InternalCollection) InsertEntryAdder(level int) {
-	for e := range t.EntryAdder[level] {
-		err := t.Entries[level].Put(e.Id, e)
-		if err != nil {
-			fmt.Println("Error inserting entry:", err.Error())
-		}
-		if err = t.UniqueValues[level].Put(e.UniqueValue, e); err != nil {
-			fmt.Println("Error inserting entry (value):", err.Error())
-		}
-
-		t.InserterWG.Done()
+	} else {
+		return false, nil
 	}
 }
 
-func (ic *InternalCollection) InsertAssociationAdder(level int) {
-	for a := range ic.AssociationAdder[level] {
-		found, s := ic.Associations[level].Get(a.EntryId)
-		if !found {
-			ass := NewTreeWith(UniqueAssociationComparator, ic.WriteToDisk)
-			key := UniqueAssociation{
-				AssociateTo: a.AssociateTo,
-				Relation:    a.Relation,
-			}
-			ass.Put(key, a)
-			err := ic.Associations[level].Put(a.EntryId, ass)
-			if err != nil {
-				fmt.Println("Error inserting Association:", err.Error())
-			}
-		} else {
-			ass := s.(*Tree)
-			key := UniqueAssociation{
-				AssociateTo: a.AssociateTo,
-				Relation:    a.Relation,
-			}
-			ass.Put(key, a)
-		}
-
-		ic.mu2.Lock()
-		ic.TotalAsses = ic.TotalAsses + 1
-		ic.InserterWGAssociation.Done()
-		ic.mu2.Unlock()
-	}
-}
-
-func (ic *InternalCollection) InsertAssociationExtAdder(level int) {
-	// fmt.Println("starting", level)
-	// asses := ic.GetAssociationsFromEntry(e1)
-
-	// // var keyExt UniqueAssociationExt
-
-	// // if localIC {
-	// if f, a := asses.Get(key); f {
-	// 	return a.(*Association)
-	// }
-	for aExt := range ic.AssociationExtAdder[level] {
-		id := UniqueAssociation{
-			AssociateTo: aExt.AssociateTo,
-			Relation:    aExt.Relation,
-		}
-		// if found, s := ic.Associations[level].Get(aExt.EntryId); found { // Only insert AssExt if Ass exists
-		foundExt, sExt := ic.AssociationsExt[level].Get(id)
-		if !foundExt {
-			ass := NewTreeWith(UniqueAssociationExtComparator, ic.WriteToDisk)
-			key := UniqueAssociationExt{
-				AssociateToCollection: aExt.AssociationCollection,
-				AssociateTo:           aExt.AssociateTo,
-				RelationCollection:    aExt.RelationCollection,
-				Relation:              aExt.Relation,
-			}
-			ass.Put(key, aExt)
-			err := ic.AssociationsExt[level].Put(id, ass)
-			if err != nil {
-				fmt.Println("Error inserting Association:", err.Error())
-			}
-		} else {
-			ass := sExt.(*Tree)
-			key := UniqueAssociationExt{
-				AssociateToCollection: aExt.AssociationCollection,
-				AssociateTo:           aExt.AssociateTo,
-				RelationCollection:    aExt.RelationCollection,
-				Relation:              aExt.Relation,
-			}
-			ass.Put(key, aExt)
-		}
-
-		ic.mu2.Lock()
-		ic.TotalAsses = ic.TotalAsses + 1
-		ic.InserterWGAssociationExt.Done()
-		ic.mu2.Unlock()
-	}
-	// }
-}
-
-func (ic *InternalCollection) InsertEntry(level int, e *Entry) {
-	ic.SecureLevelInIndex(level)
-	ic.InserterWG.Add(1)
-	ic.EntryAdder[level] <- e
-}
-
-func (ic *InternalCollection) InsertAssociation(level int, a *Association) {
-	ic.SecureLevelInIndex(level)
-	ic.InserterWGAssociation.Add(1)
-	ic.AssociationAdder[level] <- a
-}
-
-func (ic *InternalCollection) InsertAssociationExt(level int, a *AssociationExt) {
-	ic.SecureLevelInIndex(level)
-	ic.InserterWGAssociationExt.Add(1)
-	ic.AssociationExtAdder[level] <- a
-}
-
-func (ic *InternalCollection) GetEntry(level int, id uint64) *Entry {
-	if level < 0 {
-		return &ic.Root
-	}
-	if level < len(ic.Entries) {
-		if ok, entry := ic.Entries[level].Get(id); ok {
-			return entry.(*Entry)
-		}
-	}
-	return &ic.Root
-}
-
-func (ic *InternalCollection) GetAssociations(value string) (bool, *Tree) {
-	found, e := ic.GetEntryFromString(value)
+func (ic *Collection) GetAssociations(value string) (bool, *Tree) {
+	found, e := ic.getEntryFromString(value)
 	if !found {
 		return false, &Tree{}
 	}
 
-	return true, ic.GetAssociationsFromEntry(e)
+	return true, ic.getAssociationsFromEntry(e)
 }
 
-func (ic *InternalCollection) GetAssociationsExt(value string, entryCollection string) (bool, *Tree) {
-	found, c := ic.GetEntryFromString(entryCollection)
+func (ic *Collection) GetAssociationsExt(value string, entryCollection string) (bool, *Tree) {
+	found, c := ic.getEntryFromString(entryCollection)
 	if !found {
 		return false, nil
 	}
-	col := ic.InternalCollection(c.Level, c.Id)
-	found2, e := col.GetEntryFromString(value)
+	col := ic.internalCollection(c.Level, c.Id)
+	found2, e := col.getEntryFromString(value)
 	if !found2 {
 		return false, nil
 	}
 
-	return true, ic.GetAssociationsFromEntry(e)
+	return true, ic.getAssociationsFromEntry(e)
 }
 
-func (ic *InternalCollection) GetAssociationsFromEntry(e *Entry) *Tree {
-	if e.Level >= 0 && e.Level < len(ic.Associations) {
-		found, set := ic.Associations[e.Level].Get(e.Id)
-		if found {
-			return set.(*Tree)
-		}
-	}
-	return NewTreeWith(UInt64Comparator, ic.WriteToDisk)
-}
-
-func (ic *InternalCollection) GetAssociationsExtFromEntry(e *Entry) *Tree {
-	if e.Level >= 0 && e.Level < len(ic.AssociationsExt) {
-		found, set := ic.AssociationsExt[e.Level].Get(e.Id)
-		if found {
-			return set.(*Tree)
-		}
-	}
-	return NewTreeWith(UInt64Comparator, ic.WriteToDisk)
-}
-
-// Returns a copy of full value
-func (ic *InternalCollection) GetValue(level int, id uint64) []byte {
-	if level <= 0 {
-		return *ic.GetEntry(0, id).UniqueValue.Value
-	}
-	e := ic.GetEntry(level, id)
-	if e != nil {
-		return append(ic.GetValue(level-1, e.UniqueValue.ParentId), *e.UniqueValue.Value...)
-	}
-	return nil
-}
-
-func (ic *InternalCollection) GetValueString(level int, id uint64) string {
-	value := ic.GetValue(level, id)
-	value = bytes.Trim(value, "\x00")
-
-	return string(value)
-}
-
-func (ic *InternalCollection) GetValueStringFromEntry(e *Entry) string {
-	value := ic.GetValue(e.Level, e.Id)
-	value = bytes.Trim(value, "\x00")
-	return string(value)
-}
-
-func (ic *InternalCollection) Sync() {
-	ic.InserterWG.Wait()
-	ic.InserterWGAssociation.Wait()
-	ic.InserterWGAssociationExt.Wait()
-	ic.InserterWGDynTrie.Wait()
-}
-
-func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (bool, string) {
+func (ic *Collection) Delete(key string, value1 string, value2 string) (bool, string) {
 	changeLock.Lock()
 	defer changeLock.Unlock()
 
 	found, asses := ic.GetAssociations(key)
 	if found {
-		f1, e2 := ic.GetEntryFromString(value2)
-		f2, r := ic.GetEntryFromString(value1)
+		f1, e2 := ic.getEntryFromString(value2)
+		f2, r := ic.getEntryFromString(value1)
 
 		if f1 && f2 {
 			assKey := UniqueAssociation{
@@ -389,7 +105,7 @@ func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (
 				Relation: r.Id,
 			}
 			if f, a := asses.Get(assKey); f {
-				ic.DeleteAssociation(asses, assKey, a.(*Association))
+				ic.deleteAssociation(asses, assKey, a.(*Association))
 				return true, ""
 			}
 		}
@@ -399,7 +115,7 @@ func (ic *InternalCollection) Delete(key string, value1 string, value2 string) (
 	}
 }
 
-func (ic *InternalCollection) Update(key string, value1 string, value2 string, newValue2 string) (bool, string) {
+func (ic *Collection) Update(key string, value1 string, value2 string, newValue2 string) (bool, string) {
 	if ok, msg := ic.Delete(key, value1, value2); ok {
 		ic.Add(key, value1, newValue2)
 		return true, ""
@@ -409,7 +125,7 @@ func (ic *InternalCollection) Update(key string, value1 string, value2 string, n
 }
 
 // Try to update value2 to newvalue2. Add if unsuccessful. TODO: Add error checking
-func (ic *InternalCollection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string) {
+func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string) {
 	if ok, msg := ic.Delete(key, value1, value2); ok {
 		ic.Add(key, value1, newValue2)
 		return true, ""
@@ -420,27 +136,30 @@ func (ic *InternalCollection) UpdateAdd(key string, value1 string, value2 string
 }
 
 // Update first occurence of a value2. More expensive SimpleUpdateUsingSet - use that if udating many values
-func (ic *InternalCollection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string) {
-	found, set := ic.Get(key, value1)
-	if found {
-		if len(set.Value1) != len(set.Value2) {
-			return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
-		}
-		for i, x := range set.Value1 {
-			if x == value1 {
-				return ic.Update(key, value1, set.Value2[i], newValue2)
-			}
-		}
-	}
-	if addOnFail {
-		ic.Add(key, value1, newValue2)
-		return true, ""
-	}
+func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string) {
+	// found, set := ic.Get(key, value1)
+	// if found {
+	// 	// TODO: Fix
+	// 	// if len(set.Value1) != len(set.Value2) { // TODO: Understand what was the idea behind this. Don't remember.
+	// 	// 	return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
+	// 	// }
+	// 	// if (*set)[key][value1][]
+	// 	// ic.Update(key, value1, (*set)[key][value1], newValue2)
+	// 	// for i, x := range set.Value1 {
+	// 	// 	if x == value1 {
+	// 	// 		return ic.Update(key, value1, set.Value2[i], newValue2)
+	// 	// 	}
+	// 	// }
+	// }
+	// if addOnFail {
+	// 	ic.Add(key, value1, newValue2)
+	// 	return true, ""
+	// }
 	return false, "'" + key + "' with value1: '" + value1 + "' does not exist."
 }
 
 // Update first occurence of a value2
-func (ic *InternalCollection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string) {
+func (ic *Collection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string) {
 	if set != nil && set.Value1 != nil && set.Value2 != nil {
 		if len(set.Value1) != len(set.Value2) {
 			return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
@@ -458,30 +177,334 @@ func (ic *InternalCollection) SimpleUpdateUsingSet(key string, value1 string, ne
 	return false, "'" + key + "' with value1: '" + value1 + "' does not exist."
 }
 
-func (ic *InternalCollection) DeleteEntry(e *Entry) {
-	ic.Entries[e.Level].Delete(e.Id) //TODO: Make thread safe
+func (ic *Collection) secureLevelInIndex(level int) {
+	levels := len(ic.entries)
 
-	if ic.WriteToDisk {
+	for i := levels; i <= level; i++ {
+		ic.entryAdder = append(ic.entryAdder, make(chan *Entry, 1000))
+		ic.associationAdder = append(ic.associationAdder, make(chan *Association, 1000))
+		ic.associationExtAdder = append(ic.associationExtAdder, make(chan *AssociationExt, 1000))
+
+		ic.entries = append(ic.entries, newTreeWith(UInt64Comparator, ic.writeToDisk))
+		ic.uniqueValues = append(ic.uniqueValues, newTreeWith(UniqueValueComparator, ic.writeToDisk))
+		ic.associations = append(ic.associations, newTreeWith(UInt64Comparator, ic.writeToDisk))
+		ic.associationsExt = append(ic.associationsExt, newTreeWith(UniqueAssociationComparator, ic.writeToDisk))
+		ic.subCollections = append(ic.subCollections, newTreeWith(UInt64Comparator, ic.writeToDisk))
+
+		go ic.insertEntryAdder(i)
+		go ic.insertAssociationAdder(i)
+		go ic.insertAssociationExtAdder(i)
+	}
+}
+
+func (ic *Collection) valueExists(level int, parentId uint64, value []byte) (bool, *Entry) {
+	ic.secureLevelInIndex(level)
+
+	if len(value) != SIZE_VALUE {
+		fmt.Println("Assertion: ValueExists: Expected", SIZE_VALUE, "bytes, got", len(value))
+		return false, nil
+	}
+	foundVal, valPtr := ic.values.Get(value)
+	if !foundVal {
+		return false, nil
+	}
+	found, entry := ic.uniqueValues[level].Get(UniqueValue{parentId, valPtr.(*[]byte)})
+	if !found {
+		return false, nil
+	} else {
+		return found, entry.(*Entry)
+	}
+}
+
+func (ic *Collection) insert(value string) *Entry {
+	changeLock.Lock()
+	defer changeLock.Unlock()
+
+	var lastParent *Entry = &ic.root
+	bytes := []byte(value)
+	checkExistance := true
+	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
+	bytes = append(bytes, align...)
+
+	var tmp *Entry
+	for i := 0; i < len(bytes); i = i + SIZE_VALUE {
+		end := i + SIZE_VALUE
+		level := i / SIZE_VALUE
+
+		if checkExistance {
+			checkExistance, tmp = ic.valueExists(level, lastParent.Id, bytes[i:end])
+		}
+		if checkExistance {
+			lastParent = tmp
+		} else {
+			checkExistance = false
+			lastParent = ic.insertValue(level, lastParent.Id, bytes[i:end])
+		}
+	}
+
+	ic.sync() // Why was this here?
+
+	return lastParent
+}
+
+func (ic *Collection) getEntryFromString(value string) (bool, *Entry) {
+	bytes := []byte(value)
+
+	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
+	bytes = append(bytes, align...)
+
+	var lastParentId uint64
+	var lastLevel int
+
+	for i := 0; i < len(bytes); i = i + SIZE_VALUE {
+		end := i + SIZE_VALUE
+		level := i / SIZE_VALUE
+
+		if exists, tmp := ic.valueExists(level, lastParentId, bytes[i:end]); exists {
+			lastParentId = tmp.Id
+			lastLevel = level
+		} else {
+			return false, nil
+		}
+	}
+
+	return true, ic.getEntry(lastLevel, lastParentId)
+}
+
+func (ic *Collection) insertValue(level int, parentId uint64, value []byte) *Entry {
+	tmp := make([]byte, SIZE_VALUE)
+	copy(tmp, value) // This copy is extremely important!!
+	// It will give very very hard to debug problems if it is not here
+	// and if value is directly used as key.
+
+	found, valPtr := ic.values.Get(tmp)
+	if !found {
+		ic.values.put(tmp, &tmp)
+		valPtr = &tmp
+	}
+
+	e := &Entry{Id: ic.nextID(),
+		Level:       level,
+		UniqueValue: UniqueValue{parentId, valPtr.(*[]byte)},
+	}
+
+	if ic.writeToDisk {
+		m := FileMod{
+			Mode:  FILE_APPEND,
+			Entry: e,
+		}
+		if len(ic.freespace) > 0 {
+			tmp := <-ic.freespace
+			pos := tmp.getPosition()
+			e.setPosition(pos)
+			m.Mode = FILE_UPDATE
+		}
+		ic.dBWriteQueue <- m
+	}
+	ic.insertEntry(level, e)
+
+	return e
+}
+
+func (t *Collection) insertEntryAdder(level int) {
+	for e := range t.entryAdder[level] {
+		err := t.entries[level].put(e.Id, e)
+		if err != nil {
+			fmt.Println("Error inserting entry:", err.Error())
+		}
+		if err = t.uniqueValues[level].put(e.UniqueValue, e); err != nil {
+			fmt.Println("Error inserting entry (value):", err.Error())
+		}
+
+		t.inserterWG.Done()
+	}
+}
+
+func (ic *Collection) insertAssociationAdder(level int) {
+	for a := range ic.associationAdder[level] {
+		found, s := ic.associations[level].Get(a.EntryId)
+		if !found {
+			ass := newTreeWith(UniqueAssociationComparator, ic.writeToDisk)
+			key := UniqueAssociation{
+				AssociateTo: a.AssociateTo,
+				Relation:    a.Relation,
+			}
+			ass.put(key, a)
+			err := ic.associations[level].put(a.EntryId, ass)
+			if err != nil {
+				fmt.Println("Error inserting Association:", err.Error())
+			}
+		} else {
+			ass := s.(*Tree)
+			key := UniqueAssociation{
+				AssociateTo: a.AssociateTo,
+				Relation:    a.Relation,
+			}
+			ass.put(key, a)
+		}
+
+		ic.mu2.Lock()
+		ic.totalAsses = ic.totalAsses + 1
+		ic.inserterWGAssociation.Done()
+		ic.mu2.Unlock()
+	}
+}
+
+func (ic *Collection) insertAssociationExtAdder(level int) {
+	// fmt.Println("starting", level)
+	// asses := ic.GetAssociationsFromEntry(e1)
+
+	// // var keyExt UniqueAssociationExt
+
+	// // if localIC {
+	// if f, a := asses.Get(key); f {
+	// 	return a.(*Association)
+	// }
+	for aExt := range ic.associationExtAdder[level] {
+		id := UniqueAssociation{
+			AssociateTo: aExt.AssociateTo,
+			Relation:    aExt.Relation,
+		}
+		// if found, s := ic.Associations[level].Get(aExt.EntryId); found { // Only insert AssExt if Ass exists
+		foundExt, sExt := ic.associationsExt[level].Get(id)
+		if !foundExt {
+			ass := newTreeWith(UniqueAssociationExtComparator, ic.writeToDisk)
+			key := UniqueAssociationExt{
+				AssociateToCollection: aExt.AssociationCollection,
+				AssociateTo:           aExt.AssociateTo,
+				RelationCollection:    aExt.RelationCollection,
+				Relation:              aExt.Relation,
+			}
+			ass.put(key, aExt)
+			err := ic.associationsExt[level].put(id, ass)
+			if err != nil {
+				fmt.Println("Error inserting Association:", err.Error())
+			}
+		} else {
+			ass := sExt.(*Tree)
+			key := UniqueAssociationExt{
+				AssociateToCollection: aExt.AssociationCollection,
+				AssociateTo:           aExt.AssociateTo,
+				RelationCollection:    aExt.RelationCollection,
+				Relation:              aExt.Relation,
+			}
+			ass.put(key, aExt)
+		}
+
+		ic.mu2.Lock()
+		ic.totalAsses = ic.totalAsses + 1
+		ic.inserterWGAssociationExt.Done()
+		ic.mu2.Unlock()
+	}
+	// }
+}
+
+func (ic *Collection) insertEntry(level int, e *Entry) {
+	ic.secureLevelInIndex(level)
+	ic.inserterWG.Add(1)
+	ic.entryAdder[level] <- e
+}
+
+func (ic *Collection) insertAssociation(level int, a *Association) {
+	ic.secureLevelInIndex(level)
+	ic.inserterWGAssociation.Add(1)
+	ic.associationAdder[level] <- a
+}
+
+func (ic *Collection) insertAssociationExt(level int, a *AssociationExt) {
+	ic.secureLevelInIndex(level)
+	ic.inserterWGAssociationExt.Add(1)
+	ic.associationExtAdder[level] <- a
+}
+
+func (ic *Collection) getEntry(level int, id uint64) *Entry {
+	if level < 0 {
+		return &ic.root
+	}
+	if level < len(ic.entries) {
+		if ok, entry := ic.entries[level].Get(id); ok {
+			return entry.(*Entry)
+		}
+	}
+	return &ic.root
+}
+
+func (ic *Collection) getAssociationsFromEntry(e *Entry) *Tree {
+	if e.Level >= 0 && e.Level < len(ic.associations) {
+		found, set := ic.associations[e.Level].Get(e.Id)
+		if found {
+			return set.(*Tree)
+		}
+	}
+	return newTreeWith(UInt64Comparator, ic.writeToDisk)
+}
+
+func (ic *Collection) getAssociationsExtFromEntry(e *Entry) *Tree {
+	if e.Level >= 0 && e.Level < len(ic.associationsExt) {
+		found, set := ic.associationsExt[e.Level].Get(e.Id)
+		if found {
+			return set.(*Tree)
+		}
+	}
+	return newTreeWith(UInt64Comparator, ic.writeToDisk)
+}
+
+// Returns a copy of full value
+func (ic *Collection) getValue(level int, id uint64) []byte {
+	if level <= 0 {
+		return *ic.getEntry(0, id).UniqueValue.Value
+	}
+	e := ic.getEntry(level, id)
+	if e != nil {
+		return append(ic.getValue(level-1, e.UniqueValue.ParentId), *e.UniqueValue.Value...)
+	}
+	return nil
+}
+
+func (ic *Collection) getValueString(level int, id uint64) string {
+	value := ic.getValue(level, id)
+	value = bytes.Trim(value, "\x00")
+
+	return string(value)
+}
+
+func (ic *Collection) getValueStringFromEntry(e *Entry) string {
+	value := ic.getValue(e.Level, e.Id)
+	value = bytes.Trim(value, "\x00")
+	return string(value)
+}
+
+func (ic *Collection) sync() {
+	ic.inserterWG.Wait()
+	ic.inserterWGAssociation.Wait()
+	ic.inserterWGAssociationExt.Wait()
+	ic.inserterWGDynTrie.Wait()
+}
+
+func (ic *Collection) deleteEntry(e *Entry) {
+	ic.entries[e.Level].Delete(e.Id) //TODO: Make thread safe
+
+	if ic.writeToDisk {
 		m := FileMod{
 			Mode:  FILE_DELETE,
 			Entry: e,
 		}
-		ic.DBWriteQueue <- m
+		ic.dBWriteQueue <- m
 	}
 }
 
-func (ic *InternalCollection) DeleteAssociation(tree *Tree, key UniqueAssociation, a *Association) {
+func (ic *Collection) deleteAssociation(tree *Tree, key UniqueAssociation, a *Association) {
 	// ic.mutexAssociation.Lock()
 	// defer ic.mutexAssociation.Unlock()
 
 	tree.Delete(key) //TODO: Test if thread safe
 
-	if ic.WriteToDisk {
+	if ic.writeToDisk {
 		m := FileMod{
 			Mode:  FILE_DELETE,
 			Entry: a,
 		}
-		ic.DBWriteQueue <- m
+		ic.dBWriteQueue <- m
 	}
 }
 
@@ -498,28 +521,8 @@ func (ic *InternalCollection) DeleteAssociation(tree *Tree, key UniqueAssociatio
 // 	ic.DBWriteQueue <- m
 // }
 
-func (ic *InternalCollection) Add(key string, value1 string, value2 string) *Association {
-	ic.mutexAssociation.Lock()
-	defer ic.mutexAssociation.Unlock()
-	return ic.AssociateExt(key, ic.DBName, value1, ic.DBName, value2)
-}
-
-func (ic *InternalCollection) Get(key string, value1 string) (bool, *StringSliceSet) {
-	found, tree := ic.GetAssociations(key)
-	if found {
-		data, _ := ic.SetToString(key, value1, tree)
-		if data != nil {
-			return true, data
-		} else {
-			return false, nil
-		}
-	} else {
-		return false, nil
-	}
-}
-
-func (ic *InternalCollection) GetUniqueAssociation(key *Entry, value1 *Entry, value2 *Entry) (bool, *Association) {
-	asses := ic.GetAssociationsFromEntry(key)
+func (ic *Collection) getUniqueAssociation(key *Entry, value1 *Entry, value2 *Entry) (bool, *Association) {
+	asses := ic.getAssociationsFromEntry(key)
 
 	subkey := UniqueAssociation{
 		AssociateTo: value1.Id,
@@ -533,12 +536,12 @@ func (ic *InternalCollection) GetUniqueAssociation(key *Entry, value1 *Entry, va
 }
 
 // TODO: Rename relation to value1, entry1 = key, entry2 = value2
-func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation, entry2_collection, entry2 string) *Association {
-	e1 := ic.Insert(entry1) // Key has been decided to be in current IC
-	col2 := ic.InternalCollectionFromString(entry2_collection)
-	e2 := col2.Insert(entry2)
-	col3 := ic.InternalCollectionFromString(relation_collection)
-	r := ic.Insert(relation)
+func (ic *Collection) associateExt(entry1, relation_collection, relation, entry2_collection, entry2 string) *Association {
+	e1 := ic.insert(entry1) // Key has been decided to be in current IC
+	col2 := ic.Collection(entry2_collection)
+	e2 := col2.insert(entry2)
+	col3 := ic.Collection(relation_collection)
+	r := ic.insert(relation)
 
 	ass := Association{}
 	ass.EntryId = e1.Id
@@ -548,209 +551,179 @@ func (ic *InternalCollection) AssociateExt(entry1, relation_collection, relation
 	ass.RelationLevel = r.Level
 	ass.Relation = r.Id
 
-	if found, association := ic.GetUniqueAssociation(e1, e2, r); found {
+	if found, association := ic.getUniqueAssociation(e1, e2, r); found {
 		return association
 	}
 
-	if ic.WriteToDisk {
+	if ic.writeToDisk {
 		m := FileMod{
 			Mode:  FILE_APPEND,
 			Entry: &ass,
 		}
-		if len(ic.Freespace) > 0 {
-			tmp := <-ic.Freespace
-			ass.SetPosition(tmp.GetPosition())
+		if len(ic.freespace) > 0 {
+			tmp := <-ic.freespace
+			ass.setPosition(tmp.getPosition())
 			m.Mode = FILE_UPDATE
 		}
-		ic.DBWriteQueue <- m
+		ic.dBWriteQueue <- m
 	}
 
-	ic.InsertAssociation(ass.Level, &ass)
+	ic.insertAssociation(ass.Level, &ass)
 
-	ic.Sync() // Why was this here?
+	ic.sync() // Why was this here?
 
-	localIC := (ic.DBName == entry2_collection) && (ic.DBName == relation_collection)
+	localIC := (ic.dBName == entry2_collection) && (ic.dBName == relation_collection)
 	if !localIC {
 		assExt := AssociationExt{}
 		assExt.AssociateTo = ass.AssociateTo
 		assExt.Relation = ass.Relation
-		assExt.RelationCollectionLevel = col3.Level
-		assExt.RelationCollection = col3.Id
-		assExt.AssociationCollectionLevel = col2.Level
-		assExt.AssociationCollection = col2.Id
+		assExt.RelationCollectionLevel = col3.level
+		assExt.RelationCollection = col3.id
+		assExt.AssociationCollectionLevel = col2.level
+		assExt.AssociationCollection = col2.id
 
-		if ic.WriteToDisk {
+		if ic.writeToDisk {
 			m := FileMod{
 				Mode:  FILE_APPEND,
 				Entry: &assExt,
 			}
-			if len(ic.Freespace) > 0 {
-				tmp := <-ic.Freespace
-				assExt.SetPosition(tmp.GetPosition())
+			if len(ic.freespace) > 0 {
+				tmp := <-ic.freespace
+				assExt.setPosition(tmp.getPosition())
 				m.Mode = FILE_UPDATE
 			}
-			ic.DBWriteQueue <- m
+			ic.dBWriteQueue <- m
 		}
 
-		ic.InsertAssociationExt(assExt.RelationCollectionLevel, &assExt)
+		ic.insertAssociationExt(assExt.RelationCollectionLevel, &assExt)
 
-		ic.Sync() // Why was this here?
+		ic.sync() // Why was this here?
 	}
 
 	return &ass
 }
 
-func (ic *InternalCollection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
-	size := int(s.Size())
+// func (ic *Collection) SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
+// 	size := int(s.Size())
 
-	set := StringSliceSet{Item: value,
-		Key:    make([]string, size),
-		Value2: make([]string, size),
-		Value1: make([]string, size)}
+// 	set := StringSliceSet{Item: value,
+// 		Key:    make([]string, size),
+// 		Value2: make([]string, size),
+// 		Value1: make([]string, size)}
 
-	associationTrees := make([]*Tree, size)
+// 	associationTrees := make([]*Tree, size)
 
-	if size == 0 {
-		return &set, nil
-	}
+// 	if size == 0 {
+// 		return &set, nil
+// 	}
 
-	// start := time.Now()
-	var wg sync.WaitGroup
+// 	// start := time.Now()
+// 	var wg sync.WaitGroup
 
-	v := &ChanVisitor{}
-	v.Ch = make(chan interface{}, 1000)
-	wg.Add(size)
-	go func() {
-		i := 0
-		for t := range v.Ch {
-			x := t.(*Association)
+// 	v := &ChanVisitor{}
+// 	v.Ch = make(chan interface{}, 1000)
+// 	wg.Add(size)
+// 	go func() {
+// 		i := 0
+// 		for t := range v.Ch {
+// 			x := t.(*Association)
 
-			if i >= size { //In case results change since size was calculated
-				for j := size; j <= i; j++ {
-					set.Key = append(set.Key, "")
-					set.Value2 = append(set.Value2, "")
-					set.Value1 = append(set.Value1, "")
-					associationTrees = append(associationTrees, &Tree{})
-					wg.Add(1)
-					size++
-				}
-			}
-			set.Key[i] = ic.GetValueString(x.Level, x.EntryId)
-			set.Value2[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
-			associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
-			set.Value1[i] = ic.GetValueString(x.RelationLevel, x.Relation)
-			wg.Done()
-			i++
-		}
-	}()
-	s.Walk(v)
-	wg.Wait()
-	close(v.Ch)
+// 			if i >= size { //In case results change since size was calculated
+// 				for j := size; j <= i; j++ {
+// 					set.Key = append(set.Key, "")
+// 					set.Value2 = append(set.Value2, "")
+// 					set.Value1 = append(set.Value1, "")
+// 					associationTrees = append(associationTrees, &Tree{})
+// 					wg.Add(1)
+// 					size++
+// 				}
+// 			}
+// 			set.Key[i] = ic.getValueString(x.Level, x.EntryId)
+// 			set.Value2[i] = ic.getValueString(x.AssociationLevel, x.AssociateTo)
+// 			associationTrees[i] = ic.getAssociationsFromEntry(ic.getEntry(x.AssociationLevel, x.AssociateTo))
+// 			set.Value1[i] = ic.getValueString(x.RelationLevel, x.Relation)
+// 			wg.Done()
+// 			i++
+// 		}
+// 	}()
+// 	s.Walk(v)
+// 	wg.Wait()
+// 	close(v.Ch)
 
-	//Filters - probably should be done differently
+// 	//Filters - probably should be done differently
 
-	if relationFilter != "" {
-		n := 0
+// 	if relationFilter != "" {
+// 		n := 0
 
-		for i, x := range set.Value1 {
-			if x == relationFilter {
-				set.Value1[n] = x
-				set.Value2[n] = set.Value2[i]
-				associationTrees[n] = associationTrees[i]
-				n++
-			}
-		}
-		set.Value2 = set.Value2[:n]
-		set.Value1 = set.Value1[:n]
-		associationTrees = associationTrees[:n]
-	}
+// 		for i, x := range set.Value1 {
+// 			if x == relationFilter {
+// 				set.Value1[n] = x
+// 				set.Value2[n] = set.Value2[i]
+// 				associationTrees[n] = associationTrees[i]
+// 				n++
+// 			}
+// 		}
+// 		set.Value2 = set.Value2[:n]
+// 		set.Value1 = set.Value1[:n]
+// 		associationTrees = associationTrees[:n]
+// 	}
 
-	// fmt.Println("--- ", time.Since(start), " ---")
-	return &set, associationTrees
-}
+// 	// fmt.Println("--- ", time.Since(start), " ---")
+// 	return &set, associationTrees
+// }
 
 // New implementation of SetToString using new output format
-func (ic *InternalCollection) SetToString2(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree) {
-	size := int(s.Size())
-
-	set := StringSliceSet{Item: value,
-		Key:    make([]string, size),
-		Value2: make([]string, size),
-		Value1: make([]string, size)}
-
-	associationTrees := make([]*Tree, size)
-
-	if size == 0 {
-		return &set, nil
-	}
-
-	// start := time.Now()
-	var wg sync.WaitGroup
+func (ic *Collection) SetToString(key string, value1Filter string, s *Tree) (TripleSet, []*Tree) {
+	result := make(TripleSet)
 
 	v := &ChanVisitor{}
 	v.Ch = make(chan interface{}, 1000)
-	wg.Add(size)
 	go func() {
-		i := 0
-		for t := range v.Ch {
-			x := t.(*Association)
-
-			if i >= size { //In case results change since size was calculated
-				for j := size; j <= i; j++ {
-					set.Key = append(set.Key, "")
-					set.Value2 = append(set.Value2, "")
-					set.Value1 = append(set.Value1, "")
-					associationTrees = append(associationTrees, &Tree{})
-					wg.Add(1)
-					size++
-				}
-			}
-			set.Key[i] = ic.GetValueString(x.Level, x.EntryId)
-			set.Value2[i] = ic.GetValueString(x.AssociationLevel, x.AssociateTo)
-			associationTrees[i] = ic.GetAssociationsFromEntry(ic.GetEntry(x.AssociationLevel, x.AssociateTo))
-			set.Value1[i] = ic.GetValueString(x.RelationLevel, x.Relation)
-			wg.Done()
-			i++
-		}
+		s.Walk(v)
+		close(v.Ch)
 	}()
-	s.Walk(v)
-	wg.Wait()
-	close(v.Ch)
+
+	for t := range v.Ch {
+		x := t.(*Association)
+
+		key := ic.getValueString(x.Level, x.EntryId)
+		value1 := ic.getValueString(x.RelationLevel, x.Relation)
+		value2 := ic.getValueString(x.AssociationLevel, x.AssociateTo)
+
+		if !result.Has(key) {
+			result[key] = make(Value1)
+		}
+		if !result[key].Has(value1) {
+			result[key][value1] = make(Value2)
+		}
+		if !result[key][value1].Has(value2) {
+			result[key][value1][value2] = Unit{}
+		}
+	}
 
 	//Filters - probably should be done differently
-
-	if relationFilter != "" {
-		n := 0
-
-		for i, x := range set.Value1 {
-			if x == relationFilter {
-				set.Value1[n] = x
-				set.Value2[n] = set.Value2[i]
-				associationTrees[n] = associationTrees[i]
-				n++
-			}
-		}
-		set.Value2 = set.Value2[:n]
-		set.Value1 = set.Value1[:n]
-		associationTrees = associationTrees[:n]
+	if value1Filter != "" {
+		val1 := result[value1Filter]
+		result := make(TripleSet)
+		result[key] = make(Value1)
+		result[key] = val1
 	}
 
-	// fmt.Println("--- ", time.Since(start), " ---")
-	return &set, associationTrees
+	return result, nil
 }
 
-func (ic *InternalCollection) CloseDB() {
-	ic.Sync()
-	levels := len(ic.Entries)
+func (ic *Collection) closeDB() {
+	ic.sync()
+	levels := len(ic.entries)
 
 	for i := 0; i < levels; i++ {
-		close(ic.EntryAdder[i])
-		close(ic.AssociationAdder[i])
-		close(ic.AssociationExtAdder[i])
+		close(ic.entryAdder[i])
+		close(ic.associationAdder[i])
+		close(ic.associationExtAdder[i])
 	}
-	ic.Finished.Wait() // wait until finished writing
-	ic.DBCloseWriter <- true
-	close(ic.DBWriteQueue)
+	ic.finished.Wait() // wait until finished writing
+	ic.dBCloseWriter <- true
+	close(ic.dBWriteQueue)
 }
 
 // func (ic *InternalCollection) GetCollectionFromString(value string) (bool, *InternalCollection) {

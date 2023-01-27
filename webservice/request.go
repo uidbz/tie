@@ -11,7 +11,14 @@ const (
 type RequestInterface interface {
 	GetId() string
 	GetReplyStructPtr() interface{}
-	Reply(username string, account func(string) tiedb.Collection) (Reply, error)
+	Reply(environment *Environment) (Reply, error)
+}
+
+type Environment struct {
+	Username   string
+	Account    func(account string) *tiedb.Collection
+	Collection func(namespace, collection string) *tiedb.Collection
+	Webservice *Webservice
 }
 
 type Request struct {
@@ -50,6 +57,6 @@ type ReplyInterface interface {
 	GetMessage() string
 }
 
-func ReadReply[T ReplyInterface](reply *Reply) *T{
+func ReadReply[T ReplyInterface](reply *Reply) *T {
 	return reply.ReplyStructPtr.(*T)
 }

@@ -1,57 +1,59 @@
 package main
 
-import (
-	"fmt"
+//TODO: Update this to the new way
 
-	"git.sr.ht/~uid/tie/client"
-	"git.sr.ht/~uid/tie/request"
-)
+// import (
+// 	"fmt"
 
-func BatchHandler(reply *request.Reply, err error) {
-	if err != nil {
-		fmt.Println("Error handling 'Add' reponse:", err.Error())
-		fmt.Println("Received:", string(reply.ReplyRawResponse))
-	}
+// 	"git.sr.ht/~uid/tie/client"
+// 	"git.sr.ht/~uid/tie/request"
+// )
 
-	var result = *reply.DataBatch()
+// func BatchHandler(reply *request.Reply, err error) {
+// 	if err != nil {
+// 		fmt.Println("Error handling 'Add' reponse:", err.Error())
+// 		fmt.Println("Received:", string(reply.ReplyRawResponse))
+// 	}
 
-	for _, x := range result.Add {
-		fmt.Println("Success:", x.Success, "Message:", x.Message)
-	}
+// 	var result = *reply.DataBatch()
 
-	for _, x := range result.Get {
-		for _, y := range x {
-			for i, _ := range y.Value2 {
-				key := y.Item
-				value1 := y.Value1[i]
-				value2 := y.Value2[i]
+// 	for _, x := range result.Add {
+// 		fmt.Println("Success:", x.Success, "Message:", x.Message)
+// 	}
 
-				fmt.Println(key + "\t" + value1 + "\t" + value2)
-			}
-		}
-	}
-}
+// 	for _, x := range result.Get {
+// 		for _, y := range x {
+// 			for i, _ := range y.Value2 {
+// 				key := y.Item
+// 				value1 := y.Value1[i]
+// 				value2 := y.Value2[i]
 
-func main() {
-	tie.InitConfig()
+// 				fmt.Println(key + "\t" + value1 + "\t" + value2)
+// 			}
+// 		}
+// 	}
+// }
 
-	batch := request.NewBatchRequest()
+// func main() {
+// 	tie.InitConfig()
 
-	a := request.NewAddRequest("MyKey", "Some value 1", "Some value 2")
-	b := request.NewAddRequest("MyKey2", "Some value 1", "Some value 2")
-	c := request.NewAddRequest("MyKey3", "Some value 1", "Some value 2")
+// 	batch := request.NewBatchRequest()
 
-	d := request.NewGetRequest([]string{"MyKey"})
-	e := request.NewGetRequest([]string{"MyKey2"})
-	f := request.NewGetRequest([]string{"MyKey3"})
+// 	a := request.NewAddRequest("MyKey", "Some value 1", "Some value 2")
+// 	b := request.NewAddRequest("MyKey2", "Some value 1", "Some value 2")
+// 	c := request.NewAddRequest("MyKey3", "Some value 1", "Some value 2")
 
-	batch.Add = append(batch.Add, a)
-	batch.Add = append(batch.Add, b)
-	batch.Add = append(batch.Add, c)
+// 	d := request.NewGetRequest([]string{"MyKey"})
+// 	e := request.NewGetRequest([]string{"MyKey2"})
+// 	f := request.NewGetRequest([]string{"MyKey3"})
 
-	batch.Get = append(batch.Get, d)
-	batch.Get = append(batch.Get, e)
-	batch.Get = append(batch.Get, f)
+// 	batch.Add = append(batch.Add, a)
+// 	batch.Add = append(batch.Add, b)
+// 	batch.Add = append(batch.Add, c)
 
-	BatchHandler(tie.Run(batch))
-}
+// 	batch.Get = append(batch.Get, d)
+// 	batch.Get = append(batch.Get, e)
+// 	batch.Get = append(batch.Get, f)
+
+// 	BatchHandler(tie.Run(batch))
+// }
