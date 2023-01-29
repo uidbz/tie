@@ -40,9 +40,9 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	col := env.Collection(request.Namespace, request.CollectionId)
 
 	if request.AddOnFailure {
-		reply.Success, reply.Message = col.UpdateAdd(request.Key, request.Value1, request.Value2, request.NewValue2)
+		reply.Message, reply.Success = col.UpdateAdd(request.Key, request.Value1, request.Value2, request.NewValue2)
 	} else {
-		reply.Success, reply.Message = col.Update(request.Key, request.Value1, request.Value2, request.NewValue2)
+		reply.Message, reply.Success = col.Update(request.Key, request.Value1, request.Value2, request.NewValue2)
 	}
 
 	return ws.Reply{request.Id, reply}, nil

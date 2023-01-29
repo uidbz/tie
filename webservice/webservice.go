@@ -23,7 +23,7 @@ type Webservice struct {
 	validationCodes  map[string]string
 	validationTimers map[string]*time.Timer
 	validationMutex  sync.Mutex
-	db               *tiedb.Tree
+	db               *tiedb.TieTree
 	requestsToAnswer chan *RequestToAnswer
 }
 
@@ -115,7 +115,7 @@ func (ws *Webservice) BasicAuth(h httprouter.Handle) httprouter.Handle {
 	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 		// Get the Basic Authentication credentials
 		user, password, hasAuth := r.BasicAuth()
-		userExists, realPW := ws.GetPassword(user)
+		realPW, userExists := ws.GetPassword(user)
 		if hasAuth && userExists && password == realPW {
 			// Delegate request to the given handle
 			switch user {
@@ -141,19 +141,19 @@ func (ws *Webservice) BasicAuth(h httprouter.Handle) httprouter.Handle {
 	}
 }
 
-func (ws *Webservice) GetPassword(user string) (exists bool, password string) {
+func (ws *Webservice) GetPassword(user string) (password string, exists bool) {
 	if user == REQUESTVALIDATIONCODE || user == REQUESTCREATEACCOUNT {
-		return true, ""
+		return "", true
 	}
 	col := ws.db.GetCollection(ws.Config.authKey)
-	userExists, userdata := col.Get(user, PASSWORDFIELD)
+	userdata, userExists := col.Get(user, PASSWORDFIELD)
 	pw := ""
 	if userExists {
 		pw, _ = userdata[user][PASSWORDFIELD].One()
 		// if password == "" then do something appropriate
 	}
 
-	return userExists, pw
+	return pw, userExists
 }
 
 func RandomCode() string {
@@ -229,14 +229,14 @@ func (ws *Webservice) AddUser(username, password string) {
 
 func (ws *Webservice) DelUser(username, password string) bool {
 	col := ws.db.GetCollection(ws.Config.authKey)
-	success, _ := col.Delete(username, PASSWORDFIELD, password)
+	_, success := col.Delete(username, PASSWORDFIELD, password)
 
 	return success
 }
 
 func (ws *Webservice) UpdatePassword(username, password, newpassword string) bool {
 	col := ws.db.GetCollection(ws.Config.authKey)
-	success, _ := col.Update(username, PASSWORDFIELD, password, newpassword)
+	_, success := col.Update(username, PASSWORDFIELD, password, newpassword)
 
 	return success
 }

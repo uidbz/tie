@@ -2,6 +2,8 @@ package tiedb
 
 import (
 	"bytes"
+	"sync/atomic"
+
 	// "encoding/hex"
 	"fmt"
 	"math/rand"
@@ -47,17 +49,19 @@ func (ic *Collection) GetTotalEntries() uint64 {
 }
 
 func (ic *Collection) nextID() uint64 {
-	ic.mu.Lock()
-	defer ic.mu.Unlock()
-	ic.totalEntries = ic.totalEntries + 1
-
-	return ic.totalEntries
+	return atomic.AddUint64(&ic.totalEntries, 1)
 }
 
 func KeyComparator(o1, o2 interface{}) int {
 	k1 := o1.(CollectionKey)
 	k2 := o2.(CollectionKey)
 	return StringComparator(k1.Collection+k1.Database, k2.Collection+k2.Database)
+}
+
+func StringComparator(o1, o2 interface{}) int {
+	s1 := o1.(string)
+	s2 := o2.(string)
+	return bytes.Compare([]byte(s1), []byte(s2))
 }
 
 func UInt64Comparator(o1, o2 interface{}) int {

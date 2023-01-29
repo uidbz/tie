@@ -62,44 +62,44 @@ type CollectionKey struct {
 // }
 
 type Collection struct {
-	totalEntries             uint64
-	totalAsses               uint64
-	mu                       sync.Mutex   // TODO: Better names
-	mu2                      sync.Mutex   // TODO: Better names
-	mutexAssociation         sync.RWMutex // TODO: Better names
-	mutexInsert              sync.Mutex   // TODO: Better names
+	dBPath            string
+	dBName            string
+	dBFullPath        string
+	totalEntries      uint64
+	totalAssociations uint64
+
+	changeMutex sync.Mutex
+
+	rawDataToLoad chan []byte
+	allDataLoaded sync.WaitGroup // TODO: Better names
+
+	root    Entry
+	rootAss Association
+
+	entryAdder          []chan *Entry
+	associationAdder    []chan *Association
+	associationExtAdder []chan *AssociationExt
+
 	inserterWG               sync.WaitGroup
 	inserterWGAssociation    sync.WaitGroup
 	inserterWGAssociationExt sync.WaitGroup
 	inserterWGDynTrie        sync.WaitGroup
-	data                     chan []byte    // TODO: Better names
-	wg                       sync.WaitGroup // TODO: Better names
 
-	root                Entry
-	rootAss             Association
-	entries             []*Tree
-	entryAdder          []chan *Entry
-	associationAdder    []chan *Association
-	associationExtAdder []chan *AssociationExt
-	uniqueValues        []*Tree
-	values              *Tree
-	associations        []*Tree
-	associationsExt     []*Tree
-	subCollections      []*Tree
-	freespace           chan FileEntry
-	dBPath              string
-	dBName              string
-	dBFullPath          string
-	dBWriteQueue        chan FileMod
-	dBCloseWriter       chan bool
-	writeToDisk         bool
-	// Finished            chan bool
-	finished sync.WaitGroup
-	// DBUpdateQueue    chan FileEntry
-	// DBDeleteQueue    chan FileEntry
-	db_size int64
-	level   int
-	id      uint64
+	entries         []*TieTree
+	uniqueValues    []*TieTree
+	values          *TieTree
+	associations    []*TieTree
+	associationsExt []*TieTree
+	subCollections  []*TieTree
+
+	dBWriteQueue  chan FileMod
+	dBCloseWriter chan bool
+	freespace     chan FileEntry
+	writeToDisk   bool
+	finished      sync.WaitGroup
+	db_size       int64
+	level         int
+	id            uint64
 }
 
 type UniqueValue struct {

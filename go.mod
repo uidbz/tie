@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/caddyserver/certmagic v0.17.2
 	github.com/dhowden/tag v0.0.0-20220618230019-adf36e896086
+	github.com/emirpasic/gods v1.18.1
 	github.com/go-resty/resty/v2 v2.7.0
 	github.com/h2non/filetype v1.1.3
 	github.com/julienschmidt/httprouter v1.3.0

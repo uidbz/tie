@@ -4,17 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
-	"sync"
+	"sync/atomic"
 )
-
-var (
-	collectionLock sync.Mutex
-	changeLock     sync.Mutex
-)
-
-// func (ic *Collection) Collection(name string) Collection {
-// 	return ic.InternalCollectionFromString(name)
-// }
 
 func (ic *Collection) Collection(name string) *Collection {
 	if ic.dBName == name {
@@ -28,16 +19,15 @@ func (ic *Collection) internalCollection(level int, id uint64) *Collection {
 	if level == ic.level && id == ic.id {
 		return ic
 	}
-	collectionLock.Lock()
-	defer collectionLock.Unlock()
-	if found, col := ic.subCollections[level].Get(id); !found {
+	if col, found := ic.subCollections[level].Get(id); !found {
 		subdir := ic.dBPath + "/" + ic.dBName + "-sub-collections"
 		os.Mkdir(subdir, 0777)
 		name := ic.getValueString(level, id)
-		ic2 := initialize(subdir, name, false, ic.writeToDisk)
+		db := NewDB(ic.writeToDisk)
+		ic2 := db.initialize(subdir, name, false)
 		ic2.level = level
 		ic2.id = id
-		ic.subCollections[level].put(id, ic2)
+		ic.subCollections[level].Put(id, ic2)
 
 		return ic2
 	} else {
@@ -46,56 +36,47 @@ func (ic *Collection) internalCollection(level int, id uint64) *Collection {
 }
 
 func (ic *Collection) Add(key string, value1 string, value2 string) *Association {
-	ic.mutexAssociation.Lock()
-	defer ic.mutexAssociation.Unlock()
 	return ic.associateExt(key, ic.dBName, value1, ic.dBName, value2)
 }
 
-func (ic *Collection) Get(key string, value1 string) (bool, TripleSet) {
-	found, tree := ic.GetAssociations(key)
-	if found {
+func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
+	if tree, found := ic.GetAssociations(key); found {
 		data, _ := ic.SetToString(key, value1, tree)
 		if data != nil {
-			return true, data
+			return data, true
 		} else {
-			return false, nil
+			return nil, false
 		}
 	} else {
-		return false, nil
+		return nil, false
 	}
 }
 
-func (ic *Collection) GetAssociations(value string) (bool, *Tree) {
-	found, e := ic.getEntryFromString(value)
-	if !found {
-		return false, &Tree{}
+func (ic *Collection) GetAssociations(value string) (*TieTree, bool) {
+	if e, found := ic.getEntryFromString(value); !found {
+		return &TieTree{}, false
+	} else {
+		return ic.getAssociationsFromEntry(e), true
 	}
-
-	return true, ic.getAssociationsFromEntry(e)
 }
 
-func (ic *Collection) GetAssociationsExt(value string, entryCollection string) (bool, *Tree) {
-	found, c := ic.getEntryFromString(entryCollection)
-	if !found {
-		return false, nil
+func (ic *Collection) GetAssociationsExt(value string, entryCollection string) (*TieTree, bool) {
+	if c, found := ic.getEntryFromString(entryCollection); !found {
+		return nil, false
+	} else {
+		col := ic.internalCollection(c.Level, c.Id)
+		if e, found := col.getEntryFromString(value); !found {
+			return nil, false
+		} else {
+			return ic.getAssociationsFromEntry(e), true
+		}
 	}
-	col := ic.internalCollection(c.Level, c.Id)
-	found2, e := col.getEntryFromString(value)
-	if !found2 {
-		return false, nil
-	}
-
-	return true, ic.getAssociationsFromEntry(e)
 }
 
-func (ic *Collection) Delete(key string, value1 string, value2 string) (bool, string) {
-	changeLock.Lock()
-	defer changeLock.Unlock()
-
-	found, asses := ic.GetAssociations(key)
-	if found {
-		f1, e2 := ic.getEntryFromString(value2)
-		f2, r := ic.getEntryFromString(value1)
+func (ic *Collection) Delete(key string, value1 string, value2 string) (string, bool) {
+	if asses, found := ic.GetAssociations(key); found {
+		e2, f1 := ic.getEntryFromString(value2)
+		r, f2 := ic.getEntryFromString(value1)
 
 		if f1 && f2 {
 			assKey := UniqueAssociation{
@@ -104,39 +85,44 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (bool, st
 				// RelationCollection:    ic.Id,
 				Relation: r.Id,
 			}
-			if f, a := asses.Get(assKey); f {
+			// I believe the below Get and deleteAssociation has to happen as 1 operation.
+			// in case a time slice happen after ;found
+			ic.changeMutex.Lock()
+			defer ic.changeMutex.Unlock()
+
+			if a, found := asses.Get(assKey); found {
 				ic.deleteAssociation(asses, assKey, a.(*Association))
-				return true, ""
+				return "", true
 			}
 		}
-		return false, "Did not find '" + value2 + "' with value1 '" + value1 + "'"
+		return "Did not find '" + value2 + "' with value1 '" + value1 + "'", false
 	} else {
-		return false, "Did not find '" + key + "'"
+		return "Did not find '" + key + "'", false
 	}
 }
 
-func (ic *Collection) Update(key string, value1 string, value2 string, newValue2 string) (bool, string) {
-	if ok, msg := ic.Delete(key, value1, value2); ok {
+func (ic *Collection) Update(key string, value1 string, value2 string, newValue2 string) (string, bool) {
+	if msg, ok := ic.Delete(key, value1, value2); ok {
 		ic.Add(key, value1, newValue2)
-		return true, ""
+		return "", true
 	} else {
-		return false, msg
+		return msg, false
 	}
 }
 
 // Try to update value2 to newvalue2. Add if unsuccessful. TODO: Add error checking
-func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string) {
-	if ok, msg := ic.Delete(key, value1, value2); ok {
+func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (string, bool) {
+	if msg, ok := ic.Delete(key, value1, value2); ok {
 		ic.Add(key, value1, newValue2)
-		return true, ""
+		return "", true
 	} else {
 		ic.Add(key, value1, newValue2)
-		return true, msg + ": could not update; adding new value as requested."
+		return msg + ": could not update; adding new value as requested.", true
 	}
 }
 
 // Update first occurence of a value2. More expensive SimpleUpdateUsingSet - use that if udating many values
-func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string) {
+func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (string, bool) {
 	// found, set := ic.Get(key, value1)
 	// if found {
 	// 	// TODO: Fix
@@ -155,14 +141,14 @@ func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, 
 	// 	ic.Add(key, value1, newValue2)
 	// 	return true, ""
 	// }
-	return false, "'" + key + "' with value1: '" + value1 + "' does not exist."
+	return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
 }
 
 // Update first occurence of a value2
-func (ic *Collection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string) {
+func (ic *Collection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (string, bool) {
 	if set != nil && set.Value1 != nil && set.Value2 != nil {
 		if len(set.Value1) != len(set.Value2) {
-			return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
+			return "Assertion: Length of set.Value1 and set.Value2 must be equal", false
 		}
 		for i, x := range set.Value1 {
 			if x == value1 {
@@ -172,9 +158,9 @@ func (ic *Collection) SimpleUpdateUsingSet(key string, value1 string, newValue2 
 	}
 	if addOnFail {
 		ic.Add(key, value1, newValue2)
-		return true, ""
+		return "", true
 	}
-	return false, "'" + key + "' with value1: '" + value1 + "' does not exist."
+	return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
 }
 
 func (ic *Collection) secureLevelInIndex(level int) {
@@ -185,11 +171,11 @@ func (ic *Collection) secureLevelInIndex(level int) {
 		ic.associationAdder = append(ic.associationAdder, make(chan *Association, 1000))
 		ic.associationExtAdder = append(ic.associationExtAdder, make(chan *AssociationExt, 1000))
 
-		ic.entries = append(ic.entries, newTreeWith(UInt64Comparator, ic.writeToDisk))
-		ic.uniqueValues = append(ic.uniqueValues, newTreeWith(UniqueValueComparator, ic.writeToDisk))
-		ic.associations = append(ic.associations, newTreeWith(UInt64Comparator, ic.writeToDisk))
-		ic.associationsExt = append(ic.associationsExt, newTreeWith(UniqueAssociationComparator, ic.writeToDisk))
-		ic.subCollections = append(ic.subCollections, newTreeWith(UInt64Comparator, ic.writeToDisk))
+		ic.entries = append(ic.entries, NewTreeWith(UInt64Comparator))
+		ic.uniqueValues = append(ic.uniqueValues, NewTreeWith(UniqueValueComparator))
+		ic.associations = append(ic.associations, NewTreeWith(UInt64Comparator))
+		ic.associationsExt = append(ic.associationsExt, NewTreeWith(UniqueAssociationComparator))
+		ic.subCollections = append(ic.subCollections, NewTreeWith(UInt64Comparator))
 
 		go ic.insertEntryAdder(i)
 		go ic.insertAssociationAdder(i)
@@ -197,28 +183,27 @@ func (ic *Collection) secureLevelInIndex(level int) {
 	}
 }
 
-func (ic *Collection) valueExists(level int, parentId uint64, value []byte) (bool, *Entry) {
+func (ic *Collection) valueExists(level int, parentId uint64, value []byte) (*Entry, bool) {
 	ic.secureLevelInIndex(level)
 
 	if len(value) != SIZE_VALUE {
 		fmt.Println("Assertion: ValueExists: Expected", SIZE_VALUE, "bytes, got", len(value))
-		return false, nil
+		return nil, false
 	}
-	foundVal, valPtr := ic.values.Get(value)
+	valPtr, foundVal := ic.values.Get(value)
 	if !foundVal {
-		return false, nil
+		return nil, false
 	}
-	found, entry := ic.uniqueValues[level].Get(UniqueValue{parentId, valPtr.(*[]byte)})
-	if !found {
-		return false, nil
+	if entry, found := ic.uniqueValues[level].Get(UniqueValue{parentId, valPtr.(*[]byte)}); found {
+		return entry.(*Entry), true
 	} else {
-		return found, entry.(*Entry)
+		return nil, false
 	}
 }
 
 func (ic *Collection) insert(value string) *Entry {
-	changeLock.Lock()
-	defer changeLock.Unlock()
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
 
 	var lastParent *Entry = &ic.root
 	bytes := []byte(value)
@@ -232,7 +217,7 @@ func (ic *Collection) insert(value string) *Entry {
 		level := i / SIZE_VALUE
 
 		if checkExistance {
-			checkExistance, tmp = ic.valueExists(level, lastParent.Id, bytes[i:end])
+			tmp, checkExistance = ic.valueExists(level, lastParent.Id, bytes[i:end])
 		}
 		if checkExistance {
 			lastParent = tmp
@@ -247,7 +232,7 @@ func (ic *Collection) insert(value string) *Entry {
 	return lastParent
 }
 
-func (ic *Collection) getEntryFromString(value string) (bool, *Entry) {
+func (ic *Collection) getEntryFromString(value string) (*Entry, bool) {
 	bytes := []byte(value)
 
 	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
@@ -260,15 +245,15 @@ func (ic *Collection) getEntryFromString(value string) (bool, *Entry) {
 		end := i + SIZE_VALUE
 		level := i / SIZE_VALUE
 
-		if exists, tmp := ic.valueExists(level, lastParentId, bytes[i:end]); exists {
+		if tmp, exists := ic.valueExists(level, lastParentId, bytes[i:end]); exists {
 			lastParentId = tmp.Id
 			lastLevel = level
 		} else {
-			return false, nil
+			return nil, false
 		}
 	}
 
-	return true, ic.getEntry(lastLevel, lastParentId)
+	return ic.getEntry(lastLevel, lastParentId), true
 }
 
 func (ic *Collection) insertValue(level int, parentId uint64, value []byte) *Entry {
@@ -277,9 +262,9 @@ func (ic *Collection) insertValue(level int, parentId uint64, value []byte) *Ent
 	// It will give very very hard to debug problems if it is not here
 	// and if value is directly used as key.
 
-	found, valPtr := ic.values.Get(tmp)
+	valPtr, found := ic.values.Get(tmp)
 	if !found {
-		ic.values.put(tmp, &tmp)
+		ic.values.Put(tmp, &tmp)
 		valPtr = &tmp
 	}
 
@@ -308,13 +293,15 @@ func (ic *Collection) insertValue(level int, parentId uint64, value []byte) *Ent
 
 func (t *Collection) insertEntryAdder(level int) {
 	for e := range t.entryAdder[level] {
-		err := t.entries[level].put(e.Id, e)
-		if err != nil {
-			fmt.Println("Error inserting entry:", err.Error())
-		}
-		if err = t.uniqueValues[level].put(e.UniqueValue, e); err != nil {
-			fmt.Println("Error inserting entry (value):", err.Error())
-		}
+		t.entries[level].Put(e.Id, e)
+		t.uniqueValues[level].Put(e.UniqueValue, e)
+		// err := t.entries[level].Put(e.Id, e)
+		// if err != nil {
+		// 	fmt.Println("Error inserting entry:", err.Error())
+		// }
+		// if err = t.uniqueValues[level].put(e.UniqueValue, e); err != nil {
+		// 	fmt.Println("Error inserting entry (value):", err.Error())
+		// }
 
 		t.inserterWG.Done()
 	}
@@ -322,31 +309,30 @@ func (t *Collection) insertEntryAdder(level int) {
 
 func (ic *Collection) insertAssociationAdder(level int) {
 	for a := range ic.associationAdder[level] {
-		found, s := ic.associations[level].Get(a.EntryId)
+		s, found := ic.associations[level].Get(a.EntryId)
 		if !found {
-			ass := newTreeWith(UniqueAssociationComparator, ic.writeToDisk)
+			ass := NewTreeWith(UniqueAssociationComparator)
 			key := UniqueAssociation{
 				AssociateTo: a.AssociateTo,
 				Relation:    a.Relation,
 			}
-			ass.put(key, a)
-			err := ic.associations[level].put(a.EntryId, ass)
-			if err != nil {
-				fmt.Println("Error inserting Association:", err.Error())
-			}
+			ass.Put(key, a)
+			ic.associations[level].Put(a.EntryId, ass)
+			// err := ic.associations[level].put(a.EntryId, ass)
+			// if err != nil {
+			// 	fmt.Println("Error inserting Association:", err.Error())
+			// }
 		} else {
-			ass := s.(*Tree)
+			ass := s.(*TieTree)
 			key := UniqueAssociation{
 				AssociateTo: a.AssociateTo,
 				Relation:    a.Relation,
 			}
-			ass.put(key, a)
+			ass.Put(key, a)
 		}
 
-		ic.mu2.Lock()
-		ic.totalAsses = ic.totalAsses + 1
+		atomic.AddUint64(&ic.totalAssociations, 1)
 		ic.inserterWGAssociation.Done()
-		ic.mu2.Unlock()
 	}
 }
 
@@ -366,37 +352,35 @@ func (ic *Collection) insertAssociationExtAdder(level int) {
 			Relation:    aExt.Relation,
 		}
 		// if found, s := ic.Associations[level].Get(aExt.EntryId); found { // Only insert AssExt if Ass exists
-		foundExt, sExt := ic.associationsExt[level].Get(id)
+		sExt, foundExt := ic.associationsExt[level].Get(id)
 		if !foundExt {
-			ass := newTreeWith(UniqueAssociationExtComparator, ic.writeToDisk)
+			ass := NewTreeWith(UniqueAssociationExtComparator)
 			key := UniqueAssociationExt{
 				AssociateToCollection: aExt.AssociationCollection,
 				AssociateTo:           aExt.AssociateTo,
 				RelationCollection:    aExt.RelationCollection,
 				Relation:              aExt.Relation,
 			}
-			ass.put(key, aExt)
-			err := ic.associationsExt[level].put(id, ass)
-			if err != nil {
-				fmt.Println("Error inserting Association:", err.Error())
-			}
+			ass.Put(key, aExt)
+			ic.associationsExt[level].Put(id, ass)
+			// err := ic.associationsExt[level].put(id, ass)
+			// if err != nil {
+			// 	fmt.Println("Error inserting Association:", err.Error())
+			// }
 		} else {
-			ass := sExt.(*Tree)
+			ass := sExt.(*TieTree)
 			key := UniqueAssociationExt{
 				AssociateToCollection: aExt.AssociationCollection,
 				AssociateTo:           aExt.AssociateTo,
 				RelationCollection:    aExt.RelationCollection,
 				Relation:              aExt.Relation,
 			}
-			ass.put(key, aExt)
+			ass.Put(key, aExt)
 		}
 
-		ic.mu2.Lock()
-		ic.totalAsses = ic.totalAsses + 1
+		atomic.AddUint64(&ic.totalAssociations, 1)
 		ic.inserterWGAssociationExt.Done()
-		ic.mu2.Unlock()
 	}
-	// }
 }
 
 func (ic *Collection) insertEntry(level int, e *Entry) {
@@ -422,31 +406,29 @@ func (ic *Collection) getEntry(level int, id uint64) *Entry {
 		return &ic.root
 	}
 	if level < len(ic.entries) {
-		if ok, entry := ic.entries[level].Get(id); ok {
+		if entry, found := ic.entries[level].Get(id); found {
 			return entry.(*Entry)
 		}
 	}
 	return &ic.root
 }
 
-func (ic *Collection) getAssociationsFromEntry(e *Entry) *Tree {
+func (ic *Collection) getAssociationsFromEntry(e *Entry) *TieTree {
 	if e.Level >= 0 && e.Level < len(ic.associations) {
-		found, set := ic.associations[e.Level].Get(e.Id)
-		if found {
-			return set.(*Tree)
+		if set, found := ic.associations[e.Level].Get(e.Id); found {
+			return set.(*TieTree)
 		}
 	}
-	return newTreeWith(UInt64Comparator, ic.writeToDisk)
+	return NewTreeWith(UInt64Comparator)
 }
 
-func (ic *Collection) getAssociationsExtFromEntry(e *Entry) *Tree {
+func (ic *Collection) getAssociationsExtFromEntry(e *Entry) *TieTree {
 	if e.Level >= 0 && e.Level < len(ic.associationsExt) {
-		found, set := ic.associationsExt[e.Level].Get(e.Id)
-		if found {
-			return set.(*Tree)
+		if set, found := ic.associationsExt[e.Level].Get(e.Id); found {
+			return set.(*TieTree)
 		}
 	}
-	return newTreeWith(UInt64Comparator, ic.writeToDisk)
+	return NewTreeWith(UInt64Comparator)
 }
 
 // Returns a copy of full value
@@ -482,7 +464,7 @@ func (ic *Collection) sync() {
 }
 
 func (ic *Collection) deleteEntry(e *Entry) {
-	ic.entries[e.Level].Delete(e.Id) //TODO: Make thread safe
+	ic.entries[e.Level].Delete(e.Id)
 
 	if ic.writeToDisk {
 		m := FileMod{
@@ -493,11 +475,8 @@ func (ic *Collection) deleteEntry(e *Entry) {
 	}
 }
 
-func (ic *Collection) deleteAssociation(tree *Tree, key UniqueAssociation, a *Association) {
-	// ic.mutexAssociation.Lock()
-	// defer ic.mutexAssociation.Unlock()
-
-	tree.Delete(key) //TODO: Test if thread safe
+func (ic *Collection) deleteAssociation(tree *TieTree, key UniqueAssociation, a *Association) {
+	tree.Delete(key)
 
 	if ic.writeToDisk {
 		m := FileMod{
@@ -528,7 +507,7 @@ func (ic *Collection) getUniqueAssociation(key *Entry, value1 *Entry, value2 *En
 		AssociateTo: value1.Id,
 		Relation:    value2.Id,
 	}
-	if f, a := asses.Get(subkey); f {
+	if a, found := asses.Get(subkey); found {
 		return true, a.(*Association)
 	}
 
@@ -673,18 +652,25 @@ func (ic *Collection) associateExt(entry1, relation_collection, relation, entry2
 // }
 
 // New implementation of SetToString using new output format
-func (ic *Collection) SetToString(key string, value1Filter string, s *Tree) (TripleSet, []*Tree) {
+func (ic *Collection) SetToString(key string, value1Filter string, s *TieTree) (TripleSet, []*TieTree) {
 	result := make(TripleSet)
 
-	v := &ChanVisitor{}
-	v.Ch = make(chan interface{}, 1000)
+	c := make(chan *Association, 10000)
 	go func() {
-		s.Walk(v)
-		close(v.Ch)
+		it := s.Iterator()
+		for it.Next() {
+			c <- it.Value().(*Association)
+		}
+		close(c)
 	}()
+	// v := &ChanVisitor{}
+	// go func() {
+	// 	s.Walk(v)
+	// 	close(v.Ch)
+	// }()
 
-	for t := range v.Ch {
-		x := t.(*Association)
+	for x := range c {
+		// x := t.(*Association)
 
 		key := ic.getValueString(x.Level, x.EntryId)
 		value1 := ic.getValueString(x.RelationLevel, x.Relation)

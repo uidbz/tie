@@ -31,9 +31,8 @@ func (ic *Collection) bufToEntry(buf []byte, pos int64) Entry {
 	next = last + SIZE_VALUE
 	var value []byte
 	value = append(value, buf[last:next]...)
-	found, valPtr := ic.values.Get(value)
-	if !found {
-		ic.values.put(value, &value)
+	if valPtr, found := ic.values.Get(value); !found {
+		ic.values.Put(value, &value)
 		e.UniqueValue.Value = &value
 	} else {
 		e.UniqueValue.Value = valPtr.(*[]byte)
@@ -139,11 +138,11 @@ func (ic *Collection) bufToAssociationExt(buf []byte, pos int64) AssociationExt 
 }
 
 func (ic *Collection) insertAllEntries() {
-	ic.wg.Add(1)
+	ic.allDataLoaded.Add(1)
 	var i int64 = 0
 
 	go func() {
-		for buf := range ic.data {
+		for buf := range ic.rawDataToLoad {
 			pos := i * ENTRY_SIZE
 			switch int(binary.LittleEndian.Uint16(buf[:SIZE_DATATYPE])) {
 			case TYPE_ENTRY:
@@ -173,32 +172,26 @@ func (ic *Collection) insertAllEntries() {
 
 			i = i + 1
 		}
-		ic.wg.Done()
+		ic.allDataLoaded.Done()
 	}()
 }
 
-func openDBRead(filename string) (bool, *os.File) {
+func (t *Collection) loadDB(filename string) error {
 	fi, err := os.Stat(filename)
-
-	if err == nil {
-		fmt.Println("DB size:", fi.Size())
-	}
-	db, err := os.Open(filename)
-
 	if err != nil {
-		fmt.Println("Error opening DB file:", filename)
-		fmt.Println(err.Error())
-		return false, nil
+		return err
 	}
+	dbname := "(" + fi.Name() + ") "
+	fmt.Println(dbname+"DB size:", (fi.Size() / 1024), "KB")
 
-	return true, db
-}
-
-func (t *Collection) loadDB(db *os.File) {
+	db, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
 	defer db.Close()
 
-	Info("Loading DB")
-	t.data = make(chan []byte, ENTRY_SIZE)
+	Info(dbname + "Loading DB...")
+	t.rawDataToLoad = make(chan []byte, ENTRY_SIZE)
 
 	// Start inserter worker
 	t.insertAllEntries()
@@ -210,12 +203,13 @@ func (t *Collection) loadDB(db *os.File) {
 		if v == 0 {
 			break
 		}
-		t.data <- buf // feed channel with input
+		t.rawDataToLoad <- buf // feed channel with input
 	}
-	close(t.data)
-	t.wg.Wait()
+	close(t.rawDataToLoad)
+	t.allDataLoaded.Wait()
 	t.sync()
-	Info("Done reading index")
+	Info(dbname + "Done reading index!")
+	return nil
 }
 
 func (t *Collection) openDBWrite() *os.File {

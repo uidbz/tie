@@ -34,7 +34,7 @@ func (request *DeleteRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 
 	col := env.Collection(request.Namespace, request.CollectionId)
 
-	reply.Success, reply.Message = col.Delete(request.Key, request.Value1, request.Value2)
+	reply.Message, reply.Success = col.Delete(request.Key, request.Value1, request.Value2)
 
 	return ws.Reply{request.Id, reply}, nil
 }

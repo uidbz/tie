@@ -2,12 +2,13 @@ package main
 
 //TODO: Update this to the new way
 
-// import (
-// 	"fmt"
+import (
+	"fmt"
 
-// 	"git.sr.ht/~uid/tie/client"
-// 	"git.sr.ht/~uid/tie/request"
-// )
+	"git.sr.ht/~uid/tie/api"
+	"git.sr.ht/~uid/tie/client"
+	// "git.sr.ht/~uid/tie/request"
+)
 
 // func BatchHandler(reply *request.Reply, err error) {
 // 	if err != nil {
@@ -34,26 +35,45 @@ package main
 // 	}
 // }
 
-// func main() {
-// 	tie.InitConfig()
+func main() {
+	config := client.DefaultConfig()
+	tie := client.NewTieClient(config)
+	col := tie.CollectionInfo()
 
-// 	batch := request.NewBatchRequest()
+	batch := api.Batch{}
+	batch.Add = append(batch.Add, col.NewAddRequest("MyKey", "Some value 1", "Some value 2"))
+	batch.Add = append(batch.Add, col.NewAddRequest("MyKey2", "Some value 1", "Some value 2"))
+	batch.Add = append(batch.Add, col.NewAddRequest("MyKey3", "Some value 1", "Some value 2"))
 
-// 	a := request.NewAddRequest("MyKey", "Some value 1", "Some value 2")
-// 	b := request.NewAddRequest("MyKey2", "Some value 1", "Some value 2")
-// 	c := request.NewAddRequest("MyKey3", "Some value 1", "Some value 2")
+	batch.Get = append(batch.Get, col.NewGetRequest("MyKey"))
+	batch.Get = append(batch.Get, col.NewGetRequest("MyKey2"))
+	batch.Get = append(batch.Get, col.NewGetRequest("MyKey3"))
 
-// 	d := request.NewGetRequest([]string{"MyKey"})
-// 	e := request.NewGetRequest([]string{"MyKey2"})
-// 	f := request.NewGetRequest([]string{"MyKey3"})
+	// a := request.NewAddRequest(
+	// b := request.NewAddRequest("MyKey2", "Some value 1", "Some value 2")
+	// c := request.NewAddRequest("MyKey3", "Some value 1", "Some value 2")
 
-// 	batch.Add = append(batch.Add, a)
-// 	batch.Add = append(batch.Add, b)
-// 	batch.Add = append(batch.Add, c)
+	// d := request.NewGetRequest([]string{"MyKey"})
+	// e := request.NewGetRequest([]string{"MyKey2"})
+	// f := request.NewGetRequest([]string{"MyKey3"})
 
-// 	batch.Get = append(batch.Get, d)
-// 	batch.Get = append(batch.Get, e)
-// 	batch.Get = append(batch.Get, f)
+	tie.Batch(&batch, func(reply *api.BatchReply) {
+		if !reply.Success {
+			fmt.Println(fmt.Println("Error happened:", reply.Message))
+			return
+		}
+		for _, x := range reply.Add {
+			fmt.Println("Success:", x.Success, "Message:", x.Message)
+		}
+		// del := []*api.DeleteRequest{}
+		for _, x := range reply.Get {
+			x.Result.ForEachValue2(func(key, val1, val2 string) {
+				// del = append(del, col.NewDeleteRequest(key, val1, val2))
+				fmt.Println(key, val1, val2)
+			})
+		}
+		// b2 := api.Batch{Delete: del}
+		// tie.Batch(&b2, func(r *api.BatchReply) {})
+	})
 
-// 	BatchHandler(tie.Run(batch))
-// }
+}

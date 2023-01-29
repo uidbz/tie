@@ -39,9 +39,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 
 	col := env.Collection(request.Namespace, request.CollectionId)
 
-	found, assPtr := col.GetAssociations(request.Key)
-
-	if found {
+	if assPtr, found := col.GetAssociations(request.Key); found {
 		// replySlice, errString := RequestToStringSlice(col, r.Value, r.Relation, assPtr)
 		// var replySet *tiedb.TrippleSet
 		var nextLevelRelation, relation []string

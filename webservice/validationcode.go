@@ -75,8 +75,7 @@ func (request *ValidationCodeRequest) Reply(env *Environment) (Reply, error) {
 		reply.Success = false
 		reply.Message = "Bad e-mail address provided."
 	} else {
-		found, result := env.Collection(env.Webservice.Config.AuthNamespace, MAILSETTINGSDB).Get(MAIL, "")
-		if found {
+		if result, found := env.Collection(env.Webservice.Config.AuthNamespace, MAILSETTINGSDB).Get(MAIL, ""); found {
 			code := request.getValidationCode(email.Address)
 			mail := ReadMailSettings(result, code)
 			auth := LoginAuth(mail.Username, mail.Password)

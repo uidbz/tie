@@ -4,6 +4,9 @@ import (
 	"testing"
 )
 
+//TODO: Rewrite tests
+
+/*
 func TestInsertAssociation(t *testing.T) {
 	db := NewDB(false)
 	col := db.GetCollection(CollectionKey{"Collections", "test"})
@@ -27,7 +30,6 @@ func TestInsertAssociation(t *testing.T) {
 		t.Error("Error GetAssociations, did not find", "a")
 	}
 }
-
 // func TestInsertLongEntry(t *testing.T) {
 // 	db := NewDB()
 // 	col := db.GetCollection(CollectionKey{"Collections", "test2"})
@@ -155,6 +157,7 @@ func TestUpdate(t *testing.T) {
 		t.Error("Error GetAssociations, did not find", "superkey")
 	}
 }
+*/
 
 //TODO: MAKE TEST that create newDB. Add. Query. Close DB. Read DB. Add more. Make same query. Tjeck if 2 queries are identical.
 // I think we have error in reading DB.

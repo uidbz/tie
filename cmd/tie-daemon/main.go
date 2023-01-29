@@ -83,7 +83,7 @@ var (
 	__VERBOSE bool = true
 	__DEBUG   bool = true
 
-	db     *tiedb.Tree
+	db     *tiedb.TieTree
 	dbPath string
 )
 
