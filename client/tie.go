@@ -38,6 +38,16 @@ func NewTieClient(config Config) (client *TieClient) {
 	return client
 }
 
+func (tc *TieClient) NewUpdate(key, value1, value2, newValue2 string) api.Update {
+	return api.Update{
+		Key:          key,
+		Value1:       value1,
+		Value2:       value2,
+		NewValue2:    newValue2,
+		AddOnFailure: false,
+	}
+}
+
 func (tc *TieClient) NewBatch() *api.Batch {
 	return &api.Batch{
 		Collection: tc.CollectionInfo(),
