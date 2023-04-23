@@ -24,28 +24,45 @@ type BatchRequest struct {
 }
 
 type Batch struct {
-	Add    []*AddRequest
-	Get    []*GetRequest
-	Delete []*DeleteRequest
-	Update []*UpdateRequest
+	Collection     CollectionInfo
+	AddRequests    []*AddRequest
+	GetRequests    []*GetRequest
+	DeleteRequests []*DeleteRequest
+	UpdateRequests []*UpdateRequest
 }
 
 type BatchReply struct {
 	ws.ReplyStatus
 
-	Add    []AddReply
-	Get    []GetReply
-	Delete []DeleteReply
-	Update []UpdateReply
+	AddReplys    []AddReply
+	GetReplys    []GetReply
+	DeleteReplys []DeleteReply
+	UpdateReplys []UpdateReply
+}
+
+func (batch *Batch) Add(key, value1, value2 string) {
+	batch.AddRequests = append(batch.AddRequests, batch.Collection.NewAddRequest(key, value1, value2))
+}
+
+func (batch *Batch) Get(key string) {
+	batch.GetRequests = append(batch.GetRequests, batch.Collection.NewGetRequest(key))
+}
+
+func (batch *Batch) Delete(key, value1, value2 string) {
+	batch.DeleteRequests = append(batch.DeleteRequests, batch.Collection.NewDeleteRequest(key, value1, value2))
+}
+
+func (batch *Batch) Update(update Update) {
+	batch.UpdateRequests = append(batch.UpdateRequests, batch.Collection.NewUpdateRequest(update))
 }
 
 func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := BatchReply{}
 
-	for _, x := range request.Batch.Update {
+	for _, x := range request.Batch.UpdateRequests {
 		r, err := x.Reply(env)
 		if err == nil {
-			reply.Update = append(reply.Update, r.ReplyStructPtr.(UpdateReply))
+			reply.UpdateReplys = append(reply.UpdateReplys, r.ReplyStructPtr.(UpdateReply))
 		} else {
 			reply.Success = false
 			reply.Message = "Error updating values"
@@ -53,10 +70,10 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		}
 	}
 
-	for _, x := range request.Batch.Delete {
+	for _, x := range request.Batch.DeleteRequests {
 		r, err := x.Reply(env)
 		if err == nil {
-			reply.Delete = append(reply.Delete, r.ReplyStructPtr.(DeleteReply))
+			reply.DeleteReplys = append(reply.DeleteReplys, r.ReplyStructPtr.(DeleteReply))
 		} else {
 			reply.Success = false
 			reply.Message = "Error deleting values"
@@ -64,10 +81,10 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		}
 	}
 
-	for _, x := range request.Batch.Add {
+	for _, x := range request.Batch.AddRequests {
 		r, err := x.Reply(env)
 		if err == nil {
-			reply.Add = append(reply.Add, r.ReplyStructPtr.(AddReply))
+			reply.AddReplys = append(reply.AddReplys, r.ReplyStructPtr.(AddReply))
 		} else {
 			reply.Success = false
 			reply.Message = "Error adding values"
@@ -75,10 +92,10 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		}
 	}
 
-	for _, x := range request.Batch.Get {
+	for _, x := range request.Batch.GetRequests {
 		r, err := x.Reply(env)
 		if err == nil {
-			reply.Get = append(reply.Get, r.ReplyStructPtr.(GetReply))
+			reply.GetReplys = append(reply.GetReplys, r.ReplyStructPtr.(GetReply))
 		} else {
 			reply.Success = false
 			reply.Message = "Error getting values"

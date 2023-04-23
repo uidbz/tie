@@ -23,6 +23,12 @@ const (
 	defaultConfigFile = "config"
 )
 
+type AddReply *api.AddReply
+type GetReply *api.GetReply
+type DeleteReply *api.DeleteReply
+type UpdateReply *api.UpdateReply
+type BatchReply *api.BatchReply
+
 func NewTieClient(config Config) (client *TieClient) {
 	client = &TieClient{
 		Config: config,
@@ -32,11 +38,17 @@ func NewTieClient(config Config) (client *TieClient) {
 	return client
 }
 
+func (tc *TieClient) NewBatch() *api.Batch {
+	return &api.Batch{
+		Collection: tc.CollectionInfo(),
+	}
+}
+
 func (tc *TieClient) CollectionInfo() api.CollectionInfo {
 	return api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 }
 
-func (tc *TieClient) Add(key, value1, value2 string, handler func(reply *api.AddReply)) {
+func (tc *TieClient) Add(key, value1, value2 string, handler func(reply AddReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewAddRequest(key, value1, value2)
 
@@ -51,7 +63,7 @@ func (tc *TieClient) Add(key, value1, value2 string, handler func(reply *api.Add
 	}
 }
 
-func (tc *TieClient) Get(key string, handler func(reply *api.GetReply)) {
+func (tc *TieClient) Get(key string, handler func(reply GetReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewGetRequest(key)
 
@@ -66,7 +78,7 @@ func (tc *TieClient) Get(key string, handler func(reply *api.GetReply)) {
 	}
 }
 
-func (tc *TieClient) Delete(key, value1, value2 string, handler func(reply *api.DeleteReply)) {
+func (tc *TieClient) Delete(key, value1, value2 string, handler func(reply DeleteReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewDeleteRequest(key, value1, value2)
 
@@ -81,7 +93,7 @@ func (tc *TieClient) Delete(key, value1, value2 string, handler func(reply *api.
 	}
 }
 
-func (tc *TieClient) Update(update api.Update, handler func(reply *api.UpdateReply)) {
+func (tc *TieClient) Update(update api.Update, handler func(reply UpdateReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewUpdateRequest(update)
 
@@ -96,7 +108,7 @@ func (tc *TieClient) Update(update api.Update, handler func(reply *api.UpdateRep
 	}
 }
 
-func (tc *TieClient) Batch(batch *api.Batch, handler func(reply *api.BatchReply)) {
+func (tc *TieClient) Batch(batch *api.Batch, handler func(reply BatchReply)) {
 	request := api.NewBatchRequest(batch)
 
 	if genericReply, err := tc.client.Run(request); err != nil {

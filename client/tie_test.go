@@ -46,6 +46,12 @@ func TestDelete(t *testing.T) {
 			t.Error(reply.Message)
 		}
 	})
+	tie.Get("heyhey", func(reply *api.GetReply) {
+		val2 := reply.Result["heyhey"]["Noice"]
+		if val2.Has("Oh yeah!") || !reply.Success {
+			t.Error(reply.Message)
+		}
+	})
 }
 
 func TestUpdate(t *testing.T) {

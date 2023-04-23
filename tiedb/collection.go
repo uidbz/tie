@@ -663,15 +663,8 @@ func (ic *Collection) SetToString(key string, value1Filter string, s *TieTree) (
 		}
 		close(c)
 	}()
-	// v := &ChanVisitor{}
-	// go func() {
-	// 	s.Walk(v)
-	// 	close(v.Ch)
-	// }()
 
 	for x := range c {
-		// x := t.(*Association)
-
 		key := ic.getValueString(x.Level, x.EntryId)
 		value1 := ic.getValueString(x.RelationLevel, x.Relation)
 		value2 := ic.getValueString(x.AssociationLevel, x.AssociateTo)
