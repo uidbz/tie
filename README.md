@@ -1,4 +1,4 @@
-### tie is a collection of programs and libraries to tie things together
+# tie is a collection of programs and libraries to tie things together
 
 tie is written in Go (golang)
 
@@ -10,7 +10,7 @@ Programs:
 * tie-download can download files and directories from a tie-fileserver
 
 Packages:
-* tiedb is a triplestore.
+* tiedb is an in-memory triplestore.
 * client can talk with a tie-daemon
 * io/getlib can download files from a tie-fileserver
 * io/putlib can upload files to a tie-fileserver
