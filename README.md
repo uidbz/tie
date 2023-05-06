@@ -1,7 +1,26 @@
-### tiedb is a key-value-value store, where every value is a key.
-### tie is the CLI
+### tie is a collection of programs and libraries to tie things together
 
-The idea is basically to store trains of thought. The premise is that every-thing is an association. The word is the thing. All words are explained by associations to other words. The relation between the associations is an association as well.
+tie is written in Go (golang)
+
+Programs:
+* tie-daemon is a webservice which provides an interface to a tie database
+* tie is CLI client that can talk with a tie-daemon
+* tie-fileserver is a content addressed file server
+* tie-upload can upload files and directories to a tie-fileserver
+* tie-download can download files and directories from a tie-fileserver
+
+Packages:
+* tiedb is a triplestore.
+* client can talk with a tie-daemon
+* io/getlib can download files from a tie-fileserver
+* io/putlib can upload files to a tie-fileserver
+
+## tiedb
+
+tiedb is an in-memory triplestore, which is also written to disk for persistence.
+
+The idea was originally to store trains of thought, but it has not directly succeeded in doing this so far.
+The premise is that every-thing is an association. The word is the thing. All words are explained by associations to other words. The relation between the associations is an association as well.
 
 That gives us:
 thing association relation
@@ -11,26 +30,54 @@ thing, association, relation is the same thing which I call an association, beca
 So what we need is 2 things: Self/other, full/empty, key/value.
 But for convenience, lets throw in a 'relation', which is just another 'value' which is just another 'key', which is just another 'value'.
 
-To initiate a look up, you need a key - so the first value is called 'key'. Association and Relation are just values (and keys), so I call them value1 and value2.
-Hence the key-value-value store description.
+To initiate a look up, you need a key - so the first value is called 'key'. Association and Relation are just values (and keys), so I call them Value1 and Value2.
+These 3 go together. I call this a 'triple'.
 
-These 3 go together. I call this a 'tie' - tie associates and binds things together elegantly.
+when querying the database the result is a TripleSet which essentially is a map, within a map, within a map - coupled with helper functions to read the Result more easily.
 
-I have later learned that it seems very much like a triple store and a graph database though.
+Here is a full program that shows how it works - see 'examples' for more.
 
+``` Go
+package main
 
-### Features
-* Fast, easy and simple (like everything else).
-* **Written in Go**: 1 static binary for server. 1 static binary for client.
-* Uses concurrency in several places.
-* **The daemon forces bi-directional ties.** (circular references)
-* Full DB in memory + saves to storage for persistence.
-* **Not directly scalable without tricks. Sorry :-(**
-* Values are stored in a trie, each trie is in a collection (1 binary file), and collections are in groups, which currently are directories on a file system.
-* **It is very suitable and efficient for storing file paths.**
-* Identical values in different levels of the trie are referenced in memory, but written to disk.
-* tiedb is written for use as a library.
-* **tie-daemon exposes a REST API**.
-* tie client is written for use as a library.
-* **tie contains a file tagger** with file organiser using highway hash.
-* tie is a CLI which you can combine with commands like grep, sort and awk.
+import (
+	"fmt"
+
+	"git.sr.ht/~uid/tie/client"
+)
+
+func main() {
+	config := client.DefaultConfig()
+	tie := client.NewTieClient(config)
+
+	HandleError := func(reply client.AddReply) {
+		if !reply.Success {
+			fmt.Println("Error adding triple to database:", reply.Message)
+		}
+	}
+
+	tie.Add("MyKey", "Category", "Some value 2", HandleError)
+	tie.Add("MyKey", "Category", "Some other value 2", HandleError)
+	tie.Add("MyKey", "AnotherCategory", "Value 333", HandleError)
+
+	tie.Get("MyKey", func(reply client.GetReply) {
+		if reply.Success {
+			cat := reply.Result["MyKey"]["Category"]
+			cat.ForEach(func(value2 string) {
+				fmt.Println(value2)
+			})
+			if value2, ok := reply.Result["MyKey"]["AnotherCategory"].One(); ok {
+				fmt.Println(value2)
+			}
+		} else {
+			fmt.Println("Error getting result:", reply.Message)
+		}
+	})
+}
+```
+Example output (the order is not retained):
+```
+Some other value 2
+Some value 2
+Value 333
+```
