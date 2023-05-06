@@ -32,6 +32,9 @@ type Update struct {
 
 type UpdateReply struct {
 	ws.ReplyStatus
+	OrigValue1    string
+	OrigValue2    string
+	OrigNewValue2 string
 }
 
 func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
@@ -44,6 +47,10 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	} else {
 		reply.Message, reply.Success = col.Update(request.Key, request.Value1, request.Value2, request.NewValue2)
 	}
+	reply.OrigKey = request.Key
+	reply.OrigValue1 = request.Value2
+	reply.OrigValue2 = request.Value2
+	reply.OrigNewValue2 = request.NewValue2
 
 	return ws.Reply{request.Id, reply}, nil
 }

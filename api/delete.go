@@ -27,6 +27,8 @@ type DeleteRequest struct {
 
 type DeleteReply struct {
 	ws.ReplyStatus
+	OrigValue1 string
+	OrigValue2 string
 }
 
 func (request *DeleteRequest) Reply(env *ws.Environment) (ws.Reply, error) {
@@ -35,6 +37,10 @@ func (request *DeleteRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	col := env.Collection(request.Namespace, request.CollectionId)
 
 	reply.Message, reply.Success = col.Delete(request.Key, request.Value1, request.Value2)
+
+	reply.OrigKey = request.Key
+	reply.OrigValue1 = request.Value2
+	reply.OrigValue2 = request.Value2
 
 	return ws.Reply{request.Id, reply}, nil
 }

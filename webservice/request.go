@@ -42,6 +42,7 @@ type Reply struct {
 type ReplyStatus struct {
 	Success bool
 	Message string
+	OrigKey string
 }
 
 func (r ReplyStatus) GetSuccess() bool {

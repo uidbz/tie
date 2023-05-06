@@ -28,6 +28,8 @@ type AddRequest struct {
 
 type AddReply struct {
 	ws.ReplyStatus
+	OrigValue1 string
+	OrigValue2 string
 }
 
 func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
@@ -43,6 +45,9 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		reply.Success = false
 		reply.Message = "Something went wrong (disk full?)"
 	}
+	reply.OrigKey = request.Key
+	reply.OrigValue1 = request.Value2
+	reply.OrigValue2 = request.Value2
 
 	return ws.Reply{request.Id, reply}, nil
 }

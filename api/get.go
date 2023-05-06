@@ -34,6 +34,18 @@ type GetReply struct {
 	Result tiedb.TripleSet
 }
 
+// Returns (Value1, true) from Result, if only the only key in the Result is the requested key.
+// In any other case it returns (nil, false)
+func (gr GetReply) OneKey() (tiedb.Value1, bool) {
+	if gr.Success && len(gr.Result) == 1 {
+		if val1, ok := gr.Result[gr.OrigKey]; ok {
+			return val1, true
+		}
+	}
+
+	return nil, false
+}
+
 func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := GetReply{}
 
@@ -72,6 +84,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		// })
 		reply.Result = set
 		reply.Success = true
+		reply.OrigKey = request.Key
 
 		return ws.Reply{request.Id, reply}, nil
 	}
