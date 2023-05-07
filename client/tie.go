@@ -23,11 +23,11 @@ const (
 	defaultConfigFile = "config"
 )
 
-type AddReply *api.AddReply
-type GetReply *api.GetReply
-type DeleteReply *api.DeleteReply
-type UpdateReply *api.UpdateReply
-type BatchReply *api.BatchReply
+type AddReply = *api.AddReply
+type GetReply = *api.GetReply
+type DeleteReply = *api.DeleteReply
+type UpdateReply = *api.UpdateReply
+type BatchReply = *api.BatchReply
 
 func NewTieClient(config Config) (client *TieClient) {
 	client = &TieClient{

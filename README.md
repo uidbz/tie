@@ -33,7 +33,7 @@ But for convenience, lets throw in a 'relation', which is just another 'value' w
 To initiate a look up, you need a key - so the first value is called 'key'. Association and Relation are just values (and keys), so I call them Value1 and Value2.
 These 3 go together. I call this a 'triple'.
 
-when querying the database the result is a TripleSet which essentially is a map, within a map, within a map - coupled with helper functions to read the Result more easily.
+When querying the database the result is a TripleSet which essentially is a map, within a map, within a map - coupled with helper functions to read the Result more easily.
 
 Here is a full program that shows how it works - see 'examples' for more.
 
@@ -56,17 +56,24 @@ func main() {
 		}
 	}
 
-	tie.Add("MyKey", "Category", "Some value 2", HandleError)
-	tie.Add("MyKey", "Category", "Some other value 2", HandleError)
-	tie.Add("MyKey", "AnotherCategory", "Value 333", HandleError)
+	tie.Add("pizza", "topping", "tomato", HandleError)
+	tie.Add("pizza", "topping", "cheese", HandleError)
+	tie.Add("pizza", "topping", "basil", HandleError)
+	tie.Add("pizza", "baking-time", "7 min", HandleError)
+	tie.Add("pizza", "baking-temperature", "250 °C", HandleError)
 
-	tie.Get("MyKey", func(reply client.GetReply) {
+	tie.Get("pizza", func(reply client.GetReply) {
 		if reply.Success {
-			cat := reply.Result["MyKey"]["Category"]
+			cat := reply.Result["pizza"]["topping"]
 			cat.ForEach(func(value2 string) {
 				fmt.Println(value2)
 			})
-			if value2, ok := reply.Result["MyKey"]["AnotherCategory"].One(); ok {
+			// One way of reading the result
+			if value2, ok := reply.Result["pizza"]["baking-time"].One(); ok {
+				fmt.Println(value2)
+			}
+			// Here is a shortcut to the same function
+			if value2, ok := reply.OneValue2("baking-temperature"); ok {
 				fmt.Println(value2)
 			}
 		} else {
@@ -75,9 +82,11 @@ func main() {
 	})
 }
 ```
-Example output (the order is not retained):
+Example output (notice that the order is not retained):
 ```
-Some other value 2
-Some value 2
-Value 333
+basil
+cheese
+tomato
+7 min
+250 °C
 ```

@@ -16,17 +16,24 @@ func main() {
 		}
 	}
 
-	tie.Add("MyKey", "Category", "Some value 2", HandleError)
-	tie.Add("MyKey", "Category", "Some other value 2", HandleError)
-	tie.Add("MyKey", "AnotherCategory", "Value 333", HandleError)
+	tie.Add("pizza", "topping", "tomato", HandleError)
+	tie.Add("pizza", "topping", "cheese", HandleError)
+	tie.Add("pizza", "topping", "basil", HandleError)
+	tie.Add("pizza", "baking-time", "7 min", HandleError)
+	tie.Add("pizza", "baking-temperature", "250 °C", HandleError)
 
-	tie.Get("MyKey", func(reply client.GetReply) {
+	tie.Get("pizza", func(reply client.GetReply) {
 		if reply.Success {
-			cat := reply.Result["MyKey"]["Category"]
+			cat := reply.Result["pizza"]["topping"]
 			cat.ForEach(func(value2 string) {
 				fmt.Println(value2)
 			})
-			if value2, ok := reply.Result["MyKey"]["AnotherCategory"].One(); ok {
+			// One way of reading the result
+			if value2, ok := reply.Result["pizza"]["baking-time"].One(); ok {
+				fmt.Println(value2)
+			}
+			// Here is a shortcut to the same function
+			if value2, ok := reply.OneValue2("baking-temperature"); ok {
 				fmt.Println(value2)
 			}
 		} else {

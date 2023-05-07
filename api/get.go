@@ -34,7 +34,17 @@ type GetReply struct {
 	Result tiedb.TripleSet
 }
 
-// Returns (Value1, true) from Result, if only the only key in the Result is the requested key.
+// Returns (value of Value2, true) from Result, if the only key in the Result is the requested key, and if only 1 Value2 exists.
+// In any other case it returns (empty string, false)
+func (gr GetReply) OneValue2(value1 string) (string, bool) {
+	if val1, ok := gr.OneKey(); ok {
+		return val1[value1].One()
+	}
+
+	return "", false
+}
+
+// Returns (Value1, true) from Result, if the only key in the Result is the requested key.
 // In any other case it returns (nil, false)
 func (gr GetReply) OneKey() (tiedb.Value1, bool) {
 	if gr.Success && len(gr.Result) == 1 {
