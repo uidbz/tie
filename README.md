@@ -50,17 +50,17 @@ func main() {
 	config := client.DefaultConfig()
 	tie := client.NewTieClient(config)
 
-	HandleError := func(reply client.AddReply) {
+	handleError := func(reply client.AddReply) {
 		if !reply.Success {
 			fmt.Println("Error adding triple to database:", reply.Message)
 		}
 	}
 
-	tie.Add("pizza", "topping", "tomato", HandleError)
-	tie.Add("pizza", "topping", "cheese", HandleError)
-	tie.Add("pizza", "topping", "basil", HandleError)
-	tie.Add("pizza", "baking-time", "7 min", HandleError)
-	tie.Add("pizza", "baking-temperature", "250 °C", HandleError)
+	tie.Add("pizza", "topping", "tomato", handleError)
+	tie.Add("pizza", "topping", "cheese", handleError)
+	tie.Add("pizza", "topping", "basil", handleError)
+	tie.Add("pizza", "baking-time", "7 min", handleError)
+	tie.Add("pizza", "baking-temperature", "250 °C", handleError)
 
 	tie.Get("pizza", func(reply client.GetReply) {
 		if reply.Success {

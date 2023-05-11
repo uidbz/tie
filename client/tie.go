@@ -1,6 +1,11 @@
 package client
 
 import (
+	"errors"
+	"reflect"
+
+	"git.sr.ht/~uid/tie/tiedb"
+
 	"git.sr.ht/~uid/tie/api"
 	ws "git.sr.ht/~uid/tie/webservice"
 )
@@ -19,6 +24,8 @@ var config = Config{
 }
 
 const (
+	tieUid            = "tie-uid"
+	objectUid         = "Uid"
 	tieKey            = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
 	defaultConfigFile = "config"
 )
@@ -29,6 +36,36 @@ type DeleteReply = *api.DeleteReply
 type UpdateReply = *api.UpdateReply
 type BatchReply = *api.BatchReply
 
+type TieClient struct {
+	client *ws.Client
+	Config Config
+}
+
+type ObjectManager[T any] struct {
+	client *TieClient
+	data   T
+}
+
+type Config struct {
+	configDir     string
+	configPath    string
+	Username      string
+	Password      string
+	Namespace     string
+	Collection    string
+	Webservice    string
+	ServeUrl      string
+	DataHost      string
+	ThumbnailHost string
+	Key           []byte
+	Verbose       bool
+}
+
+type TagOptions struct {
+	AddOriginalPath               bool
+	PutlibForceGenerateThumbnails bool
+}
+
 func NewTieClient(config Config) (client *TieClient) {
 	client = &TieClient{
 		Config: config,
@@ -36,6 +73,12 @@ func NewTieClient(config Config) (client *TieClient) {
 	}
 
 	return client
+}
+
+func NewObjectManager[T any](client *TieClient) ObjectManager[T] {
+	return ObjectManager[T]{
+		client: client,
+	}
 }
 
 func (tc *TieClient) NewUpdate(key, value1, value2, newValue2 string) api.Update {
@@ -129,6 +172,127 @@ func (tc *TieClient) Batch(batch *api.Batch, handler func(reply BatchReply)) {
 	} else {
 		reply := ws.ReadReply[api.BatchReply](genericReply)
 		handler(reply)
+	}
+}
+
+func (om *ObjectManager[T]) GetAll() ([]T, error) {
+	result := make([]T, 0)
+	var instance T
+	t := reflect.TypeOf(instance)
+	category := t.Name() + "s"
+	var objectIds tiedb.Value2
+
+	errorMsg := ""
+	om.client.Get(category, func(reply GetReply) {
+		if reply.Success {
+			objectIds = reply.Result[category][tieUid]
+		} else {
+			errorMsg = reply.GetMessage()
+		}
+	})
+	if errorMsg != "" {
+		return result, errors.New(errorMsg)
+	}
+	batch := om.client.NewBatch()
+	for key, _ := range objectIds {
+		batch.Get(key)
+	}
+	om.client.Batch(batch, func(reply BatchReply) {
+		for _, x := range reply.GetReplys {
+			if x.Success {
+				obj := om.ReplyToObject(&x)
+				result = append(result, obj)
+			}
+		}
+	})
+
+	return result, nil
+}
+
+// Return value of string field from struct
+func getStringFieldValue(fieldName string, something any) string {
+	v := reflect.ValueOf(something)
+	t := reflect.TypeOf(something)
+
+	for i := 0; i < v.NumField(); i++ {
+		if t.Field(i).Name == objectUid {
+			if v.Field(i).Kind() == reflect.String {
+				return v.Field(i).Interface().(string)
+			}
+		}
+	}
+	return ""
+}
+
+func (om *ObjectManager[T]) ReplyToObject(reply GetReply) T {
+	var obj T
+	uid := reply.OrigKey
+	reply.Result.ForEachValue2(func(key, val1, val2 string) {
+		v := reflect.ValueOf(&obj).Elem()
+		field := v.FieldByName(val1)
+		if field.IsValid() {
+			switch field.Kind() {
+			case reflect.String:
+				field.SetString(val2)
+			case reflect.Slice:
+				field.Set(reflect.Append(field, reflect.ValueOf(val2)))
+			}
+		}
+	})
+	v := reflect.ValueOf(&obj).Elem()
+	field := v.FieldByName(objectUid)
+	field.SetString(uid)
+
+	return obj
+}
+
+func (om *ObjectManager[T]) AddObject(something any) error {
+	v := reflect.ValueOf(something)
+	t := reflect.TypeOf(something)
+
+	uid := getStringFieldValue(objectUid, something)
+	if uid == "" {
+		return errors.New("Need Uid field")
+	}
+
+	category := t.Name() + "s"
+	batch := om.client.NewBatch()
+	batch.Add(category, tieUid, uid)
+
+	for i := 0; i < v.NumField(); i++ {
+		property := t.Field(i).Name
+		if property == objectUid {
+			continue
+		}
+
+		switch v.Field(i).Kind() {
+		case reflect.String:
+			value := v.Field(i).Interface().(string)
+			if value != "" {
+				batch.Add(uid, property, value)
+			}
+
+		case reflect.Slice:
+			for j := 0; j < v.Field(i).Len(); j++ {
+				value := v.Field(i).Index(j).Interface().(string)
+				if value != "" {
+					batch.Add(uid, property, value)
+				}
+			}
+		}
+	}
+	err := ""
+	om.client.Batch(batch, func(reply BatchReply) {
+		for _, x := range reply.AddReplys {
+			if !x.Success {
+				err += reply.GetMessage() + "\n"
+			}
+		}
+	})
+	if err != "" {
+		return errors.New(err)
+	} else {
+		return nil
 	}
 }
 
