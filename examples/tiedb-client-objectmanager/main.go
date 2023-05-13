@@ -44,14 +44,21 @@ func main() {
 			fmt.Println("Error adding triple to database:", err.Error())
 		}
 	}
-	check(manager.AddObject(pizza1))
-	check(manager.AddObject(pizza2))
+	check(manager.Add(pizza1))
+	check(manager.Upsert(pizza2))
 
-	pizzas, err := manager.GetAll()
-	check(err)
-
-	for _, x := range pizzas {
-		fmt.Println(x)
+	printPizzas := func() {
+		pizzas, err := manager.GetAll()
+		check(err)
+		for _, x := range pizzas {
+			fmt.Println(x)
+		}
 	}
+	printPizzas()
 
+	pizza2.Topping = append(pizza2.Topping, "more cheese")
+	pizza2.BakingTime = "8 min"
+	check(manager.Upsert(pizza2))
+
+	printPizzas()
 }

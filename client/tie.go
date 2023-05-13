@@ -35,6 +35,7 @@ type GetReply = *api.GetReply
 type DeleteReply = *api.DeleteReply
 type UpdateReply = *api.UpdateReply
 type BatchReply = *api.BatchReply
+type Update = api.Update
 
 type TieClient struct {
 	client *ws.Client
@@ -175,6 +176,16 @@ func (tc *TieClient) Batch(batch *api.Batch, handler func(reply BatchReply)) {
 	}
 }
 
+func (tc *TieClient) Exists(key string) bool {
+	result := false
+	tc.Get(key, func(reply GetReply) {
+		if reply.Success {
+			result = true
+		}
+	})
+	return result
+}
+
 func (om *ObjectManager[T]) GetAll() ([]T, error) {
 	result := make([]T, 0)
 	var instance T
@@ -246,13 +257,16 @@ func (om *ObjectManager[T]) ReplyToObject(reply GetReply) T {
 	return obj
 }
 
-func (om *ObjectManager[T]) AddObject(something any) error {
-	v := reflect.ValueOf(something)
-	t := reflect.TypeOf(something)
+func (om *ObjectManager[T]) Add(object any) error {
+	v := reflect.ValueOf(object)
+	t := reflect.TypeOf(object)
 
-	uid := getStringFieldValue(objectUid, something)
+	uid := getStringFieldValue(objectUid, object)
 	if uid == "" {
 		return errors.New("Need Uid field")
+	}
+	if exists := om.client.Exists(uid); exists {
+		return errors.New("Entry with '" + uid + "' already exists")
 	}
 
 	category := t.Name() + "s"
@@ -291,9 +305,98 @@ func (om *ObjectManager[T]) AddObject(something any) error {
 	})
 	if err != "" {
 		return errors.New(err)
-	} else {
-		return nil
 	}
+
+	return nil
+}
+
+func (om *ObjectManager[T]) Upsert(object any) error {
+	v := reflect.ValueOf(object)
+	t := reflect.TypeOf(object)
+
+	uid := getStringFieldValue(objectUid, object)
+	if uid == "" {
+		return errors.New("Need Uid field")
+	}
+	var origObject tiedb.TripleSet
+	om.client.Get(uid, func(reply GetReply) {
+		if reply.Success {
+			origObject = reply.Result
+		}
+	})
+	if origObject == nil {
+		return om.Add(object)
+	}
+
+	category := t.Name() + "s"
+	batch := om.client.NewBatch()
+	batch.Add(category, tieUid, uid) // this will re-add object to object list if it had been deleted
+
+	excludeUnchangedFromDeletion := func(uid, property, value string) bool {
+		if origObject[uid][property].Has(value) {
+			delete(origObject[uid][property], value)
+			if len(origObject[uid][property]) == 0 {
+				delete(origObject[uid], property)
+			}
+			if len(origObject[uid]) == 0 {
+				delete(origObject, uid)
+			}
+			return true
+		}
+		return false
+	}
+
+	for i := 0; i < v.NumField(); i++ {
+		property := t.Field(i).Name
+		if property == objectUid {
+			continue
+		}
+
+		switch v.Field(i).Kind() {
+		case reflect.String:
+			value := v.Field(i).Interface().(string)
+			if value != "" {
+				if !excludeUnchangedFromDeletion(uid, property, value) {
+					batch.Add(uid, property, value)
+				}
+			}
+
+		case reflect.Slice:
+			for j := 0; j < v.Field(i).Len(); j++ {
+				value := v.Field(i).Index(j).Interface().(string)
+				if value != "" {
+					if !excludeUnchangedFromDeletion(uid, property, value) {
+						batch.Add(uid, property, value)
+					}
+				}
+			}
+		}
+	}
+
+	origObject.ForEachValue2(func(key, val1, val2 string) {
+		batch.Delete(key, val1, val2)
+	})
+
+	err := ""
+	om.client.Batch(batch, func(reply BatchReply) {
+		for _, x := range reply.DeleteReplys {
+			if !x.Success {
+				err += reply.GetMessage() + "\n"
+			}
+		}
+		for _, x := range reply.AddReplys {
+			if !x.Success {
+				err += reply.GetMessage() + "\n"
+			}
+		}
+	})
+
+	if err != "" {
+		// Todo re-add deleted values, or better yet - implement transactions
+		return errors.New(err)
+	}
+
+	return nil
 }
 
 // func (tc *TieClient) Tag(path string, tags []string, options TagOptions, addHandler func(json.RawMessage)) {

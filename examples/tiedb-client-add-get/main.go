@@ -24,6 +24,11 @@ func main() {
 
 	tie.Get("pizza", func(reply client.GetReply) {
 		if reply.Success {
+			// Print all values
+			reply.Result.ForEachValue2(func(key, value1, value2 string) {
+				fmt.Println(value2)
+			})
+			// Print all value2s in a "category"/value1
 			cat := reply.Result["pizza"]["topping"]
 			cat.ForEach(func(value2 string) {
 				fmt.Println(value2)
