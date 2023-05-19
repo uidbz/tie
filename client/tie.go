@@ -374,6 +374,9 @@ func (om *ObjectManager[T]) Upsert(object any) error {
 	}
 
 	origObject.ForEachValue2(func(key, val1, val2 string) {
+		if val1 == tiedb.ASSOCIATED { // Do not delete associated value
+			return
+		}
 		batch.Delete(key, val1, val2)
 	})
 
@@ -381,12 +384,12 @@ func (om *ObjectManager[T]) Upsert(object any) error {
 	om.client.Batch(batch, func(reply BatchReply) {
 		for _, x := range reply.DeleteReplys {
 			if !x.Success {
-				err += reply.GetMessage() + "\n"
+				err += x.Message + "\n"
 			}
 		}
 		for _, x := range reply.AddReplys {
 			if !x.Success {
-				err += reply.GetMessage() + "\n"
+				err += x.Message + "\n"
 			}
 		}
 	})
@@ -420,6 +423,7 @@ func (om *ObjectManager[T]) Delete(object any) error {
 	category := t.Name() + "s"
 	batch := om.client.NewBatch()
 	batch.Delete(category, tieUid, uid)
+	batch.Delete(uid, tiedb.ASSOCIATED, category)
 
 	for i := 0; i < v.NumField(); i++ {
 		property := t.Field(i).Name
@@ -448,7 +452,7 @@ func (om *ObjectManager[T]) Delete(object any) error {
 	om.client.Batch(batch, func(reply BatchReply) {
 		for _, x := range reply.DeleteReplys {
 			if !x.Success {
-				err += x.Message + "hmm\n"
+				err += x.Message + "\n"
 			}
 		}
 	})

@@ -41,7 +41,7 @@ func main() {
 
 	check := func(err error) {
 		if err != nil {
-			fmt.Println("Error adding triple to database:", err.Error())
+			fmt.Println("Error from database:", err.Error())
 		}
 	}
 

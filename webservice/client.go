@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -25,12 +26,15 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 		return &e, errors.New("Webservice not set")
 	}
 	var r *resty.Client
-	if c.server[0:5] == "https" {
+	if strings.HasPrefix(c.server, "https") {
 		t := tls.Config{}
 		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
 		r = resty.New().SetTLSClientConfig(&t)
 	} else {
 		r = resty.New()
+		if strings.HasPrefix(c.server, "http://localhost") {
+			r.SetDisableWarn(true)
+		}
 	}
 	body, errMarshal := json.Marshal(request)
 	if errMarshal != nil {
