@@ -41,7 +41,7 @@ func (ic *Collection) Add(key string, value1 string, value2 string) *Association
 
 func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 	if tree, found := ic.GetAssociations(key); found {
-		data, _ := ic.SetToString(key, value1, tree)
+		data, _ := ic.GetTripleSet(key, value1, tree)
 		if data != nil {
 			return data, true
 		} else {
@@ -652,7 +652,7 @@ func (ic *Collection) associateExt(entry1, relation_collection, relation, entry2
 // }
 
 // New implementation of SetToString using new output format
-func (ic *Collection) SetToString(key string, value1Filter string, s *TieTree) (TripleSet, []*TieTree) {
+func (ic *Collection) GetTripleSet(key string, value1Filter string, s *TieTree) (TripleSet, map[string]*TieTree) {
 	result := make(TripleSet)
 
 	c := make(chan *Association, 10000)
@@ -664,10 +664,13 @@ func (ic *Collection) SetToString(key string, value1Filter string, s *TieTree) (
 		close(c)
 	}()
 
+	val2trees := make(map[string]*TieTree)
+
 	for x := range c {
 		key := ic.getValueString(x.Level, x.EntryId)
 		value1 := ic.getValueString(x.RelationLevel, x.Relation)
 		value2 := ic.getValueString(x.AssociationLevel, x.AssociateTo)
+		val2trees[value2] = ic.getAssociationsFromEntry(ic.getEntry(x.AssociationLevel, x.AssociateTo))
 
 		if !result.Has(key) {
 			result[key] = make(Value1)
@@ -688,7 +691,7 @@ func (ic *Collection) SetToString(key string, value1Filter string, s *TieTree) (
 		result[key] = val1
 	}
 
-	return result, nil
+	return result, val2trees
 }
 
 func (ic *Collection) closeDB() {

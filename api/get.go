@@ -1,9 +1,6 @@
 package api
 
 import (
-	"errors"
-	"strings"
-
 	"git.sr.ht/~uid/tie/tiedb"
 	ws "git.sr.ht/~uid/tie/webservice"
 )
@@ -24,9 +21,9 @@ type GetRequest struct {
 	ws.Request
 	CollectionInfo
 
-	Key             string
-	NextLevelValues []string
-	Filter          string
+	Key              string
+	NextLevelValue1s []string
+	Filter           string
 }
 
 type GetReply struct {
@@ -64,22 +61,29 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	if assPtr, found := col.GetAssociations(request.Key); found {
 		// replySlice, errString := RequestToStringSlice(col, r.Value, r.Relation, assPtr)
 		// var replySet *tiedb.TrippleSet
-		var nextLevelRelation, relation []string
-		for _, x := range request.NextLevelValues {
-			if len(x) >= 1 {
-				if x[0] == '+' {
-					nextLevelRelation = append(nextLevelRelation, strings.TrimPrefix(x, "+"))
-				} else {
-					relation = append(relation, x)
-				}
+		// var nextLevelRelation, relation []string
+		// for _, x := range request.NextLevelValues {
+		// 	if len(x) >= 1 {
+		// 		if x[0] == '+' {
+		// 			nextLevelRelation = append(nextLevelRelation, strings.TrimPrefix(x, "+"))
+		// 		} else {
+		// 			relation = append(relation, x)
+		// 		}
+		// 	}
+		// }
+		// if len(relation) > 1 {
+		// 	reply.Success = false
+		// 	return ws.Reply{request.Id, reply}, errors.New("Error: Max filters = 1, maybe you ment to use 'tie filters' or with + in front.")
+		// }
+
+		set, trees := col.GetTripleSet(request.Key, request.Filter, assPtr)
+
+		for val2, t := range trees {
+			for _, x := range request.NextLevelValue1s {
+				set2, _ := col.GetTripleSet(val2, x, t)
+				set[x] = set2[x]
 			}
 		}
-		if len(relation) > 1 {
-			reply.Success = false
-			return ws.Reply{request.Id, reply}, errors.New("Error: Max filters = 1, maybe you ment to use 'tie filters' or with + in front.")
-		}
-
-		set, _ := col.SetToString(request.Key, request.Filter, assPtr)
 		// replySlice = append(replySlice, set)
 		// if len(nextLevelRelation) > 0 {
 		// 	for i, x := range trees {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"git.sr.ht/~uid/tie/tiedb"
 	ws "git.sr.ht/~uid/tie/webservice"
 )
 
@@ -37,6 +38,9 @@ func (request *DeleteRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	col := env.Collection(request.Namespace, request.CollectionId)
 
 	reply.Message, reply.Success = col.Delete(request.Key, request.Value1, request.Value2)
+	if reply.Success {
+		reply.Message, reply.Success = col.Delete(request.Value2, tiedb.ASSOCIATED, request.Key)
+	}
 
 	reply.OrigKey = request.Key
 	reply.OrigValue1 = request.Value2

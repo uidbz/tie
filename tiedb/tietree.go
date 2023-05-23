@@ -55,6 +55,20 @@ func (tree *TieTree) Put(key interface{}, value interface{}) {
 	tree.Tree.Put(key, value)
 }
 
+func (t *TieTree) InnerJoin(tree *TieTree) {
+	c := make(chan *Association, 10000)
+	go func() {
+		it := tree.Iterator()
+		for it.Next() {
+			c <- it.Value().(*Association)
+		}
+		close(c)
+	}()
+	for x := range c {
+		fmt.Println(x.AssociateTo)
+	}
+}
+
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 	db.colMutex.Lock()
 	defer db.colMutex.Unlock()

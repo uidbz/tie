@@ -30,6 +30,7 @@ const (
 	defaultConfigFile = "config"
 )
 
+type AssociatedReply = *api.AssociatedReply
 type AddReply = *api.AddReply
 type GetReply = *api.GetReply
 type DeleteReply = *api.DeleteReply
@@ -117,6 +118,21 @@ func (tc *TieClient) Add(key, value1, value2 string, handler func(reply AddReply
 	}
 }
 
+func (tc *TieClient) Associated(key string, handler func(reply AssociatedReply)) {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewAssociatedRequest(key)
+
+	if genericReply, err := tc.client.Run(request); err != nil {
+		reply := &api.AssociatedReply{}
+		reply.Success = false
+		reply.Message = err.Error()
+		handler(reply)
+	} else {
+		reply := ws.ReadReply[api.AssociatedReply](genericReply)
+		handler(reply)
+	}
+}
+
 func (tc *TieClient) Get(key string, handler func(reply GetReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewGetRequest(key)
@@ -186,6 +202,19 @@ func (tc *TieClient) Exists(key string) bool {
 	return result
 }
 
+func (om *ObjectManager[T]) Get(uid string) (T, error) {
+	var obj T
+	var err error
+	om.client.Get(uid, func(reply GetReply) {
+		if reply.Success {
+			obj = om.ResultToObject(uid, reply.Result)
+		} else {
+			err = errors.New(reply.Message)
+		}
+	})
+	return obj, err
+}
+
 func (om *ObjectManager[T]) GetAll() ([]T, error) {
 	result := make([]T, 0)
 	var instance T
@@ -211,7 +240,7 @@ func (om *ObjectManager[T]) GetAll() ([]T, error) {
 	om.client.Batch(batch, func(reply BatchReply) {
 		for _, x := range reply.GetReplys {
 			if x.Success {
-				obj := om.ReplyToObject(&x)
+				obj := om.ResultToObject(x.OrigKey, x.Result)
 				result = append(result, obj)
 			}
 		}
@@ -235,11 +264,34 @@ func getStringFieldValue(fieldName string, something any) string {
 	return ""
 }
 
-func (om *ObjectManager[T]) ReplyToObject(reply GetReply) T {
-	var obj T
-	uid := reply.OrigKey
-	reply.Result.ForEachValue2(func(key, val1, val2 string) {
-		v := reflect.ValueOf(&obj).Elem()
+func (om *ObjectManager[T]) ResultToMap(result tiedb.TripleSet) (objects map[string]T) {
+	objects = make(map[string]T, len(result))
+
+	result.ForEachKey(func(key string) {
+		o := om.ResultToObject(key, result)
+		objects[key] = o
+	})
+
+	return objects
+}
+
+func (om *ObjectManager[T]) ResultToSlice(result tiedb.TripleSet) (objects []T) {
+	objects = make([]T, 0, len(result))
+
+	result.ForEachKey(func(key string) {
+		o := om.ResultToObject(key, result)
+		objects = append(objects, o)
+	})
+
+	return objects
+}
+
+func (om *ObjectManager[T]) ResultToObject(uid string, result tiedb.TripleSet) (obj T) {
+	v := reflect.ValueOf(&obj).Elem()
+	field := v.FieldByName(objectUid)
+	field.SetString(uid)
+
+	result[uid].ForEachValue2(func(val1, val2 string) {
 		field := v.FieldByName(val1)
 		if field.IsValid() {
 			switch field.Kind() {
@@ -250,11 +302,20 @@ func (om *ObjectManager[T]) ReplyToObject(reply GetReply) T {
 			}
 		}
 	})
-	v := reflect.ValueOf(&obj).Elem()
-	field := v.FieldByName(objectUid)
-	field.SetString(uid)
 
 	return obj
+}
+
+func (om *ObjectManager[T]) Associated(property string) (objects []T, err error) {
+	om.client.Associated(property, func(reply AssociatedReply) {
+		if reply.Success {
+			objects = om.ResultToSlice(reply.Result)
+		} else {
+			err = errors.New(reply.Message)
+		}
+	})
+
+	return objects, err
 }
 
 func (om *ObjectManager[T]) Add(object any) error {
@@ -423,7 +484,6 @@ func (om *ObjectManager[T]) Delete(object any) error {
 	category := t.Name() + "s"
 	batch := om.client.NewBatch()
 	batch.Delete(category, tieUid, uid)
-	batch.Delete(uid, tiedb.ASSOCIATED, category)
 
 	for i := 0; i < v.NumField(); i++ {
 		property := t.Field(i).Name

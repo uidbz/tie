@@ -61,7 +61,14 @@ func main() {
 	pizza2.Topping = append(pizza2.Topping, "more cheese")
 	pizza2.BakingTime = "8 min"
 	check(manager.Upsert(pizza2))
-	printPizzas("Changed pizza2; more chese + longer baking time")
+	printPizzas("Changed pizza2: More chese + longer baking time")
+
+	fmt.Println("Pizzas with mushrooms:")
+	pizzas, err := manager.Associated("mushrooms")
+	check(err)
+	for _, x := range pizzas {
+		fmt.Println(x)
+	}
 
 	check(manager.Delete(pizza2))
 	printPizzas("Deleted pizza2")

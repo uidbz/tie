@@ -59,6 +59,7 @@ func main() {
 		c.NewDeleteRequest("", "", ""),
 		c.NewUpdateRequest(api.Update{}),
 		api.NewBatchRequest(&api.Batch{}),
+		c.NewAssociatedRequest(""),
 	}
 
 	ws := webservice.NewWebservice(config, requests)
