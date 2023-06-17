@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"reflect"
+	"strconv"
 
 	"git.sr.ht/~uid/tie/tiedb"
 
@@ -44,8 +45,9 @@ type TieClient struct {
 }
 
 type ObjectManager[T any] struct {
-	client *TieClient
-	data   T
+	client        *TieClient
+	collectionUid string
+	data          T
 }
 
 type Config struct {
@@ -77,9 +79,10 @@ func NewTieClient(config Config) (client *TieClient) {
 	return client
 }
 
-func NewObjectManager[T any](client *TieClient) ObjectManager[T] {
+func NewObjectManager[T any](client *TieClient, collectionUid string) ObjectManager[T] {
 	return ObjectManager[T]{
-		client: client,
+		client:        client,
+		collectionUid: collectionUid,
 	}
 }
 
@@ -217,15 +220,12 @@ func (om *ObjectManager[T]) Get(uid string) (T, error) {
 
 func (om *ObjectManager[T]) GetAll() ([]T, error) {
 	result := make([]T, 0)
-	var instance T
-	t := reflect.TypeOf(instance)
-	category := t.Name() + "s"
 	var objectIds tiedb.Value2
 
 	errorMsg := ""
-	om.client.Get(category, func(reply GetReply) {
+	om.client.Get(om.collectionUid, func(reply GetReply) {
 		if reply.Success {
-			objectIds = reply.Result[category][tieUid]
+			objectIds = reply.Result[om.collectionUid][tieUid]
 		} else {
 			errorMsg = reply.GetMessage()
 		}
@@ -297,6 +297,19 @@ func (om *ObjectManager[T]) ResultToObject(uid string, result tiedb.TripleSet) (
 			switch field.Kind() {
 			case reflect.String:
 				field.SetString(val2)
+
+			case reflect.Int:
+				intValue, _ := strconv.Atoi(val2)
+				field.SetInt(int64(intValue))
+
+			case reflect.Float32:
+				float64Value, _ := strconv.ParseFloat(val2, 32)
+				field.SetFloat(float64Value)
+
+			case reflect.Float64:
+				float64Value, _ := strconv.ParseFloat(val2, 64)
+				field.SetFloat(float64Value)
+
 			case reflect.Slice:
 				field.Set(reflect.Append(field, reflect.ValueOf(val2)))
 			}
@@ -330,9 +343,8 @@ func (om *ObjectManager[T]) Add(object any) error {
 	v := reflect.ValueOf(object)
 	t := reflect.TypeOf(object)
 
-	category := t.Name() + "s"
 	batch := om.client.NewBatch()
-	batch.Add(category, tieUid, uid)
+	batch.Add(om.collectionUid, tieUid, uid)
 
 	for i := 0; i < v.NumField(); i++ {
 		property := t.Field(i).Name
@@ -343,6 +355,30 @@ func (om *ObjectManager[T]) Add(object any) error {
 		switch v.Field(i).Kind() {
 		case reflect.String:
 			value := v.Field(i).Interface().(string)
+			if value != "" {
+				batch.Add(uid, property, value)
+			}
+
+		case reflect.Int:
+			intValue := v.Field(i).Interface().(int)
+			value := strconv.Itoa(intValue)
+
+			if value != "" {
+				batch.Add(uid, property, value)
+			}
+
+		case reflect.Float32:
+			float32Value := v.Field(i).Interface().(float32)
+			value := strconv.FormatFloat(float64(float32Value), 'e', -1, 32)
+
+			if value != "" {
+				batch.Add(uid, property, value)
+			}
+
+		case reflect.Float64:
+			float64Value := v.Field(i).Interface().(float64)
+			value := strconv.FormatFloat(float64Value, 'e', -1, 64)
+
 			if value != "" {
 				batch.Add(uid, property, value)
 			}
@@ -389,9 +425,8 @@ func (om *ObjectManager[T]) Upsert(object any) error {
 	v := reflect.ValueOf(object)
 	t := reflect.TypeOf(object)
 
-	category := t.Name() + "s"
 	batch := om.client.NewBatch()
-	batch.Add(category, tieUid, uid)
+	batch.Add(om.collectionUid, tieUid, uid)
 
 	excludeUnchangedFromDeletion := func(uid, property, value string) bool {
 		if origObject[uid][property].Has(value) {
@@ -416,6 +451,36 @@ func (om *ObjectManager[T]) Upsert(object any) error {
 		switch v.Field(i).Kind() {
 		case reflect.String:
 			value := v.Field(i).Interface().(string)
+			if value != "" {
+				if !excludeUnchangedFromDeletion(uid, property, value) {
+					batch.Add(uid, property, value)
+				}
+			}
+
+		case reflect.Int:
+			intValue := v.Field(i).Interface().(int)
+			value := strconv.Itoa(intValue)
+
+			if value != "" {
+				if !excludeUnchangedFromDeletion(uid, property, value) {
+					batch.Add(uid, property, value)
+				}
+			}
+
+		case reflect.Float32:
+			float32Value := v.Field(i).Interface().(float32)
+			value := strconv.FormatFloat(float64(float32Value), 'e', -1, 32)
+
+			if value != "" {
+				if !excludeUnchangedFromDeletion(uid, property, value) {
+					batch.Add(uid, property, value)
+				}
+			}
+
+		case reflect.Float64:
+			float64Value := v.Field(i).Interface().(float64)
+			value := strconv.FormatFloat(float64Value, 'e', -1, 64)
+
 			if value != "" {
 				if !excludeUnchangedFromDeletion(uid, property, value) {
 					batch.Add(uid, property, value)
@@ -481,9 +546,8 @@ func (om *ObjectManager[T]) Delete(object any) error {
 	v := reflect.ValueOf(object)
 	t := reflect.TypeOf(object)
 
-	category := t.Name() + "s"
 	batch := om.client.NewBatch()
-	batch.Delete(category, tieUid, uid)
+	batch.Delete(om.collectionUid, tieUid, uid)
 
 	for i := 0; i < v.NumField(); i++ {
 		property := t.Field(i).Name
@@ -494,6 +558,30 @@ func (om *ObjectManager[T]) Delete(object any) error {
 		switch v.Field(i).Kind() {
 		case reflect.String:
 			value := v.Field(i).Interface().(string)
+			if value != "" {
+				batch.Delete(uid, property, value)
+			}
+
+		case reflect.Int:
+			intValue := v.Field(i).Interface().(int)
+			value := strconv.Itoa(intValue)
+
+			if value != "" {
+				batch.Delete(uid, property, value)
+			}
+
+		case reflect.Float32:
+			float32Value := v.Field(i).Interface().(float32)
+			value := strconv.FormatFloat(float64(float32Value), 'e', -1, 32)
+
+			if value != "" {
+				batch.Delete(uid, property, value)
+			}
+
+		case reflect.Float64:
+			float64Value := v.Field(i).Interface().(float64)
+			value := strconv.FormatFloat(float64Value, 'e', -1, 64)
+
 			if value != "" {
 				batch.Delete(uid, property, value)
 			}

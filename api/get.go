@@ -97,7 +97,12 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		// 	fmt.Println(key, val1, val2)
 		// })
 		reply.Result = set
-		reply.Success = true
+		if len(set) != 0 {
+			reply.Success = true
+		} else {
+			reply.Success = false
+			reply.Message = "Key has 0 associated values"
+		}
 		reply.OrigKey = request.Key
 
 		return ws.Reply{request.Id, reply}, nil

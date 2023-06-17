@@ -8,20 +8,22 @@ import (
 
 type Pizza struct {
 	Uid               string
-	BakingTime        string
+	BakingTimeInMin   int
 	BakingTemperature string
+	WeightInGrams     float64
 	Topping           []string
 }
 
 func main() {
 	config := client.DefaultConfig()
 	tie := client.NewTieClient(config)
-	manager := client.NewObjectManager[Pizza](tie)
+	manager := client.NewObjectManager[Pizza](tie, "pizzas")
 
 	pizza1 := Pizza{
 		Uid:               "pizza1",
-		BakingTime:        "7 min",
+		BakingTimeInMin:   7,
 		BakingTemperature: "250 °C",
+		WeightInGrams:     350.55,
 		Topping: []string{
 			"tomato",
 			"cheese",
@@ -30,8 +32,9 @@ func main() {
 	}
 	pizza2 := Pizza{
 		Uid:               "pizza2",
-		BakingTime:        "7 min",
+		BakingTimeInMin:   7,
 		BakingTemperature: "250 °C",
+		WeightInGrams:     350.55,
 		Topping: []string{
 			"tomato",
 			"cheese",
@@ -59,9 +62,9 @@ func main() {
 	printPizzas("Added pizza1 and pizza2")
 
 	pizza2.Topping = append(pizza2.Topping, "more cheese")
-	pizza2.BakingTime = "8 min"
+	pizza2.BakingTimeInMin = 8
 	check(manager.Upsert(pizza2))
-	printPizzas("Changed pizza2: More chese + longer baking time")
+	printPizzas("Changed pizza2: More cheese + longer baking time")
 
 	fmt.Println("Pizzas with mushrooms:")
 	pizzas, err := manager.Associated("mushrooms")
