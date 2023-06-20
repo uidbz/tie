@@ -47,6 +47,8 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 		SetBasicAuth(c.credentials.Username, c.credentials.Password).
 		Post(c.server + "/" + request.GetId())
 
+	defer resp.RawBody().Close()
+
 	if err != nil {
 		return nil, err
 	}

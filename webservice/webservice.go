@@ -255,6 +255,7 @@ func (ws *Webservice) SetMailSettings(mail MailSettings) {
 
 func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	raw_data, _ := io.ReadAll(r.Body)
+	r.Body.Close()
 	reqName := ps.ByName("request")
 	log.Println("Request from " + r.RemoteAddr + ": " + reqName)
 	username, _, _ := r.BasicAuth() // Credentials already validated
