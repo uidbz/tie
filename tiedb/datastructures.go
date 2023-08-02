@@ -21,18 +21,13 @@ const (
 
 	MaxFreespace = 1000000
 
-	DB_MODE_READ = iota
-	DB_MODE_APPEND
-	DB_MODE_UPDATE
+	FILE_ADD    = 0
+	FILE_DELETE = 1
 
-	FILE_ADD = iota
-	FILE_DELETE
-
-	// Do not change order; these values get written to the db files
-	TYPE_DELETE = iota
-	TYPE_ENTRY
-	TYPE_ASSOCIATION
-	TYPE_ASSOCIATION_EXT
+	// These values get written to the db files
+	TYPE_DELETE      = 10
+	TYPE_ENTRY       = 11
+	TYPE_ASSOCIATION = 12
 
 	ASSOCIATED = "associated"
 )
