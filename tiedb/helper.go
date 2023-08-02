@@ -86,7 +86,7 @@ func UniqueValueComparator(o1, o2 interface{}) int {
 	case k1.ParentId < k2.ParentId:
 		return -1
 	default:
-		return bytes.Compare(*k1.Value, *k2.Value)
+		return bytes.Compare(k1.Value[:], k2.Value[:])
 	}
 }
 
@@ -111,7 +111,6 @@ func AssociationComparator(o1, o2 interface{}) int {
 	k1 := o1.(UniqueAssociation)
 	k2 := o2.(UniqueAssociation)
 	switch {
-
 	case k1.AssociateTo > k2.AssociateTo:
 		return 1
 	case k1.AssociateTo < k2.AssociateTo:
@@ -120,31 +119,6 @@ func AssociationComparator(o1, o2 interface{}) int {
 	// 	return 1
 	// case k1.Relation < k2.Relation:
 	// 	return -1
-	default:
-		return 0
-	}
-}
-
-func UniqueAssociationExtComparator(o1, o2 interface{}) int {
-	k1 := o1.(UniqueAssociationExt)
-	k2 := o2.(UniqueAssociationExt)
-	switch {
-	case k1.AssociateToCollection > k2.AssociateToCollection:
-		return 1
-	case k1.AssociateToCollection < k2.AssociateToCollection:
-		return -1
-	case k1.AssociateTo > k2.AssociateTo:
-		return 1
-	case k1.AssociateTo < k2.AssociateTo:
-		return -1
-	case k1.RelationCollection > k2.RelationCollection:
-		return 1
-	case k1.RelationCollection < k2.RelationCollection:
-		return -1
-	case k1.Relation > k2.Relation:
-		return 1
-	case k1.Relation < k2.Relation:
-		return -1
 	default:
 		return 0
 	}

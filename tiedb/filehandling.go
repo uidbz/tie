@@ -3,21 +3,19 @@ package tiedb
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
 
-// var data = make(chan []byte, ENTRY_SIZE)
-// var wg sync.WaitGroup
-
-func (ic *Collection) bufToEntry(buf []byte, pos int64) Entry {
+func (ic *Collection) bufToEntry(buf []byte) (Entry, int) {
 	var last int = SIZE_DATATYPE
 	var e Entry
-	e.UniqueValue = UniqueValue{} // something is wrong here. Don't create new unique value all the time
 
 	next := last + SIZE_LEVEL
-	e.Level = int(binary.LittleEndian.Uint64(buf[last:next]))
+	level := int(binary.LittleEndian.Uint64(buf[last:next]))
 	last = next
 
 	next = last + SIZE_ID
@@ -29,42 +27,14 @@ func (ic *Collection) bufToEntry(buf []byte, pos int64) Entry {
 	last = next
 
 	next = last + SIZE_VALUE
-	var value []byte
-	value = append(value, buf[last:next]...)
-	if valPtr, found := ic.values.Get(value); !found {
-		ic.values.Put(value, &value)
-		e.UniqueValue.Value = &value
-	} else {
-		e.UniqueValue.Value = valPtr.(*[]byte)
-	}
+	e.UniqueValue.Value = ([SIZE_VALUE]byte)(buf[last:next])
 	last = next
 
-	e.Position = pos
-
-	return e
+	return e, level
 }
 
-// out = append(datatype[:], collection_level[:]...)
-// out = append(out, entry_collection[:]...)
-// out = append(out, entry_level[:]...)
-// out = append(out, entry_id[:]...)
-// out = append(out, association_collection_level[:]...)
-// out = append(out, association_collection[:]...)
-// out = append(out, association_level[:]...)
-// out = append(out, association[:]...)
-// out = append(out, relation_collection_level[:]...)
-// out = append(out, relation_collection[:]...)
-// out = append(out, relation_level[:]...)
-// out = append(out, relation[:]...)
-
-// out = append(datatype[:], entry_level[:]...)
-// out = append(out, entry_id[:]...)
-// out = append(out, association_level[:]...)
-// out = append(out, association[:]...)
-// out = append(out, relation_level[:]...)
-// out = append(out, relation[:]...)
-func (ic *Collection) bufToAssociation(buf []byte, pos int64) Association {
-	var a Association
+func (ic *Collection) bufToAssociation(buf []byte) Triple {
+	var a Triple
 	var last int = SIZE_DATATYPE
 
 	next := last + SIZE_LEVEL
@@ -72,108 +42,51 @@ func (ic *Collection) bufToAssociation(buf []byte, pos int64) Association {
 	last = next
 
 	next = last + SIZE_ID
-	a.EntryId = binary.LittleEndian.Uint64(buf[last:next])
+	a.Key = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
 
 	next = last + SIZE_ID
-	a.AssociationLevel = int(binary.LittleEndian.Uint64(buf[last:next]))
+	a.Value2Level = int(binary.LittleEndian.Uint64(buf[last:next]))
 	last = next
 
 	next = last + SIZE_ID
-	a.AssociateTo = binary.LittleEndian.Uint64(buf[last:next])
+	a.Value2 = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
 
 	next = last + SIZE_ID
-	a.RelationLevel = int(binary.LittleEndian.Uint64(buf[last:next]))
+	a.Value1Level = int(binary.LittleEndian.Uint64(buf[last:next]))
 	last = next
 
 	next = last + SIZE_ID
-	a.Relation = binary.LittleEndian.Uint64(buf[last:next])
+	a.Value1 = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
-
-	a.Position = pos
 
 	return a
 }
 
-// binary.LittleEndian.PutUint16(datatype, TYPE_ASSOCIATIONEXT)
-// binary.LittleEndian.PutUint64(association, a.AssociateTo)
-// binary.LittleEndian.PutUint64(relation, a.Relation)
-// binary.LittleEndian.PutUint64(association_collection_level, uint64(a.AssociationCollectionLevel))
-// binary.LittleEndian.PutUint64(association_collection, a.AssociationCollection)
-// binary.LittleEndian.PutUint64(relation_collection_level, uint64(a.RelationCollectionLevel))
-// binary.LittleEndian.PutUint64(relation_collection, a.RelationCollection)
-
-func (ic *Collection) bufToAssociationExt(buf []byte, pos int64) AssociationExt {
-	var a AssociationExt
-	var last int = SIZE_DATATYPE
-
-	next := last + SIZE_ID
-	a.AssociateTo = binary.LittleEndian.Uint64(buf[last:next])
-	last = next
-
-	next = last + SIZE_ID
-	a.Relation = binary.LittleEndian.Uint64(buf[last:next])
-	last = next
-
-	next = last + SIZE_ID
-	a.AssociationCollectionLevel = int(binary.LittleEndian.Uint64(buf[last:next]))
-	last = next
-
-	next = last + SIZE_ID
-	a.AssociationCollection = binary.LittleEndian.Uint64(buf[last:next])
-	last = next
-
-	next = last + SIZE_ID
-	a.RelationCollectionLevel = int(binary.LittleEndian.Uint64(buf[last:next]))
-	last = next
-
-	next = last + SIZE_ID
-	a.RelationCollection = binary.LittleEndian.Uint64(buf[last:next])
-	last = next
-
-	a.Position = pos
-
-	return a
-}
-
-func (ic *Collection) insertAllEntries() {
-	ic.allDataLoaded.Add(1)
-	var i int64 = 0
-
-	go func() {
-		for buf := range ic.rawDataToLoad {
-			pos := i * ENTRY_SIZE
-			switch int(binary.LittleEndian.Uint16(buf[:SIZE_DATATYPE])) {
-			case TYPE_ENTRY:
-				e := ic.bufToEntry(buf, pos)
-				if e.Id > ic.totalEntries {
-					ic.totalEntries = e.Id
-				}
-				ic.insertEntry(e.Level, &e)
-
-			case TYPE_ASSOCIATION:
-				a := ic.bufToAssociation(buf, pos)
-				ic.insertAssociation(a.Level, &a)
-
-			case TYPE_ASSOCIATIONEXT:
-				aExt := ic.bufToAssociationExt(buf, pos)
-				ic.insertAssociationExt(aExt.AssociationCollectionLevel, &aExt)
-
-			case TYPE_DELETE:
-				e := ic.bufToEntry(buf, pos)
-				if e.Id > ic.totalEntries {
-					ic.totalEntries = e.Id
-				}
-				if len(ic.freespace) < MaxFreespace {
-					ic.freespace <- &e
-				}
+func (ic *Collection) inserterWorker(wg *sync.WaitGroup) {
+	for entry := range ic.rawDataToLoad {
+		switch int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) {
+		case TYPE_ENTRY:
+			e, level := ic.bufToEntry(entry.Data)
+			ic.totalEntriesMutex.Lock()
+			if e.Id > ic.totalEntries {
+				ic.totalEntries = e.Id
 			}
+			ic.totalEntriesMutex.Unlock()
+			ic.insertEntry(level, &e)
 
-			i = i + 1
+		case TYPE_ASSOCIATION:
+			a := ic.bufToAssociation(entry.Data)
+			ic.insertAssociation(a.Level, &a, entry.Position)
+
+		case TYPE_DELETE:
+			if len(ic.freespace) < MaxFreespace {
+				ic.freespace <- entry.Position
+			}
 		}
-		ic.allDataLoaded.Done()
-	}()
+	}
+	wg.Done()
 }
 
 func (t *Collection) loadDB(filename string) error {
@@ -182,7 +95,7 @@ func (t *Collection) loadDB(filename string) error {
 		return err
 	}
 	dbname := "(" + fi.Name() + ") "
-	fmt.Println(dbname+"DB size:", (fi.Size() / 1024), "KB")
+	fmt.Println(dbname+"DB size:", (fi.Size() / 1024), "KiB")
 
 	db, err := os.Open(filename)
 	if err != nil {
@@ -191,29 +104,42 @@ func (t *Collection) loadDB(filename string) error {
 	defer db.Close()
 
 	Info(dbname + "Loading DB...")
-	t.rawDataToLoad = make(chan []byte, ENTRY_SIZE)
+	t.rawDataToLoad = make(chan RawDataEntry, 100000)
 
-	// Start inserter worker
-	t.insertAllEntries()
+	// Start inserter workers
+	workers := 1
+	workersFinished := sync.WaitGroup{}
+	for i := 0; i < workers; i++ {
+		workersFinished.Add(1)
+		go t.inserterWorker(&workersFinished)
+	}
 
+	var entry int64
 	for {
-		buf := make([]byte, ENTRY_SIZE)
+		buf := make([]byte, ENTRY_SIZE*4194304)
 		v, _ := db.Read(buf)
 
 		if v == 0 {
 			break
 		}
-		t.rawDataToLoad <- buf // feed channel with input
+
+		for i := 0; i < v; i = i + ENTRY_SIZE {
+			r := RawDataEntry{
+				Position: entry * ENTRY_SIZE,
+				Data:     buf[i : i+ENTRY_SIZE],
+			}
+			t.rawDataToLoad <- r
+			entry++
+		}
 	}
 	close(t.rawDataToLoad)
-	t.allDataLoaded.Wait()
-	t.sync()
-	Info(dbname + "Done reading index!")
+	workersFinished.Wait()
+	Info(dbname + "Loading DB: Done!")
 	return nil
 }
 
-func (t *Collection) openDBWrite() *os.File {
-	f, err := os.OpenFile(t.dBFullPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+func (t *Collection) openDB() *os.File {
+	f, err := os.OpenFile(t.dBFullPath, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		panic(err)
 	}
@@ -225,82 +151,110 @@ func (t *Collection) openDBWrite() *os.File {
 	return f
 }
 
-func (t *Collection) openDBUpdate() *os.File {
-	f, err := os.OpenFile(t.dBFullPath, os.O_WRONLY, 0600)
-	if err != nil {
-		panic(err)
+func (ic *Collection) getAssociationPosition(level int, a *Triple) (pos int64) {
+	pos = -1
+
+	if s, found := ic.associations[level].Get(a.Key); found {
+		ass := s.(*TieTree)
+		key := UniqueAssociation{
+			AssociateTo: a.Value2,
+			Relation:    a.Value1,
+		}
+		if v, f := ass.Get(key); f {
+			pos = v.(int64)
+		}
 	}
-	fi, _ := os.Stat(t.dBFullPath)
-	t.db_size = fi.Size()
-	if t.db_size%ENTRY_SIZE != 0 {
-		panic("Assertion: db_size % ENTRY_SIZE != 0. DB probably corrupt.")
-	}
-	return f
+
+	return pos
 }
 
 func (ic *Collection) dBWriter() {
-	ic.dBWriteQueue = make(chan FileMod, 1000)
+	ic.dBWriteQueue = make(chan FileMod, 100000)
+	ic.dBReadQueue = make(chan ReadRequest, 100000)
 	ic.dBCloseWriter = make(chan bool, 1)
+
 	var db *os.File
 	var open bool = false
-	var mode_append bool = true
 	var timeout *time.Timer
 	var openLock sync.Mutex
 
+	closeAfter := time.Second * 10
+
+	openDb := func() {
+		if !open {
+			db = ic.openDB()
+			open = true
+			ic.finished.Add(1)
+			timeout = time.AfterFunc(closeAfter, func() {
+				openLock.Lock()
+				open = false
+				db.Sync()
+				db.Close()
+				openLock.Unlock()
+				ic.finished.Done()
+			})
+		} else {
+			timeout.Reset(time.Second * 10)
+			open = true
+		}
+	}
 	go func() {
 		for {
 			select {
+			case req := <-ic.dBReadQueue:
+				openLock.Lock()
+				openDb()
+				b := make([]byte, ENTRY_SIZE)
+				n, err := db.ReadAt(b, req.Position)
+				if err != nil {
+					log.Println("Read error:", err, "bytes read,", n, "expected", ENTRY_SIZE)
+				} else {
+					req.ReplyChan <- ic.bufToAssociation(b)
+				}
+				ic.dbReadWg.Done()
+				openLock.Unlock()
+
 			case file_mod := <-ic.dBWriteQueue:
 				openLock.Lock()
-				should_append := file_mod.Mode == FILE_APPEND
-				if !mode_append && should_append {
-					open = false
-					db.Close()
-					mode_append = true
-				} else if mode_append && !should_append {
-					open = false
-					db.Close()
-					mode_append = false
-				}
-				if !open {
-					if should_append {
-						db = ic.openDBWrite()
-					} else {
-						db = ic.openDBUpdate()
-					}
-					open = true
-					ic.finished.Add(1)
-					timeout = time.AfterFunc(time.Second*10, func() {
-						openLock.Lock()
-						open = false
-						db.Close()
-						openLock.Unlock()
-						ic.finished.Done()
-					})
-				} else {
-					timeout.Reset(time.Second * 10)
-					open = true
-				}
+				openDb()
 				var n int
 				var err error
-				if mode_append {
-					file_mod.Entry.setPosition(ic.db_size)
-					n, err = db.Write(file_mod.Entry.toBytes())
-					ic.db_size += ENTRY_SIZE
-				} else {
-					b := file_mod.Entry.toBytes()
-					pos := file_mod.Entry.getPosition()
-					if file_mod.Mode == FILE_DELETE {
-						datatype := make([]byte, SIZE_DATATYPE)
-						binary.LittleEndian.PutUint16(datatype, TYPE_DELETE)
-						b = append(datatype, b[2:]...)
-					}
-					n, err = db.WriteAt(b, pos)
-					if file_mod.Mode == FILE_DELETE {
+				var pos int64
+
+				switch file_mod.Mode {
+				case FILE_DELETE:
+					b := make([]byte, ENTRY_SIZE)
+					datatype := make([]byte, SIZE_DATATYPE)
+					binary.LittleEndian.PutUint16(datatype, TYPE_DELETE)
+					b = append(datatype, b[2:]...)
+					pos = file_mod.Position
+					if pos != -1 {
 						if len(ic.freespace) < MaxFreespace {
-							ic.freespace <- file_mod.Entry
+							ic.freespace <- pos
 						}
+						n, err = db.WriteAt(b, pos)
 					}
+
+				case FILE_ADD:
+					if len(ic.freespace) == 0 {
+						pos = ic.db_size
+						ic.db_size += ENTRY_SIZE
+					} else {
+						pos = <-ic.freespace
+					}
+					switch file_mod.EntryType {
+					case TYPE_ASSOCIATION:
+						ic.insertAssociation(file_mod.Level, file_mod.Association, pos)
+						n, err = db.WriteAt(file_mod.Association.toBytes(), pos)
+						ic.finishedAdding.Done()
+					case TYPE_ENTRY:
+						n, err = db.WriteAt(file_mod.Entry.toBytes(file_mod.Level), pos)
+					default:
+						panic("Wrong EntryType provided for DB writer.")
+					}
+
+				default:
+					panic("Wrong 'Mode' provided for DB writer" + strconv.Itoa(file_mod.Mode))
 				}
 
 				if err != nil {
@@ -325,8 +279,6 @@ func (ic *Collection) dBWriter() {
 					return
 				}
 			}
-
 		}
-
 	}()
 }

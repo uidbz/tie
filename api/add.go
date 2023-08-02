@@ -37,14 +37,10 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 
 	col := env.Collection(request.Namespace, request.CollectionId)
 
-	a := col.Add(request.Key, request.Value1, request.Value2)
-	if a != nil {
-		reply.Success = true
-		col.Add(request.Value2, tiedb.ASSOCIATED, request.Key)
-	} else {
-		reply.Success = false
-		reply.Message = "Something went wrong (disk full?)"
-	}
+	col.Add(request.Key, request.Value1, request.Value2)
+	col.Add(request.Value2, tiedb.ASSOCIATED, request.Key)
+
+	reply.Success = true
 	reply.OrigKey = request.Key
 	reply.OrigValue1 = request.Value2
 	reply.OrigValue2 = request.Value2

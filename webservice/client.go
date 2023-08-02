@@ -13,6 +13,7 @@ import (
 type Client struct {
 	server      string
 	credentials Credentials
+	r           *resty.Client
 }
 
 type Credentials struct {
@@ -21,33 +22,23 @@ type Credentials struct {
 }
 
 func (c *Client) Run(request RequestInterface) (*Reply, error) {
-	if len(c.server) < 5 {
-		e := Reply{ReplyTypeEmpty, nil}
-		return &e, errors.New("Webservice not set")
-	}
-	var r *resty.Client
-	if strings.HasPrefix(c.server, "https") {
-		t := tls.Config{}
-		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
-		r = resty.New().SetTLSClientConfig(&t)
-	} else {
-		r = resty.New()
-		if strings.HasPrefix(c.server, "http://localhost") {
-			r.SetDisableWarn(true)
-		}
-	}
 	body, errMarshal := json.Marshal(request)
 	if errMarshal != nil {
 		e := Reply{ReplyTypeEmpty, nil}
 		return &e, errMarshal
 	}
-	resp, err := r.R().
+	resp, err := c.r.R().
 		SetHeader("Content-Type", "application/json").
 		SetBody(body).
 		SetBasicAuth(c.credentials.Username, c.credentials.Password).
 		Post(c.server + "/" + request.GetId())
 
-	defer resp.RawBody().Close()
+	defer func() {
+		// body := resp.RawBody()
+		// if body != nil {
+		resp.RawBody().Close()
+		// }
+	}()
 
 	if err != nil {
 		return nil, err
@@ -74,6 +65,21 @@ func NewClient(server, username, password string) *Client {
 	c := &Client{}
 	c.server = server
 	c.credentials = Credentials{username, password}
+
+	if len(c.server) < 5 {
+		return nil
+	}
+
+	if strings.HasPrefix(c.server, "https") {
+		t := tls.Config{}
+		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
+		c.r = resty.New().SetTLSClientConfig(&t)
+	} else {
+		c.r = resty.New()
+		if strings.HasPrefix(c.server, "http://localhost") {
+			c.r.SetDisableWarn(true)
+		}
+	}
 
 	return c
 }

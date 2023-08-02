@@ -21,15 +21,18 @@ const (
 
 	MaxFreespace = 1000000
 
-	FILE_APPEND = iota
-	FILE_UPDATE
+	DB_MODE_READ = iota
+	DB_MODE_APPEND
+	DB_MODE_UPDATE
+
+	FILE_ADD = iota
 	FILE_DELETE
 
 	// Do not change order; these values get written to the db files
 	TYPE_DELETE = iota
 	TYPE_ENTRY
 	TYPE_ASSOCIATION
-	TYPE_ASSOCIATIONEXT
+	TYPE_ASSOCIATION_EXT
 
 	ASSOCIATED = "associated"
 )
@@ -45,21 +48,10 @@ type CollectionKey struct {
 	Collection string
 }
 
-// type Collection interface {
-// 	Collection(name string) Collection
-// 	Add(key, value1, value2 string) *Association
-// 	Get(key string, value1 string) (bool, *StringSliceSet)
-// 	GetAssociations(value string) (bool, *Tree)
-// 	GetAssociationsExt(value string, entryCollection string) (bool, *Tree)
-// 	SetToString(value string, relationFilter string, s *Tree) (*StringSliceSet, []*Tree)
-// 	SetToString2(value string, relationFilter string, s *Tree) (*TrippleSet, []*Tree)
-// 	Update(key string, value1 string, value2 string, newValue2 string) (bool, string)
-// 	UpdateAdd(key string, value1 string, value2 string, newValue2 string) (bool, string)
-// 	SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (bool, string)
-// 	SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (bool, string)
-// 	Delete(key string, value1 string, value2 string) (bool, string)
-// 	CloseDB()
-// }
+type RawDataEntry struct {
+	Position int64
+	Data     []byte
+}
 
 type Collection struct {
 	dBPath            string
@@ -68,127 +60,55 @@ type Collection struct {
 	totalEntries      uint64
 	totalAssociations uint64
 
-	changeMutex sync.Mutex
+	rawDataToLoad chan RawDataEntry
+	allDataLoaded sync.WaitGroup
 
-	rawDataToLoad chan []byte
-	allDataLoaded sync.WaitGroup // TODO: Better names
+	secureLevel       sync.Mutex
+	totalEntriesMutex sync.Mutex
+	changeMutex       sync.Mutex
 
-	root    Entry
-	rootAss Association
+	entries      []*TieTree
+	uniqueValues []*TieTree
+	associations []*TieTree
 
-	entryAdder          []chan *Entry
-	associationAdder    []chan *Association
-	associationExtAdder []chan *AssociationExt
-
-	inserterWG               sync.WaitGroup
-	inserterWGAssociation    sync.WaitGroup
-	inserterWGAssociationExt sync.WaitGroup
-	inserterWGDynTrie        sync.WaitGroup
-
-	entries         []*TieTree
-	uniqueValues    []*TieTree
-	values          *TieTree
-	associations    []*TieTree
-	associationsExt []*TieTree
-	subCollections  []*TieTree
-
-	dBWriteQueue  chan FileMod
-	dBCloseWriter chan bool
-	freespace     chan FileEntry
-	writeToDisk   bool
-	finished      sync.WaitGroup
-	db_size       int64
-	level         int
-	id            uint64
+	dbReadWg       sync.WaitGroup
+	dBWriteQueue   chan FileMod
+	dBReadQueue    chan ReadRequest
+	dBCloseWriter  chan bool
+	freespace      chan int64
+	writeToDisk    bool
+	finished       sync.WaitGroup
+	finishedAdding sync.WaitGroup
+	db_size        int64
+	level          int
+	id             uint64
 }
 
 type UniqueValue struct {
 	ParentId uint64
-	Value    *[]byte
+	Value    [SIZE_VALUE]byte
 }
 
 type UniqueAssociation struct {
-	// AssociateToCollectionLevel int
-	// AssociateToCollection uint64
 	AssociateTo uint64
-	// RelationCollectionLevel    int
-	// RelationCollection uint64
-	Relation uint64
-}
-
-type UniqueAssociationExt struct {
-	// AssociateToCollectionLevel int
-	AssociateToCollection uint64
-	AssociateTo           uint64
-	// RelationCollectionLevel int
-	RelationCollection uint64
-	Relation           uint64
+	Relation    uint64
 }
 
 type Entry struct {
 	Id          uint64
-	Level       int
 	UniqueValue UniqueValue
-	Position    int64
 }
 
-type Association struct {
-	// CollectionLevel            int
-	// Collection uint64
-	EntryId uint64
-	Level   int
-	// AssociationCollectionLevel int
-	// AssociationCollection      uint64
-	AssociationLevel int
-	AssociateTo      uint64
-	// RelationCollectionLevel    int
-	// RelationCollection         uint64
-	RelationLevel int
-	Relation      uint64
-	Position      int64
-}
-
-type AssociationExt struct {
-	AssociateTo                uint64
-	Relation                   uint64
-	AssociationCollectionLevel int
-	AssociationCollection      uint64
-	RelationCollectionLevel    int
-	RelationCollection         uint64
-	Position                   int64
+type Triple struct {
+	Level       int
+	Key         uint64
+	Value1Level int
+	Value1      uint64
+	Value2Level int
+	Value2      uint64
 }
 
 type Set map[string]map[string]map[string]bool
-
-type StringSliceSet struct {
-	Item   string
-	Key    []string
-	Value1 []string
-	Value2 []string
-	// Good idea?
-	// CustomColumn []CustomColumn //ArbitraryColumns
-}
-
-// type CustomColumn struct {
-// 	Name string
-// 	Values []string
-// }
-
-// Returns first Value1 or empty string if non-existant
-func (set *StringSliceSet) FirstValue1() string {
-	if set != nil && len(set.Value1) > 0 {
-		return set.Value1[0]
-	}
-	return ""
-}
-
-// Returns first Value2 or empty string if non-existant
-func (set *StringSliceSet) FirstValue2() string {
-	if set != nil && len(set.Value2) > 0 {
-		return set.Value2[0]
-	}
-	return ""
-}
 
 type Unit struct{}
 type Value2 map[string]Unit
@@ -265,48 +185,42 @@ func (s Value2) ForEach(do func(value2 string)) {
 	}
 }
 
-type FileEntry interface {
-	toBytes() []byte
-	setPosition(int64)
-	getPosition() int64
-}
-
 type FileMod struct {
-	Mode  int
-	Entry FileEntry
+	Mode        int
+	Level       int
+	EntryType   int
+	Position    int64
+	Association *Triple
+	Entry       *Entry
 }
 
-func (e *Entry) toBytes() []byte {
+type ReadRequest struct {
+	Position  int64
+	ReplyChan chan Triple
+}
+
+func (e *Entry) toBytes(level int) []byte {
 	datatype := make([]byte, SIZE_DATATYPE)
-	level := make([]byte, SIZE_LEVEL)
+	levelBytes := make([]byte, SIZE_LEVEL)
 	id := make([]byte, SIZE_ID)
 	parentId := make([]byte, SIZE_PARENTID)
-	value := make([]byte, SIZE_VALUE)
 
 	binary.LittleEndian.PutUint16(datatype, TYPE_ENTRY)
-	binary.LittleEndian.PutUint64(level, uint64(e.Level))
+	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
 	binary.LittleEndian.PutUint64(id, e.Id)
 	binary.LittleEndian.PutUint64(parentId, e.UniqueValue.ParentId)
-	copy(value, *e.UniqueValue.Value)
+
 	out := make([]byte, ENTRY_SIZE)
 
-	out = append(datatype[:], level[:]...)
+	out = append(datatype[:], levelBytes[:]...)
 	out = append(out, id[:]...)
 	out = append(out, parentId[:]...)
-	out = append(out, value[:]...)
+	out = append(out, e.UniqueValue.Value[:]...)
 
 	return out
 }
 
-func (e *Entry) setPosition(pos int64) {
-	e.Position = pos
-}
-
-func (e *Entry) getPosition() int64 {
-	return e.Position
-}
-
-func (a *Association) toBytes() []byte {
+func (a *Triple) toBytes() []byte {
 	datatype := make([]byte, SIZE_DATATYPE)
 	entry_level := make([]byte, SIZE_LEVEL)
 	entry_id := make([]byte, SIZE_ID)
@@ -317,11 +231,11 @@ func (a *Association) toBytes() []byte {
 
 	binary.LittleEndian.PutUint16(datatype, TYPE_ASSOCIATION)
 	binary.LittleEndian.PutUint64(entry_level, uint64(a.Level))
-	binary.LittleEndian.PutUint64(entry_id, a.EntryId)
-	binary.LittleEndian.PutUint64(association_level, uint64(a.AssociationLevel))
-	binary.LittleEndian.PutUint64(association, a.AssociateTo)
-	binary.LittleEndian.PutUint64(relation_level, uint64(a.RelationLevel))
-	binary.LittleEndian.PutUint64(relation, a.Relation)
+	binary.LittleEndian.PutUint64(entry_id, a.Key)
+	binary.LittleEndian.PutUint64(association_level, uint64(a.Value2Level))
+	binary.LittleEndian.PutUint64(association, a.Value2)
+	binary.LittleEndian.PutUint64(relation_level, uint64(a.Value1Level))
+	binary.LittleEndian.PutUint64(relation, a.Value1)
 
 	out := make([]byte, ENTRY_SIZE)
 
@@ -333,49 +247,4 @@ func (a *Association) toBytes() []byte {
 	out = append(out, relation[:]...)
 
 	return out
-}
-
-func (a *Association) setPosition(pos int64) {
-	a.Position = pos
-}
-
-func (a *Association) getPosition() int64 {
-	return a.Position
-}
-
-func (a *AssociationExt) toBytes() []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	association := make([]byte, SIZE_ID)
-	relation := make([]byte, SIZE_ID)
-	association_collection_level := make([]byte, SIZE_LEVEL)
-	association_collection := make([]byte, SIZE_ID)
-	relation_collection_level := make([]byte, SIZE_LEVEL)
-	relation_collection := make([]byte, SIZE_ID)
-
-	binary.LittleEndian.PutUint16(datatype, TYPE_ASSOCIATIONEXT)
-	binary.LittleEndian.PutUint64(association, a.AssociateTo)
-	binary.LittleEndian.PutUint64(relation, a.Relation)
-	binary.LittleEndian.PutUint64(association_collection_level, uint64(a.AssociationCollectionLevel))
-	binary.LittleEndian.PutUint64(association_collection, a.AssociationCollection)
-	binary.LittleEndian.PutUint64(relation_collection_level, uint64(a.RelationCollectionLevel))
-	binary.LittleEndian.PutUint64(relation_collection, a.RelationCollection)
-
-	out := make([]byte, ENTRY_SIZE)
-
-	out = append(datatype[:], association[:]...)
-	out = append(out, relation[:]...)
-	out = append(out, association_collection_level[:]...)
-	out = append(out, association_collection[:]...)
-	out = append(out, relation_collection_level[:]...)
-	out = append(out, relation_collection[:]...)
-
-	return out
-}
-
-func (a *AssociationExt) setPosition(pos int64) {
-	a.Position = pos
-}
-
-func (a *AssociationExt) getPosition() int64 {
-	return a.Position
 }

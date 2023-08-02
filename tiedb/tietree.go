@@ -56,16 +56,16 @@ func (tree *TieTree) Put(key interface{}, value interface{}) {
 }
 
 func (t *TieTree) InnerJoin(tree *TieTree) {
-	c := make(chan *Association, 10000)
+	c := make(chan *Triple, 10000)
 	go func() {
 		it := tree.Iterator()
 		for it.Next() {
-			c <- it.Value().(*Association)
+			c <- it.Value().(*Triple)
 		}
 		close(c)
 	}()
 	for x := range c {
-		fmt.Println(x.AssociateTo)
+		fmt.Println(x.Value2)
 	}
 }
 
@@ -89,12 +89,11 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.dBPath = path
 	ic.dBName = dbname
 	ic.dBFullPath = path + "/" + dbname + ".tie"
-	ic.values = NewTreeWith(ValueComparator)
 
 	if db.writeToDisk {
 		fmt.Println("Initializing", ic.dBFullPath)
 		os.MkdirAll(path, 0777)
-		ic.freespace = make(chan FileEntry, MaxFreespace)
+		ic.freespace = make(chan int64, MaxFreespace)
 		if clearExistingDB {
 			os.Remove(ic.dBFullPath)
 		}
@@ -104,10 +103,10 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 		}
 		ic.dBWriter()
 	}
-	e := ic.insert(dbname)
+	// e, dbLevel := ic.insert(dbname)
 
-	ic.level = e.Level
-	ic.id = e.Id
+	// ic.level = dbLevel
+	// ic.id = e.Id
 
 	return &ic
 }

@@ -51,31 +51,35 @@ func TestInsertAssociation(t *testing.T) {
 // 		t.Errorf("Error input2, got: %s, want: %s.", val2, input2)
 // 	}
 // }
+*/
 
-func TestDeleteAssociation(t *testing.T) {
-	db := NewDB(false)
+func TestAddAssociation(t *testing.T) {
+	db := NewDB(true)
 	col := db.GetCollection(CollectionKey{"Collections", "test3"})
 
-	col.Add("superkey", "value1", "file")
-	col.Add("superkey", "value2", "file")
-	col.Delete("superkey", "value2", "file")
-	col.Add("superkey", "value3", "file2")
-	col.Add("superkey", "value4", "file2")
+	col.Add("superkey", "value1", "value2-1")
+	col.Add("superkey", "value1", "value2-2")
+	// col.Delete("superkey", "value1-2", "value2-1")
+	// col.Add("superkey", "value3", "file2")
+	// col.Add("superkey", "value4", "file2")
+	col.Sync()
 
-	found, asses := col.GetAssociations("superkey")
+	asses, found := col.GetAssociations("superkey")
 
 	if found {
-		out, _ := col.SetToString("superkey", "", asses)
-		if out.Value2[0] != "value3" {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Value2[0], "value3")
+		out, _ := col.GetTripleSet("superkey", "", asses)
+		if !out["superkey"]["value1"].Has("value2-1") {
+			t.Errorf("Error input1, didn't have %s", "value2-1")
 		}
-		if out.Value2[1] != "value4" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[1], "value4")
+		if !out["superkey"]["value1"].Has("value2-2") {
+			t.Errorf("Error input2, didn't have %s", "value2-1")
 		}
 	} else {
-		t.Error("Error GetAssociations, did not find", "a")
+		t.Error("Error GetAssociations, did not find", "superkey")
 	}
 }
+
+/*
 
 func TestReOpen(t *testing.T) {
 	db := NewDB(true)
