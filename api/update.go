@@ -1,6 +1,7 @@
 package api
 
 import (
+	"git.sr.ht/~uid/tie/tiedb"
 	ws "git.sr.ht/~uid/tie/webservice"
 )
 
@@ -42,11 +43,25 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 
 	col := env.Collection(request.Namespace, request.CollectionId)
 
+	msg := ""
+	ok := true
 	if request.AddOnFailure {
-		reply.Message, reply.Success = col.UpdateAdd(request.Key, request.Value1, request.Value2, request.NewValue2)
+		msg, ok = col.UpdateAdd(request.Key, request.Value1, request.Value2, request.NewValue2)
+		if ok {
+			msg2, _ := col.Delete(request.Value2, tiedb.ASSOCIATED, request.Key)
+			msg += "\n" + msg2
+			col.Add(request.NewValue2, tiedb.ASSOCIATED, request.Key)
+		}
 	} else {
-		reply.Message, reply.Success = col.Update(request.Key, request.Value1, request.Value2, request.NewValue2)
+		msg, ok = col.Update(request.Key, request.Value1, request.Value2, request.NewValue2)
+		if ok {
+			msg2, _ := col.Delete(request.Value2, tiedb.ASSOCIATED, request.Key)
+			msg += "\n" + msg2
+			col.Add(request.NewValue2, tiedb.ASSOCIATED, request.Key)
+		}
 	}
+	reply.Message = msg
+	reply.Success = ok
 	reply.OrigKey = request.Key
 	reply.OrigValue1 = request.Value2
 	reply.OrigValue2 = request.Value2

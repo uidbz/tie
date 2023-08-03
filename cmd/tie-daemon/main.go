@@ -60,6 +60,7 @@ func main() {
 		c.NewUpdateRequest(api.Update{}),
 		api.NewBatchRequest(&api.Batch{}),
 		c.NewAssociatedRequest(""),
+		c.NewSyncRequest(),
 	}
 
 	ws := webservice.NewWebservice(config, requests)

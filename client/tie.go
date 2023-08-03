@@ -131,6 +131,7 @@ func (tc *TieClient) Sync() error {
 	if _, err := tc.client.Run(request); err != nil {
 		return err
 	}
+	return nil
 }
 
 // Get a TripleSet with all triples that are associated with 'key'

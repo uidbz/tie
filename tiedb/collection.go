@@ -68,10 +68,8 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (string, 
 
 		if f1 && f2 {
 			assKey := UniqueAssociation{
-				// AssociateToCollection: ic.Id,
 				AssociateTo: e2.Id,
-				// RelationCollection:    ic.Id,
-				Relation: r.Id,
+				Relation:    r.Id,
 			}
 			// I believe the below Get and deleteAssociation has to happen as 1 operation.
 			// in case a time slice happen after ;found

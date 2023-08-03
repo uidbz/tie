@@ -23,6 +23,9 @@ func TestGet(t *testing.T) {
 			t.Error(reply.Message)
 		}
 	})
+	if e := tie.Sync(); e != nil {
+		t.Error(e)
+	}
 	tie.Get("heyhey", func(reply GetReply) {
 		val2 := reply.Result["heyhey"]["Noice"]
 		if !val2.Has("Oh yeah!") || !reply.Success {
@@ -39,11 +42,17 @@ func TestDelete(t *testing.T) {
 			t.Error(reply.Message)
 		}
 	})
+	if e := tie.Sync(); e != nil {
+		t.Error(e)
+	}
 	tie.Delete("heyhey", "Noice", "Oh yeah!", func(reply DeleteReply) {
 		if !reply.Success {
 			t.Error(reply.Message)
 		}
 	})
+	if e := tie.Sync(); e != nil {
+		t.Error(e)
+	}
 	tie.Get("heyhey", func(reply GetReply) {
 		val2 := reply.Result["heyhey"]["Noice"]
 		if val2.Has("Oh yeah!") || !reply.Success {
@@ -63,6 +72,10 @@ func TestUpdate(t *testing.T) {
 		}
 	})
 
+	if e := tie.Sync(); e != nil {
+		t.Error(e)
+	}
+
 	// Update with new value
 	update := tie.NewUpdate("Heyhey", "Noice", "Oh yeah", "Oh yeah 2")
 	tie.Update(update, func(reply UpdateReply) {
@@ -70,6 +83,10 @@ func TestUpdate(t *testing.T) {
 			t.Error(reply.Message)
 		}
 	})
+
+	if e := tie.Sync(); e != nil {
+		t.Error(e)
+	}
 
 	// Check that you can get the new value
 	tie.Get("Heyhey", func(reply GetReply) {
