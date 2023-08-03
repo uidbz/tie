@@ -59,6 +59,15 @@ func (batch *Batch) Update(update Update) {
 func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := BatchReply{}
 
+	tmpNamespace, tmpCollectionId := "", ""
+	syncOnCollectionChange := func(namespace, collectionId string) {
+		if tmpNamespace == "" {
+			tmpNamespace, tmpCollectionId = namespace, collectionId
+		} else if namespace != tmpNamespace && collectionId != tmpCollectionId {
+			env.Collection(namespace, collectionId).Sync()
+			tmpNamespace, tmpCollectionId = namespace, collectionId
+		}
+	}
 	for _, x := range request.Batch.UpdateRequests {
 		r, err := x.Reply(env)
 		if err == nil {
@@ -68,7 +77,11 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 			reply.Message = "Error updating values"
 			return ws.Reply{request.Id, reply}, errors.New("Error updating values")
 		}
+		syncOnCollectionChange(x.Namespace, x.CollectionId)
 	}
+
+	env.Collection(tmpNamespace, tmpCollectionId).Sync() // Sync before continue to next request type
+	tmpNamespace, tmpCollectionId = "", ""
 
 	for _, x := range request.Batch.DeleteRequests {
 		r, err := x.Reply(env)
@@ -79,7 +92,10 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 			reply.Message = "Error deleting values"
 			return ws.Reply{request.Id, reply}, errors.New("Error deleting values")
 		}
+		syncOnCollectionChange(x.Namespace, x.CollectionId)
 	}
+	env.Collection(tmpNamespace, tmpCollectionId).Sync() // Sync before continue to next request type
+	tmpNamespace, tmpCollectionId = "", ""
 
 	for _, x := range request.Batch.AddRequests {
 		r, err := x.Reply(env)
@@ -90,7 +106,10 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 			reply.Message = "Error adding values"
 			return ws.Reply{request.Id, reply}, errors.New("Error adding values")
 		}
+		syncOnCollectionChange(x.Namespace, x.CollectionId)
 	}
+	env.Collection(tmpNamespace, tmpCollectionId).Sync() // Sync before continue to next request type
+	tmpNamespace, tmpCollectionId = "", ""
 
 	for _, x := range request.Batch.GetRequests {
 		r, err := x.Reply(env)

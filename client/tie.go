@@ -96,6 +96,7 @@ func (tc *TieClient) NewUpdate(key, value1, value2, newValue2 string) api.Update
 	}
 }
 
+// Make a new Batch - run with Batch function
 func (tc *TieClient) NewBatch() *api.Batch {
 	return &api.Batch{
 		Collection: tc.CollectionInfo(),
@@ -106,6 +107,7 @@ func (tc *TieClient) CollectionInfo() api.CollectionInfo {
 	return api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 }
 
+// Add a triple to the collection
 func (tc *TieClient) Add(key, value1, value2 string, handler func(reply AddReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewAddRequest(key, value1, value2)
@@ -121,6 +123,17 @@ func (tc *TieClient) Add(key, value1, value2 string, handler func(reply AddReply
 	}
 }
 
+// Wait until all changes has been committed to the collection
+func (tc *TieClient) Sync() error {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewSyncRequest()
+
+	if _, err := tc.client.Run(request); err != nil {
+		return err
+	}
+}
+
+// Get a TripleSet with all triples that are associated with 'key'
 func (tc *TieClient) Associated(key string, handler func(reply AssociatedReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewAssociatedRequest(key)
@@ -136,6 +149,7 @@ func (tc *TieClient) Associated(key string, handler func(reply AssociatedReply))
 	}
 }
 
+// Get a TripleSet from a key
 func (tc *TieClient) Get(key string, handler func(reply GetReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewGetRequest(key)
@@ -151,6 +165,7 @@ func (tc *TieClient) Get(key string, handler func(reply GetReply)) {
 	}
 }
 
+// Delete a triple from the collection
 func (tc *TieClient) Delete(key, value1, value2 string, handler func(reply DeleteReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewDeleteRequest(key, value1, value2)
@@ -166,6 +181,7 @@ func (tc *TieClient) Delete(key, value1, value2 string, handler func(reply Delet
 	}
 }
 
+// Update a triple in the collection
 func (tc *TieClient) Update(update api.Update, handler func(reply UpdateReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewUpdateRequest(update)
@@ -181,6 +197,7 @@ func (tc *TieClient) Update(update api.Update, handler func(reply UpdateReply)) 
 	}
 }
 
+// Run a batch - make new Batch with NewBatch
 func (tc *TieClient) Batch(batch *api.Batch, handler func(reply BatchReply)) {
 	request := api.NewBatchRequest(batch)
 
@@ -195,6 +212,7 @@ func (tc *TieClient) Batch(batch *api.Batch, handler func(reply BatchReply)) {
 	}
 }
 
+// Check if the key exists
 func (tc *TieClient) Exists(key string) bool {
 	result := false
 	tc.Get(key, func(reply GetReply) {

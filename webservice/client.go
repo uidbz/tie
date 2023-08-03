@@ -34,10 +34,7 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 		Post(c.server + "/" + request.GetId())
 
 	defer func() {
-		// body := resp.RawBody()
-		// if body != nil {
 		resp.RawBody().Close()
-		// }
 	}()
 
 	if err != nil {
