@@ -22,6 +22,11 @@ type AssociatedRequest struct {
 	CollectionInfo
 
 	Key string
+	AssociatedOptions
+}
+
+type AssociatedOptions struct {
+	MatchValue1 string
 }
 
 type AssociatedReply struct {
@@ -34,14 +39,16 @@ func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 
 	col := env.Collection(request.Namespace, request.CollectionId)
 
-	if assPtr, found := col.GetAssociations(request.Key); found {
-		_, trees := col.GetTripleSet(request.Key, tiedb.ASSOCIATED, assPtr)
+	if assPtr, found := col.GetReverseAssociations(request.Key); found {
+		set, _ := col.GetTripleSet(request.Key, "", assPtr)
 
-		set := make(tiedb.TripleSet)
-		for val2, t := range trees {
-			set2, _ := col.GetTripleSet(val2, "", t)
-			set[val2] = set2[val2]
-		}
+		set.ForEachKey(func(key string) {
+			if t, ok := col.GetAssociations(key); ok {
+				set2, _ := col.GetTripleSet(key, request.MatchValue1, t)
+				set[key] = set2[key]
+			}
+
+		})
 		reply.Result = set
 		reply.Success = true
 		reply.OrigKey = request.Key

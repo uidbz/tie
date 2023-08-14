@@ -21,14 +21,27 @@ type GetRequest struct {
 	ws.Request
 	CollectionInfo
 
-	Key              string
+	Key string
+	GetOptions
+}
+
+// Options for GetWith
+// GetNextLevel: Fetch next level ('value2's from result are used as keys)
+// NextLevelValue1s: Filter-in 'value1' results from next level
+// Filter: Filter-in 'value1'
+// Reverse: Get reverse associations
+// OnlyReverse: Do not get non-reverse associations
+type GetOptions struct {
 	NextLevelValue1s []string
 	Filter           string
+	Reverse          bool
+	OnlyReverse      bool
 }
 
 type GetReply struct {
 	ws.ReplyStatus
-	Result tiedb.TripleSet
+	Result        tiedb.TripleSet
+	ReverseResult tiedb.TripleSet
 }
 
 // Returns (value of Value2, true) from Result, if the only key in the Result is the requested key, and if only 1 Value2 exists.
@@ -55,59 +68,35 @@ func (gr GetReply) OneKey() (tiedb.Value1, bool) {
 
 func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := GetReply{}
+	reply.OrigKey = request.Key
 
 	col := env.Collection(request.Namespace, request.CollectionId)
 
-	if assPtr, found := col.GetAssociations(request.Key); found {
-		// replySlice, errString := RequestToStringSlice(col, r.Value, r.Relation, assPtr)
-		// var replySet *tiedb.TrippleSet
-		// var nextLevelRelation, relation []string
-		// for _, x := range request.NextLevelValues {
-		// 	if len(x) >= 1 {
-		// 		if x[0] == '+' {
-		// 			nextLevelRelation = append(nextLevelRelation, strings.TrimPrefix(x, "+"))
-		// 		} else {
-		// 			relation = append(relation, x)
-		// 		}
-		// 	}
-		// }
-		// if len(relation) > 1 {
-		// 	reply.Success = false
-		// 	return ws.Reply{request.Id, reply}, errors.New("Error: Max filters = 1, maybe you ment to use 'tie filters' or with + in front.")
-		// }
+	if !request.OnlyReverse {
+		if assPtr, found := col.GetAssociations(request.Key); found {
+			set, trees := col.GetTripleSet(request.Key, request.Filter, assPtr)
 
-		set, trees := col.GetTripleSet(request.Key, request.Filter, assPtr)
-
-		for val2, t := range trees {
-			for _, x := range request.NextLevelValue1s {
-				set2, _ := col.GetTripleSet(val2, x, t)
-				set[x] = set2[x]
+			for key, t := range trees {
+				for _, x := range request.NextLevelValue1s {
+					set2, _ := col.GetTripleSet(key, x, t)
+					set[x] = set2[x]
+				}
 			}
+			reply.Result = set
 		}
-		// replySlice = append(replySlice, set)
-		// if len(nextLevelRelation) > 0 {
-		// 	for i, x := range trees {
-		// 		for _, rel := range nextLevelRelation {
-		// 			set2, _ := col.SetToString2(set.Value2[i], rel, x)
-		// 			replySlice = append(replySlice, set2)
-		// 		}
-		// 	}
-		// }
-		// set.ForEach(func(key, val1, val2 string) {
-		// 	fmt.Println(key, val1, val2)
-		// })
-		reply.Result = set
-		if len(set) != 0 {
-			reply.Success = true
-		} else {
-			reply.Success = false
-			reply.Message = "Key has 0 associated values"
-		}
-		reply.OrigKey = request.Key
-
-		return ws.Reply{request.Id, reply}, nil
 	}
-	reply.Success = false
+	if request.Reverse || request.OnlyReverse {
+		if reverse, found := col.GetReverseAssociations(request.Key); found {
+			reply.ReverseResult, _ = col.GetTripleSet(request.Key, request.Filter, reverse)
+		}
+	}
+
+	if len(reply.Result) != 0 || len(reply.ReverseResult) != 0 {
+		reply.Success = true
+	} else {
+		reply.Success = false
+		reply.Message = "Key has no associated values"
+	}
 
 	return ws.Reply{request.Id, reply}, nil
 }

@@ -2,7 +2,6 @@ package tiedb
 
 import (
 	"bytes"
-	"fmt"
 	"sync/atomic"
 )
 
@@ -44,6 +43,12 @@ func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 	if tree, found := ic.GetAssociations(key); found {
 		data, _ := ic.GetTripleSet(key, value1, tree)
 		if data != nil {
+			if reverse, found := ic.GetReverseAssociations(key); found {
+				associated, _ := ic.GetTripleSet(key, value1, reverse)
+				associated.ForEachKey(func(key string) {
+					data[key] = associated[key]
+				})
+			}
 			return data, true
 		} else {
 			return nil, false
@@ -61,23 +66,36 @@ func (ic *Collection) GetAssociations(value string) (*TieTree, bool) {
 	}
 }
 
+func (ic *Collection) GetReverseAssociations(value string) (*TieTree, bool) {
+	if e, level, found := ic.getEntryFromString(value); !found {
+		return &TieTree{}, false
+	} else {
+		return ic.getReverseAssociationsFromEntry(level, e), true
+	}
+}
+
 func (ic *Collection) Delete(key string, value1 string, value2 string) (string, bool) {
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
+
 	if asses, found := ic.GetAssociations(key); found {
-		e2, _, f1 := ic.getEntryFromString(value2)
-		r, _, f2 := ic.getEntryFromString(value1)
+		k, _, _ := ic.getEntryFromString(key)
+		v1, _, f1 := ic.getEntryFromString(value1)
+		v2, l2, f2 := ic.getEntryFromString(value2)
 
 		if f1 && f2 {
 			assKey := UniqueAssociation{
-				AssociateTo: e2.Id,
-				Relation:    r.Id,
+				AssociateTo: v2.Id,
+				Relation:    v1.Id,
 			}
-			// I believe the below Get and deleteAssociation has to happen as 1 operation.
-			// in case a time slice happen after ;found
-			ic.changeMutex.Lock()
-			defer ic.changeMutex.Unlock()
+			reverseAssKey := UniqueAssociation{
+				AssociateTo: k.Id,
+				Relation:    v1.Id,
+			}
 
 			if a, found := asses.Get(assKey); found {
 				ic.deleteAssociation(asses, assKey, a.(int64))
+				ic.getReverseAssociationsFromEntry(l2, v2).Delete(reverseAssKey)
 				return "", true
 			}
 		}
@@ -154,22 +172,28 @@ func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, 
 // }
 
 func (ic *Collection) secureLevelInIndex(level int) {
+	if level < ic.levelCount {
+		return
+	}
+
 	ic.secureLevel.Lock()
 	defer ic.secureLevel.Unlock()
 
-	levels := len(ic.entries)
-
-	for i := levels; i <= level; i++ {
-		ic.entries = append(ic.entries, NewTreeWith(UInt64Comparator))
-		ic.uniqueValues = append(ic.uniqueValues, NewTreeWith(UniqueValueComparator))
-		ic.associations = append(ic.associations, NewTreeWith(UInt64Comparator))
+	for i := ic.levelCount; i <= level; i++ {
+		ic.levels = append(ic.levels, entryLevel{
+			entries:             NewTreeWith(UInt64Comparator),
+			uniqueValues:        NewTreeWith(UniqueValueComparator),
+			associations:        NewTreeWith(UInt64Comparator),
+			reverseAssociations: NewTreeWith(UInt64Comparator),
+		})
+		ic.levelCount++
 	}
 }
 
 func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]byte) (*Entry, bool) {
 	ic.secureLevelInIndex(level)
 
-	if entry, found := ic.uniqueValues[level].Get(UniqueValue{parentId, value}); found {
+	if entry, found := ic.levels[level].uniqueValues.Get(UniqueValue{parentId, value}); found {
 		return entry.(*Entry), true
 	} else {
 		return nil, false
@@ -255,13 +279,13 @@ func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]
 
 func (ic *Collection) insertEntry(level int, e *Entry) {
 	ic.secureLevelInIndex(level)
-	ic.entries[level].Put(e.Id, e)
-	ic.uniqueValues[level].Put(e.UniqueValue, e)
+	ic.levels[level].entries.Put(e.Id, e)
+	ic.levels[level].uniqueValues.Put(e.UniqueValue, e)
 }
 
 func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	ic.secureLevelInIndex(level)
-	s, found := ic.associations[level].Get(a.Key)
+	assTree, found := ic.levels[level].associations.Get(a.Key)
 	if !found {
 		ass := NewTreeWith(UniqueAssociationComparator)
 		key := UniqueAssociation{
@@ -269,9 +293,9 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 			Relation:    a.Value1,
 		}
 		ass.Put(key, pos)
-		ic.associations[level].Put(a.Key, ass)
+		ic.levels[level].associations.Put(a.Key, ass)
 	} else {
-		ass := s.(*TieTree)
+		ass := assTree.(*TieTree)
 		key := UniqueAssociation{
 			AssociateTo: a.Value2,
 			Relation:    a.Value1,
@@ -280,24 +304,51 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	}
 
 	atomic.AddUint64(&ic.totalAssociations, 1)
+
+	// Insert reverse association
+	reverseAssTree, found := ic.levels[a.Value2Level].reverseAssociations.Get(a.Value2)
+	if !found {
+		ass := NewTreeWith(UniqueAssociationComparator)
+		key := UniqueAssociation{
+			AssociateTo: a.Key,
+			Relation:    a.Value1,
+		}
+		ass.Put(key, pos)
+		ic.levels[a.Value2Level].reverseAssociations.Put(a.Value2, ass)
+	} else {
+		ass := reverseAssTree.(*TieTree)
+		key := UniqueAssociation{
+			AssociateTo: a.Key,
+			Relation:    a.Value1,
+		}
+		ass.Put(key, pos)
+	}
 }
 
 func (ic *Collection) getEntry(level int, id uint64) *Entry {
 	if level < 0 {
 		return nil
 	}
-	if level < len(ic.entries) {
-		if entry, found := ic.entries[level].Get(id); found {
+	if level < ic.levelCount {
+		if entry, found := ic.levels[level].entries.Get(id); found {
 			return entry.(*Entry)
 		}
 	}
-	fmt.Println(level, id)
 	return nil
 }
 
 func (ic *Collection) getAssociationsFromEntry(level int, e *Entry) *TieTree {
-	if level >= 0 && level < len(ic.associations) {
-		if set, found := ic.associations[level].Get(e.Id); found {
+	if level >= 0 && level < ic.levelCount {
+		if set, found := ic.levels[level].associations.Get(e.Id); found {
+			return set.(*TieTree)
+		}
+	}
+	return NewTreeWith(UInt64Comparator)
+}
+
+func (ic *Collection) getReverseAssociationsFromEntry(level int, e *Entry) *TieTree {
+	if level >= 0 && level < ic.levelCount {
+		if set, found := ic.levels[level].reverseAssociations.Get(e.Id); found {
 			return set.(*TieTree)
 		}
 	}
@@ -358,8 +409,8 @@ func (ic *Collection) uniqueAssociationExists(keyLevel int, key *Entry, value1 *
 }
 
 // New implementation of SetToString using new output format
-func (ic *Collection) GetTripleSet(key string, value1Filter string, s *TieTree) (TripleSet, map[string]*TieTree) {
-	result := make(TripleSet)
+func (ic *Collection) GetTripleSet(key string, value1Filter string, s *TieTree) (result TripleSet, value2Trees map[string]*TieTree) {
+	result = make(TripleSet)
 
 	c := make(chan Triple, 10000)
 	go func() {
@@ -378,13 +429,19 @@ func (ic *Collection) GetTripleSet(key string, value1Filter string, s *TieTree) 
 		close(c)
 	}()
 
-	val2trees := make(map[string]*TieTree)
+	value2Trees = make(map[string]*TieTree)
+	filterActive := value1Filter != ""
 
 	for x := range c {
-		key := ic.getValueString(x.Level, x.Key)
 		value1 := ic.getValueString(x.Value1Level, x.Value1)
+		if filterActive && value1 != value1Filter {
+			continue
+		}
+		key := ic.getValueString(x.Level, x.Key)
 		value2 := ic.getValueString(x.Value2Level, x.Value2)
-		val2trees[value2] = ic.getAssociationsFromEntry(x.Level, ic.getEntry(x.Value2Level, x.Value2))
+		if _, ok := value2Trees[value2]; !ok {
+			value2Trees[value2] = ic.getAssociationsFromEntry(x.Level, ic.getEntry(x.Value2Level, x.Value2))
+		}
 
 		if !result.Has(key) {
 			result[key] = make(Value1)
@@ -397,15 +454,7 @@ func (ic *Collection) GetTripleSet(key string, value1Filter string, s *TieTree) 
 		}
 	}
 
-	//Filters - probably should be done differently
-	if value1Filter != "" {
-		val1 := result[value1Filter]
-		result := make(TripleSet)
-		result[key] = make(Value1)
-		result[key] = val1
-	}
-
-	return result, val2trees
+	return result, value2Trees
 }
 
 func (ic *Collection) closeDB() {

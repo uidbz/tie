@@ -38,6 +38,7 @@ cmd/tie-handle/tie-handle
 examples/tiedb-client-add-get/tiedb-client-add-get
 examples/tiedb-client-batch/tiedb-client-batch
 examples/tiedb-client-objectmanager/tiedb-client-objectmanager
+examples/tiedb-client-reverse/tiedb-client-reverse
 examples/webservice/server/server
 examples/webservice/server/authentication
 examples/webservice/client/client

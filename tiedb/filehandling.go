@@ -154,7 +154,7 @@ func (t *Collection) openDB() *os.File {
 func (ic *Collection) getAssociationPosition(level int, a *Triple) (pos int64) {
 	pos = -1
 
-	if s, found := ic.associations[level].Get(a.Key); found {
+	if s, found := ic.levels[level].associations.Get(a.Key); found {
 		ass := s.(*TieTree)
 		key := UniqueAssociation{
 			AssociateTo: a.Value2,

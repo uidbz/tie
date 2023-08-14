@@ -16,8 +16,7 @@ const (
 	SIZE_LEVEL    = 8
 	SIZE_ID       = 8
 	SIZE_PARENTID = SIZE_ID
-	// SIZE_VALUE    = 72 // 12 * 8 - 3 * 8
-	SIZE_VALUE = 24 // 6 * 8 - 3 * 8
+	SIZE_VALUE    = 24 // 6 * 8 - 3 * 8
 
 	MaxFreespace = 1000000
 
@@ -29,7 +28,7 @@ const (
 	TYPE_ENTRY       = 11
 	TYPE_ASSOCIATION = 12
 
-	ASSOCIATED = "associated"
+	// ASSOCIATED = "associated"
 )
 
 type FileIndexer interface {
@@ -48,6 +47,13 @@ type RawDataEntry struct {
 	Data     []byte
 }
 
+type entryLevel struct {
+	entries             *TieTree
+	uniqueValues        *TieTree
+	associations        *TieTree
+	reverseAssociations *TieTree
+}
+
 type Collection struct {
 	dBPath            string
 	dBName            string
@@ -62,9 +68,8 @@ type Collection struct {
 	totalEntriesMutex sync.Mutex
 	changeMutex       sync.Mutex
 
-	entries      []*TieTree
-	uniqueValues []*TieTree
-	associations []*TieTree
+	levels     []entryLevel
+	levelCount int
 
 	dbReadWg       sync.WaitGroup
 	dBWriteQueue   chan FileMod
@@ -75,8 +80,6 @@ type Collection struct {
 	finished       sync.WaitGroup
 	finishedAdding sync.WaitGroup
 	db_size        int64
-	level          int
-	id             uint64
 }
 
 type UniqueValue struct {

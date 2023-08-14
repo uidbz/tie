@@ -1,7 +1,6 @@
 package api
 
 import (
-	"git.sr.ht/~uid/tie/tiedb"
 	ws "git.sr.ht/~uid/tie/webservice"
 )
 
@@ -38,7 +37,6 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	col := env.Collection(request.Namespace, request.CollectionId)
 
 	col.Add(request.Key, request.Value1, request.Value2)
-	col.Add(request.Value2, tiedb.ASSOCIATED, request.Key)
 
 	reply.Success = true
 	reply.OrigKey = request.Key

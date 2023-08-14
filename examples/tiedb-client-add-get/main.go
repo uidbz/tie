@@ -21,6 +21,7 @@ func main() {
 	tie.Add("pizza", "topping", "basil", handleError)
 	tie.Add("pizza", "baking-time", "7 min", handleError)
 	tie.Add("pizza", "baking-temperature", "250 °C", handleError)
+	tie.Sync()
 
 	tie.Get("pizza", func(reply client.GetReply) {
 		if reply.Success {
