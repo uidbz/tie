@@ -21,8 +21,8 @@ type GetRequest struct {
 	ws.Request
 	CollectionInfo
 
-	Key string
-	GetOptions
+	Key     string
+	Options GetOptions
 }
 
 // Options for GetWith
@@ -32,16 +32,26 @@ type GetRequest struct {
 // Reverse: Get reverse associations
 // OnlyReverse: Do not get non-reverse associations
 type GetOptions struct {
+	Intersect        []Transform
+	Exclude          []Transform
 	NextLevelValue1s []string
 	Filter           string
 	Reverse          bool
-	OnlyReverse      bool
+	SortOnNextLevel  bool
+	Sort             tiedb.SortOptions
+}
+
+type Transform struct {
+	Key     string
+	Reverse bool
 }
 
 type GetReply struct {
 	ws.ReplyStatus
-	Result        tiedb.TripleSet
-	ReverseResult tiedb.TripleSet
+	Result              tiedb.TripleSet
+	ReverseResult       tiedb.TripleSet
+	TotalResults        int
+	TotalReverseResults int
 }
 
 // Returns (value of Value2, true) from Result, if the only key in the Result is the requested key, and if only 1 Value2 exists.
@@ -66,28 +76,67 @@ func (gr GetReply) OneKey() (tiedb.Value1, bool) {
 	return nil, false
 }
 
+func transform(dest *tiedb.TieTree, col *tiedb.Collection, list []Transform, exclude bool) *tiedb.TieTree {
+	if len(list) != 0 {
+		for _, x := range list {
+			var t *tiedb.TieTree
+			var found bool
+			if x.Reverse {
+				t, found = col.GetReverseAssociations(x.Key)
+			} else {
+				t, found = col.GetAssociations(x.Key)
+			}
+			if found {
+				if exclude {
+					dest = dest.Exclude(t)
+				} else {
+					dest = dest.Intersect(t)
+				}
+			}
+		}
+	}
+	return dest
+}
+
 func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := GetReply{}
 	reply.OrigKey = request.Key
 
 	col := env.Collection(request.Namespace, request.CollectionId)
-
-	if !request.OnlyReverse {
-		if assPtr, found := col.GetAssociations(request.Key); found {
-			set, trees := col.GetTripleSet(request.Key, request.Filter, assPtr)
-
-			for key, t := range trees {
-				for _, x := range request.NextLevelValue1s {
-					set2, _ := col.GetTripleSet(key, x, t)
-					set[x] = set2[x]
-				}
-			}
-			reply.Result = set
-		}
-	}
-	if request.Reverse || request.OnlyReverse {
+	// o := tiedb.LookupOptions{
+	// 	Value1Filter: request.Options.Filter,
+	// 	Offset:       request.Options.Offset,
+	// 	Limit:        request.Options.Limit,
+	// }
+	if request.Options.Reverse {
 		if reverse, found := col.GetReverseAssociations(request.Key); found {
-			reply.ReverseResult, _ = col.GetTripleSet(request.Key, request.Filter, reverse)
+			reverse = transform(reverse, col, request.Options.Intersect, false)
+			reverse = transform(reverse, col, request.Options.Exclude, true)
+			reply.ReverseResult = col.GetTripleSet(reverse, request.Options.Filter, request.Options.Sort)
+		}
+	} else {
+		if direct, found := col.GetAssociations(request.Key); found {
+			if request.Options.SortOnNextLevel {
+				// trees := col.GetValue2Trees(assPtr, request.Options.Filter)
+				// for _, t := range trees {
+				// 	col.Sort(t, request.Options.Sort)
+
+				// set2, _ := col.GetTripleSet(key, request.Options. , o)
+
+				// for _, x := range request.Options.NextLevelValue1s {
+				// 	o.Value1Filter = x
+				// 	set2, _ := col.GetTripleSet(key, t, o)
+				// 	set[x] = set2[x]
+				// }
+				// }
+			} else {
+				direct = transform(direct, col, request.Options.Intersect, false)
+				direct = transform(direct, col, request.Options.Exclude, true)
+				reply.Result = col.GetTripleSet(direct, request.Options.Filter, request.Options.Sort)
+			}
+			// for key, t := range trees {
+			// 	if request.Options.Sort.SortBy != "" {
+			// reply.Result = set
 		}
 	}
 

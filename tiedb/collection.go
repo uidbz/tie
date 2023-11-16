@@ -2,6 +2,8 @@ package tiedb
 
 import (
 	"bytes"
+	"cmp"
+	"slices"
 	"sync/atomic"
 )
 
@@ -41,10 +43,10 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 
 func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 	if tree, found := ic.GetAssociations(key); found {
-		data, _ := ic.GetTripleSet(key, value1, tree)
+		data := ic.GetTripleSet(tree, value1, SortOptions{Limit: -1})
 		if data != nil {
 			if reverse, found := ic.GetReverseAssociations(key); found {
-				associated, _ := ic.GetTripleSet(key, value1, reverse)
+				associated := ic.GetTripleSet(reverse, value1, SortOptions{Limit: -1})
 				associated.ForEachKey(func(key string) {
 					data[key] = associated[key]
 				})
@@ -408,53 +410,133 @@ func (ic *Collection) uniqueAssociationExists(keyLevel int, key *Entry, value1 *
 	return found
 }
 
-// New implementation of SetToString using new output format
-func (ic *Collection) GetTripleSet(key string, value1Filter string, s *TieTree) (result TripleSet, value2Trees map[string]*TieTree) {
-	result = make(TripleSet)
-
-	c := make(chan Triple, 10000)
-	go func() {
-		it := s.Iterator()
-		for it.Next() {
-			pos := it.Value().(int64)
-			if pos != -1 {
-				ic.dbReadWg.Add(1)
-				ic.dBReadQueue <- ReadRequest{
-					Position:  it.Value().(int64),
-					ReplyChan: c,
-				}
+func (ic *Collection) loadTriples(tree *TieTree, tripleChan chan Triple) {
+	it := tree.Iterator()
+	for it.Next() {
+		pos := it.Value().(int64)
+		if pos != -1 {
+			ic.dbReadWg.Add(1)
+			ic.dBReadQueue <- ReadRequest{
+				Position:  it.Value().(int64),
+				ReplyChan: tripleChan,
 			}
 		}
-		ic.dbReadWg.Wait()
-		close(c)
-	}()
+	}
+	ic.dbReadWg.Wait()
+	close(tripleChan)
+}
 
+func (ic *Collection) makeStringTriple(t Triple) StringTriple {
+	st := StringTriple{}
+	st.Key = ic.getValueString(t.Level, t.Key)
+	st.Value1 = ic.getValueString(t.Value1Level, t.Value1)
+	st.Value2 = ic.getValueString(t.Value2Level, t.Value2)
+
+	return st
+}
+
+type SortOptions struct {
+	Offset int
+	Limit  int
+	SortBy string // Value1 to sort by
+}
+
+func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple) {
+	if o.Limit == 0 {
+		o.Limit = 1000
+	}
+	c := make(chan Triple, 10000)
+	go ic.loadTriples(tree, c)
+
+	sorted = make([]StringTriple, 0, 1000)
+	filterActive := value1Filter != ""
+	for x := range c {
+		t := ic.makeStringTriple(x)
+		if filterActive && t.Value1 != value1Filter {
+			continue
+		}
+		sorted = append(sorted, t)
+	}
+
+	slices.SortFunc(sorted, func(a, b StringTriple) int {
+		if o.SortBy == "" {
+			if n := cmp.Compare(a.Key, b.Key); n != 0 {
+				return n
+			}
+			if n := cmp.Compare(a.Value1, b.Value1); n != 0 {
+				return n
+			}
+			return cmp.Compare(a.Value2, b.Value2)
+		} else {
+			if a.Value1 != o.SortBy {
+				return 1
+			}
+			if a.Value1 == o.SortBy && b.Value1 != o.SortBy {
+				return -1
+			}
+			if n := cmp.Compare(a.Key, b.Key); n != 0 {
+				return n
+			}
+			return cmp.Compare(a.Value2, b.Value2)
+		}
+	})
+
+	if len(sorted) < o.Offset {
+		return make([]StringTriple, 0)
+	}
+
+	if o.Limit < 0 || len(sorted) < o.Offset+o.Limit {
+		return sorted[o.Offset:]
+	}
+
+	return sorted[o.Offset : o.Offset+o.Limit]
+}
+
+func (ic *Collection) SortByNextLevelOne(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple) {
+
+	// TODO
+	return []StringTriple{}
+}
+
+func (ic *Collection) GetValue2Trees(s *TieTree, value1Filter string) (value2Trees map[string]*TieTree) {
 	value2Trees = make(map[string]*TieTree)
+
+	c := make(chan Triple, 10000)
+	go ic.loadTriples(s, c)
+
 	filterActive := value1Filter != ""
 
 	for x := range c {
-		value1 := ic.getValueString(x.Value1Level, x.Value1)
-		if filterActive && value1 != value1Filter {
+		t := ic.makeStringTriple(x)
+		if filterActive && t.Value1 != value1Filter {
 			continue
 		}
-		key := ic.getValueString(x.Level, x.Key)
-		value2 := ic.getValueString(x.Value2Level, x.Value2)
-		if _, ok := value2Trees[value2]; !ok {
-			value2Trees[value2] = ic.getAssociationsFromEntry(x.Level, ic.getEntry(x.Value2Level, x.Value2))
-		}
-
-		if !result.Has(key) {
-			result[key] = make(Value1)
-		}
-		if !result[key].Has(value1) {
-			result[key][value1] = make(Value2)
-		}
-		if !result[key][value1].Has(value2) {
-			result[key][value1][value2] = Unit{}
+		if _, ok := value2Trees[t.Value2]; !ok {
+			value2Trees[t.Value2] = ic.getAssociationsFromEntry(x.Level, ic.getEntry(x.Value2Level, x.Value2))
 		}
 	}
 
-	return result, value2Trees
+	return value2Trees
+}
+
+func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet) {
+	result = make(TripleSet)
+
+	tripleSlice := ic.Sort(s, value1Filter, o)
+
+	for _, t := range tripleSlice {
+		if !result.Has(t.Key) {
+			result[t.Key] = make(Value1)
+		}
+		if !result[t.Key].Has(t.Value1) {
+			result[t.Key][t.Value1] = make(Value2)
+		}
+		if !result[t.Key][t.Value1].Has(t.Value2) {
+			result[t.Key][t.Value1][t.Value2] = Unit{}
+		}
+	}
+
+	return result
 }
 
 func (ic *Collection) closeDB() {

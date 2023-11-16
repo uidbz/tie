@@ -80,6 +80,11 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 	jsonOut := p.ByName("json")
 	log.Println("Receiving file:", h)
 	var dest string
+	defer func() {
+		if r.Body != nil {
+			r.Body.Close()
+		}
+	}()
 
 	if h == "" {
 		var errTmp error
@@ -116,15 +121,17 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 	}
 	defer out.Close()
 
-	f, _, errFormFile := r.FormFile("file")
-	if errFormFile != nil {
-		fmt.Println("whut")
-		fmt.Fprint(w, h)
-		log.Println(errFormFile.Error())
-		return
+	// r.Body
 
-	}
-	_, errCopy := io.Copy(out, f)
+	// f, _, errFormFile := r.FormFile("file")
+	// if errFormFile != nil {
+	// 	fmt.Println("whut")
+	// 	fmt.Fprint(w, h)
+	// 	log.Println(errFormFile.Error())
+	// 	return
+
+	// }
+	_, errCopy := io.Copy(out, r.Body)
 	if errCopy != nil {
 		log.Println(err)
 

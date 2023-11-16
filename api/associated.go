@@ -40,14 +40,12 @@ func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	col := env.Collection(request.Namespace, request.CollectionId)
 
 	if assPtr, found := col.GetReverseAssociations(request.Key); found {
-		set, _ := col.GetTripleSet(request.Key, "", assPtr)
-
+		set := col.GetTripleSet(assPtr, "", tiedb.SortOptions{})
 		set.ForEachKey(func(key string) {
 			if t, ok := col.GetAssociations(key); ok {
-				set2, _ := col.GetTripleSet(key, request.MatchValue1, t)
+				set2 := col.GetTripleSet(t, request.MatchValue1, tiedb.SortOptions{})
 				set[key] = set2[key]
 			}
-
 		})
 		reply.Result = set
 		reply.Success = true

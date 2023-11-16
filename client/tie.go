@@ -6,20 +6,18 @@ import (
 )
 
 // Default values
-var config = Config{
-	Username:      "defaultuser",
-	Password:      "defaultpassword",
-	Webservice:    "https://localhost:1161",
-	Namespace:     "Collections",
-	Collection:    "Main",
-	ServeUrl:      "https://localhost:1162",
-	DataHost:      "/data",
-	ThumbnailHost: "/mnt/thumbnails",
-	Key:           InitKey(),
+var defaultConfig = Config{
+	Username:         "defaultuser",
+	Password:         "defaultpassword",
+	Webservice:       "https://localhost:1161",
+	Namespace:        "Collections",
+	Collection:       "Main",
+	DefaultFileHosts: []string{"default"},
+	FileHosts:        map[string]string{"default": "https://localhost:1162"},
+	key:              InitKey(),
 }
 
 const (
-	tieUid            = "tie-uid"
 	objectUid         = "Uid"
 	tieKey            = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
 	defaultConfigFile = "config"
@@ -41,18 +39,24 @@ type TieClient struct {
 }
 
 type Config struct {
-	configDir     string
-	configPath    string
-	Username      string
-	Password      string
-	Namespace     string
-	Collection    string
-	Webservice    string
-	ServeUrl      string
-	DataHost      string
-	ThumbnailHost string
-	Key           []byte
-	Verbose       bool
+	configPath       string
+	Username         string
+	Password         string
+	Namespace        string
+	Collection       string
+	Webservice       string
+	DefaultFileHosts []string
+	Import           ImportConfig
+	FileHosts        map[string]string
+	key              []byte
+	verbose          bool
+}
+
+type ImportConfig struct {
+	ImageCollection    string
+	VideoCollection    string
+	DocumentCollection string
+	GeneralCollection  string
 }
 
 type TagOptions struct {
@@ -151,26 +155,9 @@ func (tc *TieClient) AssociatedWith(key string, o AssociatedOptions, handler fun
 }
 
 // Get a TripleSet from a key
-func (tc *TieClient) Get(key string, handler func(reply GetReply)) {
+func (tc *TieClient) SimpleGet(key string, handler func(reply GetReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewGetRequest(key)
-
-	if genericReply, err := tc.client.Run(request); err != nil {
-		reply := &api.GetReply{}
-		reply.Success = false
-		reply.Message = err.Error()
-		handler(reply)
-	} else {
-		reply := ws.ReadReply[api.GetReply](genericReply)
-		handler(reply)
-	}
-}
-
-// Get a TripleSet from a value2
-func (tc *TieClient) GetReverse(key string, handler func(reply GetReply)) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
-	request := col.NewGetRequest(key)
-	request.OnlyReverse = true
 
 	if genericReply, err := tc.client.Run(request); err != nil {
 		reply := &api.GetReply{}
@@ -184,13 +171,10 @@ func (tc *TieClient) GetReverse(key string, handler func(reply GetReply)) {
 }
 
 // Get a TripleSet from a key with options
-func (tc *TieClient) GetWith(key string, o GetOptions, handler func(reply GetReply)) {
+func (tc *TieClient) Get(key string, o GetOptions, handler func(reply GetReply)) {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewGetRequest(key)
-	request.NextLevelValue1s = o.NextLevelValue1s
-	request.Filter = o.Filter
-	request.Reverse = o.Reverse
-	request.OnlyReverse = o.OnlyReverse
+	request.Options = o
 
 	if genericReply, err := tc.client.Run(request); err != nil {
 		reply := &api.GetReply{}
@@ -254,7 +238,7 @@ func (tc *TieClient) Batch(batch *api.Batch, handler func(reply BatchReply)) {
 // Check if the key exists
 func (tc *TieClient) Exists(key string) bool {
 	result := false
-	tc.Get(key, func(reply GetReply) {
+	tc.SimpleGet(key, func(reply GetReply) {
 		if reply.Success {
 			result = true
 		}

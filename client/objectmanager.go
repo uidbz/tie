@@ -8,23 +8,31 @@ import (
 	"git.sr.ht/~uid/tie/tiedb"
 )
 
+const (
+	defaultLimit int = 1000
+)
+
 type ObjectManager[T any] struct {
 	client        *TieClient
 	collectionUid string
 	data          T
+	Limit         int
+	Offset        int
 }
 
 func NewObjectManager[T any](client *TieClient, collectionUid string) ObjectManager[T] {
 	return ObjectManager[T]{
 		client:        client,
 		collectionUid: collectionUid,
+		Limit:         defaultLimit,
+		Offset:        0,
 	}
 }
 
 func (om *ObjectManager[T]) Get(uid string) (T, error) {
 	var obj T
 	var err error
-	om.client.Get(uid, func(reply GetReply) {
+	om.client.SimpleGet(uid, func(reply GetReply) {
 		if reply.Success {
 			obj = om.ResultToObject(uid, reply.Result)
 		} else {
@@ -38,10 +46,17 @@ func (om *ObjectManager[T]) GetAll() ([]T, error) {
 	result := make([]T, 0)
 	var objectIds tiedb.Value2
 
+	o := GetOptions{
+		Sort: tiedb.SortOptions{
+			Limit:  om.Limit,
+			Offset: om.Offset,
+		},
+	}
+
 	errorMsg := ""
-	om.client.Get(om.collectionUid, func(reply GetReply) {
+	om.client.Get(om.collectionUid, o, func(reply GetReply) {
 		if reply.Success {
-			objectIds = reply.Result[om.collectionUid][tieUid]
+			objectIds = reply.Result[om.collectionUid][str(TieUid)]
 		} else {
 			errorMsg = reply.Message
 		}
@@ -171,7 +186,7 @@ func (om *ObjectManager[T]) Add(object any) error {
 	t := reflect.TypeOf(object)
 
 	batch := om.client.NewBatch()
-	batch.Add(om.collectionUid, tieUid, uid)
+	batch.Add(om.collectionUid, str(TieUid), uid)
 
 	for i := 0; i < v.NumField(); i++ {
 		property := getPropertyName(t.Field(i))
@@ -241,7 +256,7 @@ func (om *ObjectManager[T]) Upsert(object any) error {
 		return errors.New("Need Uid field")
 	}
 	var origObject tiedb.TripleSet
-	om.client.Get(uid, func(reply GetReply) {
+	om.client.SimpleGet(uid, func(reply GetReply) {
 		if reply.Success {
 			origObject = reply.Result
 		}
@@ -254,7 +269,7 @@ func (om *ObjectManager[T]) Upsert(object any) error {
 	t := reflect.TypeOf(object)
 
 	batch := om.client.NewBatch()
-	batch.Add(om.collectionUid, tieUid, uid)
+	batch.Add(om.collectionUid, str(TieUid), uid)
 
 	excludeUnchangedFromDeletion := func(uid, property, value string) bool {
 		if origObject[uid][property].Has(value) {
@@ -360,7 +375,7 @@ func (om *ObjectManager[T]) Delete(object any) error {
 		return errors.New("Need Uid field")
 	}
 	var origObject tiedb.TripleSet
-	om.client.Get(uid, func(reply GetReply) {
+	om.client.SimpleGet(uid, func(reply GetReply) {
 		if reply.Success {
 			origObject = reply.Result
 		}
@@ -373,7 +388,7 @@ func (om *ObjectManager[T]) Delete(object any) error {
 	t := reflect.TypeOf(object)
 
 	batch := om.client.NewBatch()
-	batch.Delete(om.collectionUid, tieUid, uid)
+	batch.Delete(om.collectionUid, str(TieUid), uid)
 
 	for i := 0; i < v.NumField(); i++ {
 		property := getPropertyName(t.Field(i))

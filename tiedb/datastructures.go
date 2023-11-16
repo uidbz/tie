@@ -106,6 +106,12 @@ type Triple struct {
 	Value2      uint64
 }
 
+type StringTriple struct {
+	Key    string
+	Value1 string
+	Value2 string
+}
+
 type Set map[string]map[string]map[string]bool
 
 type Unit struct{}

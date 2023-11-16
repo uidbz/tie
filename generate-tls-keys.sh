@@ -1,7 +1,7 @@
 #!/usr/bin/env sh 
 
 # SERVER
-# For tie-daemon and tie-serve generate self-signed certificate with below commond.
+# For tie-daemon and tie-fileserver generate self-signed certificate with below commond.
 # Update hostname to real hostname
 # Use .key & .crt for the servers
 

@@ -1,0 +1,6 @@
+Username = 'defaultuser'
+Password = 'defaultpassword'
+Namespace = 'Examples'
+Collection = 'batch'
+Webservice = 'http://localhost:1161'
+Filehost = 'http://localhost:1162'

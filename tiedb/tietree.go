@@ -55,18 +55,71 @@ func (tree *TieTree) Put(key interface{}, value interface{}) {
 	tree.Tree.Put(key, value)
 }
 
-func (t *TieTree) InnerJoin(tree *TieTree) {
-	c := make(chan *Triple, 10000)
+func (t *TieTree) Intersect(tree *TieTree) (out *TieTree) {
+	out = &TieTree{
+		Tree:        rbt.NewWith(AssociationComparator),
+		writeToDisk: false,
+	}
+
+	c := make(chan *rbt.Node, 10000)
+
 	go func() {
-		it := tree.Iterator()
+		it := t.Iterator()
 		for it.Next() {
-			c <- it.Value().(*Triple)
+			if _, found := tree.Get(it.Key()); found {
+				c <- it.Node()
+			}
 		}
 		close(c)
 	}()
 	for x := range c {
-		fmt.Println(x.Value2)
+		out.Put(x.Key, x.Value)
 	}
+
+	return out
+}
+
+func (t *TieTree) Exclude(tree *TieTree) (out *TieTree) {
+	out = &TieTree{
+		Tree:        rbt.NewWith(AssociationComparator),
+		writeToDisk: false,
+	}
+
+	c := make(chan *rbt.Node, 10000)
+
+	go func() {
+		it := t.Iterator()
+		for it.Next() {
+			if _, found := tree.Get(it.Key()); !found {
+				c <- it.Node()
+			}
+		}
+		close(c)
+	}()
+	for x := range c {
+		out.Put(x.Key, x.Value)
+	}
+
+	return out
+}
+
+func (t *TieTree) Combine(tree *TieTree) (out *TieTree) {
+	out = t
+
+	c := make(chan *rbt.Node, 10000)
+
+	go func() {
+		it := tree.Iterator()
+		for it.Next() {
+			c <- it.Node()
+		}
+		close(c)
+	}()
+	for x := range c {
+		out.Put(x.Key, x.Value)
+	}
+
+	return out
 }
 
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {

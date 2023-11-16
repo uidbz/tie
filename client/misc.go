@@ -2,89 +2,51 @@ package client
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"os"
 	"os/exec"
-	"os/user"
-	"path/filepath"
 	"strings"
+
+	"git.sr.ht/~uid/conf"
 )
 
 func DefaultConfig() Config {
-	return ReadConfig(defaultConfigFile)
+	conf, err := LoadConfig("config")
+	if err != nil {
+		return defaultConfig
+	}
+	return conf
 }
 
 func TestingConfig() Config {
-	config := ReadConfig(defaultConfigFile)
+	config := defaultConfig
 	config.Namespace = "testing"
 	config.Collection = "testing"
 	return config
 }
 
-func ReadConfig(configFile string) Config {
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-	if configDir, err := os.Getwd(); err == nil {
-		config.configDir = configDir
-		config.configPath = config.configDir + "/" + configFile + ".json"
-	}
-	// If config file does not exist in workdir, then assume config will be in $HOME/.config/tie
-	if _, err := os.Stat(config.configPath); os.IsNotExist(err) {
-		config.configDir = filepath.Join(usr.HomeDir, ".config", "tie")
-		config.configPath = config.configDir + "/" + configFile + ".json"
-
-		if _, err := os.Stat(config.configPath); os.IsNotExist(err) {
-			if _, err2 := os.Stat(config.configDir); os.IsNotExist(err2) {
-				if os.MkdirAll(config.configDir, 0777) != nil {
-					panic("Can't create " + config.configDir + "\nExiting...")
-				}
-			}
-			return config // return default values
-		}
-	}
-	LoadJSON(config.configPath, &config)
-
-	return config
+// Deprecated - use LoadConfig instead
+func ReadConfig(configName string) Config {
+	c, _ := LoadConfig(configName)
+	return c
 }
 
-func LoadJSON(inputFile string, dest interface{}) bool {
-	file, err := os.Open(inputFile)
-
+func LoadConfig(configName string) (Config, error) {
+	c := defaultConfig
+	loadPath, err := conf.LoadConfig("tie", configName, &c)
 	if err != nil {
-		log.Fatal(err)
-		return false
-	} else {
-		input, err2 := io.ReadAll(file)
-		if err2 != nil {
-			log.Fatal(err2)
-			return false
-		}
-		if err := json.Unmarshal(input, &dest); err != nil {
-			return false
-		}
-		return true
-
+		return defaultConfig, err
 	}
+	c.configPath = loadPath
+
+	return c, nil
 }
 
-func SaveJSON(outputFile string, source interface{}) bool {
-	b, _ := json.Marshal(source)
-	err := os.WriteFile(outputFile, b, 0766)
-	if err != nil {
-		log.Fatal(err)
-		return false
-	} else {
-		return true
-	}
+func SaveConfig(name string, config Config) error {
+	return conf.SaveToUserConfigDir("tie", name, config)
 }
 
 func (tc *TieClient) PrintState() {
-	if tc.Config.Verbose {
+	if tc.Config.verbose {
 		fmt.Println("Using host:", tc.Config.Webservice)
 		fmt.Println("Current namespace/collection is " + tc.Config.Namespace + "/" + tc.Config.Collection)
 	}

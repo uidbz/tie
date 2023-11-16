@@ -5,14 +5,17 @@ import (
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/h2non/filetype"
 
 	"git.sr.ht/~uid/tie/metadata"
 	"github.com/minio/highwayhash"
@@ -85,44 +88,32 @@ func (pc *PutConfig) AddressOf(input io.Reader) (string, error) { // function to
 
 func (pc *PutConfig) UploadFile(url string, path string) StatusItem {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0644)
+	defer f.Close()
+
 	if err != nil {
 		return StatusItem{ErrorMsg: err.Error()}
 	}
-	defer f.Close()
 
-	return pc.UploadMultipart(url, f, path)
+	fi, err := os.Stat(path)
+	if err != nil {
+		return StatusItem{ErrorMsg: err.Error()}
+	}
+
+	return pc.UploadMultipart(url, f, int(fi.Size()), path)
 }
 
-func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) StatusItem {
-	// Reduce number of syscalls when reading from disk.
-	bufferedFileReader := bufio.NewReader(f)
-
-	// Create a pipe for writing from the file and reading to
-	// the request concurrently.
-	bodyReader, bodyWriter := io.Pipe()
-	formWriter := multipart.NewWriter(bodyWriter)
-
-	// Store the first write error in writeErr.
+func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path string) StatusItem {
 	var (
-		writeErr error
+		writeErr error // Store the first write error in writeErr.
 		errOnce  sync.Once
 	)
-	setErr := func(err error) {
+	check := func(err error) {
 		if err != nil {
 			errOnce.Do(func() { writeErr = err })
 		}
 	}
-	go func() {
-		partWriter, err := formWriter.CreateFormFile("file", path)
-		setErr(err)
-		if partWriter == nil || bufferedFileReader == nil {
-			return
-		}
-		_, err = io.Copy(partWriter, bufferedFileReader)
-		setErr(err)
-		setErr(formWriter.Close())
-		setErr(bodyWriter.Close())
-	}()
+
+	bufferedFileReader := bufio.NewReader(f)
 
 	if pc.JsonOutput {
 		url += "/json"
@@ -130,54 +121,58 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, path string) Statu
 	if pc.ForceGenerateThumbnails {
 		url += "-force-generate-thumbnails"
 	}
-	req, err := http.NewRequest(http.MethodPut, url, bodyReader)
-	var ErrorMsg string
-	if err != nil {
-		ErrorMsg = "Upload error: " + err.Error()
-		return StatusItem{ErrorMsg: ErrorMsg}
-	}
-	req.Header.Add("Content-Type", formWriter.FormDataContentType())
+	req, err := http.NewRequest(http.MethodPut, url, bufferedFileReader)
+	check(err)
 
-	// This operation will block until both the formWriter
-	// and bodyWriter have been closed by the goroutine,
-	// or in the event of a HTTP error.
+	contentType := "application/octet-stream"
+	if b, err := bufferedFileReader.Peek(261); err == nil {
+		if t, err := filetype.Get(b); err == nil {
+			contentType = t.MIME.Value
+		}
+	}
+	req.Header.Add("Content-Type", contentType)
+	req.Header.Add("Content-Length", strconv.Itoa(length))
+
 	resp, err := http.DefaultClient.Do(req)
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
 
-	if writeErr != nil {
-		ErrorMsg = "Upload error: " + writeErr.Error()
-	}
+	check(err)
 
-	if err != nil {
-		ErrorMsg = "Upload error: " + err.Error()
-	}
+	body := make([]byte, 0)
 	if resp == nil {
-		return StatusItem{ErrorMsg: ErrorMsg + "\n"}
+		check(errors.New("Empty response received"))
+	} else {
+		body, err = io.ReadAll(resp.Body)
+		check(err)
 	}
-	body, errResp := io.ReadAll(resp.Body)
-	if errResp != nil {
-		return StatusItem{ErrorMsg: errResp.Error() + "\n"}
+
+	var errorMsg string
+	if writeErr != nil {
+		errorMsg = writeErr.Error()
 	}
+
 	var hash string
 	if pc.JsonOutput {
 		info := metadata.Info{}
-		err := json.Unmarshal(body, &info)
-		if err != nil {
-			return StatusItem{
-				Filename: path,
-				ErrorMsg: "Upload error (json unmarshall):" + err.Error(),
-			}
+		check(json.Unmarshal(body, &info))
+		if writeErr != nil {
+			errorMsg = writeErr.Error()
 		}
 		hash = info.Hash
 		return StatusItem{
 			Hash:      hash,
 			Filename:  path,
-			ErrorMsg:  ErrorMsg,
+			ErrorMsg:  errorMsg,
 			MediaType: info.MediaType,
 		}
 	} else {
 		return StatusItem{
 			Hash:     string(body),
-			ErrorMsg: ErrorMsg,
+			ErrorMsg: errorMsg,
 			Filename: path,
 		}
 	}
@@ -231,7 +226,7 @@ func Upload(url string, file string, config PutConfig) *Status {
 }
 
 // Upload without calculating hash on the client
-func UploadNoHash(url string, file io.Reader, config PutConfig) *Status {
+func UploadNoHash(url string, file io.Reader, length int, config PutConfig) *Status {
 	status := &Status{}
 
 	// url = ValidateURL(url, status)
@@ -239,7 +234,7 @@ func UploadNoHash(url string, file io.Reader, config PutConfig) *Status {
 	// 	return status
 	// }
 
-	s := config.UploadMultipart(url, file, "dummyfilename")
+	s := config.UploadMultipart(url, file, length, "dummyfilename")
 
 	// When uploading from reader we don't calculate local hash
 	config.Validate(s.Hash, s, status)
@@ -267,7 +262,7 @@ func upload(url string, file string, config PutConfig, status *Status) {
 			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\n"
 		}
 		localhash, _ := config.AddressOf(strings.NewReader(hashes))
-		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), file)
+		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), len(hashes), file)
 		config.Validate(localhash, uploadStatus, status)
 	} else {
 		localhash, _ := config.AddressOfFile(file)
@@ -278,7 +273,12 @@ func upload(url string, file string, config PutConfig, status *Status) {
 
 func (pc *PutConfig) Validate(localhash string, uploadStatus StatusItem, status *Status) {
 	if localhash != uploadStatus.Hash {
-		uploadStatus.ErrorMsg += "Upload checksum failed"
+		errMsg := "Validation error: Upload checksum failed"
+		if uploadStatus.ErrorMsg == "" {
+			uploadStatus.ErrorMsg = errMsg
+		} else {
+			uploadStatus.ErrorMsg += "\n" + errMsg
+		}
 	}
 	status.LastItem = uploadStatus
 

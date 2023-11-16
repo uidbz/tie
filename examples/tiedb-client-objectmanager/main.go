@@ -49,12 +49,13 @@ func main() {
 	}
 
 	printPizzas := func(msg string) {
-		fmt.Println("--", msg)
+		fmt.Println("*", msg)
 		pizzas, err := manager.GetAll()
 		check(err)
 		for _, x := range pizzas {
 			fmt.Println(x)
 		}
+		fmt.Println("")
 	}
 
 	check(manager.Add(pizza1))
