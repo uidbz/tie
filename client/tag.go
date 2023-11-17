@@ -34,11 +34,13 @@ const (
 	TieMediaType                       // media-type
 	TieFileHost                        // filehost
 	TieTag                             // tag
+	TieTagCategory                     // tag-category
 	TieGalleryName                     // gallery-name
 	TieTypeProperty                    // tie-type
 	TieFiles                           // tie-files
 	TieDirectories                     // tie-directories
 	TieCategory                        // tie-category
+	TieAll                             // all
 )
 
 func str(t fmt.Stringer) string {
@@ -111,6 +113,7 @@ func Tag(tie *TieClient, info TagInfo) error {
 	batch.Add(hash, str(TieTypeProperty), str(info.TieType))
 	for _, tag := range info.Tags {
 		batch.Add(hash, str(TieTag), tag)
+		batch.Add(str(TieTagCategory), str(TieAll), tag)
 	}
 
 	switch info.TieType {

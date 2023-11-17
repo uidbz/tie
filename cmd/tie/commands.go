@@ -57,6 +57,7 @@ func cmdGet() *cli.Command {
 			&cli.IntFlag{Name: "limit", Aliases: []string{"l"}, Value: 1000},
 			&cli.IntFlag{Name: "offset", Aliases: []string{"o"}, Value: 0},
 			&cli.StringFlag{Name: "sortby", Aliases: []string{"s"}},
+			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}},
 		},
 		Action: func(ctx *cli.Context) error {
 			if ctx.Args().Len() < 1 {
@@ -83,6 +84,7 @@ func cmdGet() *cli.Command {
 				Reverse:   reverse,
 				Intersect: intersecting,
 				Exclude:   excluding,
+				Filter:    ctx.String("filter"),
 				Sort: tiedb.SortOptions{
 					Offset: ctx.Int("offset"),
 					Limit:  ctx.Int("limit"),
