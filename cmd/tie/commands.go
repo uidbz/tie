@@ -70,21 +70,6 @@ func cmdGet() *cli.Command {
 			} else {
 				reverse = ctx.Bool("reverse")
 			}
-			handler := func(reply *api.GetReply) {
-				if reply.Success {
-					if reverse {
-						reply.ReverseResult.ForEachValue2(func(key, value1, value2 string) {
-							fmt.Println(key + "\t" + value1 + "\t" + value2)
-						})
-					} else {
-						reply.Result.ForEachValue2(func(key, value1, value2 string) {
-							fmt.Println(key + "\t" + value1 + "\t" + value2)
-						})
-					}
-				} else {
-					err = errors.New("Get Error: " + reply.Message)
-				}
-			}
 			intersecting := make([]api.Transform, 0)
 			excluding := make([]api.Transform, 0)
 			for i := 1; i < len(ctx.Args().Slice()); i++ {
@@ -104,7 +89,15 @@ func cmdGet() *cli.Command {
 					SortBy: ctx.String("sortby"),
 				},
 			}
-			tie.Get(args[0], o, handler)
+			tie.Get(args[0], o, func(reply *api.GetReply) {
+				if reply.Success {
+					reply.Result.ForEachValue2(func(key, value1, value2 string) {
+						fmt.Println(key + "\t" + value1 + "\t" + value2)
+					})
+				} else {
+					err = errors.New("Get Error: " + reply.Message)
+				}
+			})
 
 			return err
 		},

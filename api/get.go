@@ -48,10 +48,7 @@ type Transform struct {
 
 type GetReply struct {
 	ws.ReplyStatus
-	Result              tiedb.TripleSet
-	ReverseResult       tiedb.TripleSet
-	TotalResults        int
-	TotalReverseResults int
+	Result tiedb.TripleSet
 }
 
 // Returns (value of Value2, true) from Result, if the only key in the Result is the requested key, and if only 1 Value2 exists.
@@ -112,7 +109,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		if reverse, found := col.GetReverseAssociations(request.Key); found {
 			reverse = transform(reverse, col, request.Options.Intersect, false)
 			reverse = transform(reverse, col, request.Options.Exclude, true)
-			reply.ReverseResult = col.GetTripleSet(reverse, request.Options.Filter, request.Options.Sort)
+			reply.Result = col.GetTripleSet(reverse, request.Options.Filter, request.Options.Sort)
 		}
 	} else {
 		if direct, found := col.GetAssociations(request.Key); found {
@@ -140,7 +137,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		}
 	}
 
-	if len(reply.Result) != 0 || len(reply.ReverseResult) != 0 {
+	if len(reply.Result) != 0 {
 		reply.Success = true
 	} else {
 		reply.Success = false
