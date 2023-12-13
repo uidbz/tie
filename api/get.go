@@ -48,7 +48,8 @@ type Transform struct {
 
 type GetReply struct {
 	ws.ReplyStatus
-	Result tiedb.TripleSet
+	Result     tiedb.TripleSet
+	TotalCount int
 }
 
 // Returns (value of Value2, true) from Result, if the only key in the Result is the requested key, and if only 1 Value2 exists.
@@ -109,7 +110,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		if reverse, found := col.GetReverseAssociations(request.Key); found {
 			reverse = transform(reverse, col, request.Options.Intersect, false)
 			reverse = transform(reverse, col, request.Options.Exclude, true)
-			reply.Result = col.GetTripleSet(reverse, request.Options.Filter, request.Options.Sort)
+			reply.Result, reply.TotalCount = col.GetTripleSet(reverse, request.Options.Filter, request.Options.Sort)
 		}
 	} else {
 		if direct, found := col.GetAssociations(request.Key); found {
@@ -129,7 +130,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 			} else {
 				direct = transform(direct, col, request.Options.Intersect, false)
 				direct = transform(direct, col, request.Options.Exclude, true)
-				reply.Result = col.GetTripleSet(direct, request.Options.Filter, request.Options.Sort)
+				reply.Result, reply.TotalCount = col.GetTripleSet(direct, request.Options.Filter, request.Options.Sort)
 			}
 			// for key, t := range trees {
 			// 	if request.Options.Sort.SortBy != "" {

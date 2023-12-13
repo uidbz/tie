@@ -29,6 +29,9 @@ func cmdAdd() *cli.Command {
 		},
 
 		Action: func(cCtx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
 			if cCtx.Args().Len() < 3 {
 				return errors.New("Need 3 args: Key, Value1, Value2")
 			}
@@ -60,6 +63,9 @@ func cmdGet() *cli.Command {
 			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}},
 		},
 		Action: func(ctx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
 			if ctx.Args().Len() < 1 {
 				return errors.New("Need 1 arg: Key")
 			}
@@ -112,6 +118,9 @@ func cmdDel() *cli.Command {
 		Aliases: []string{"d"},
 		Usage:   "Delete a triple: del [key] [value1] [value2]",
 		Action: func(cCtx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
 			if cCtx.Args().Len() < 3 {
 				return errors.New("Need 3 args: Key, Value1, Value2")
 			}
@@ -228,14 +237,20 @@ func ImportImage() *cli.Command {
 		// 		},
 		// 	},
 		Action: func(ctx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
 			for _, file := range ctx.Args().Slice() {
 				if IsImageFromPath(file) {
 					var hosts []string
-					if ctx.String("host") == "" {
+					fmt.Println("host '" + ctx.String("host") + "'")
+					if len(ctx.StringSlice("host")) == 0 {
 						hosts = tie.Config.DefaultFileHosts
+						fmt.Println("here", tie.Config.DefaultFileHosts)
 					} else {
 						hosts = ctx.StringSlice("host")
 					}
+					fmt.Println("Uploading to", hosts)
 					for _, h := range hosts {
 						status := putlib.Upload(tie.Config.FileHosts[h], file, putlib.PutConfig{})
 						for _, x := range status.UploadedItems {

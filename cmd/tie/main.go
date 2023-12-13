@@ -26,7 +26,7 @@ func main() {
 	app := &cli.App{
 		Usage: "Hey",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load", Value: "config"},
+			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load", Value: "config.toml"},
 			&cli.StringFlag{Name: "table", Aliases: []string{"t"}, Usage: "Output as table"},
 		},
 		Commands: []*cli.Command{
@@ -39,9 +39,11 @@ func main() {
 		Before: func(cCtx *cli.Context) error {
 			config, err := client.LoadConfig(cCtx.String("config"))
 			if err != nil {
-				log.Fatal(err)
+				log.Println(err)
+				log.Println("Error opening config file!")
+			} else {
+				tie = client.NewTieClient(config)
 			}
-			tie = client.NewTieClient(config)
 			return nil
 		},
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 func DefaultConfig() Config {
-	conf, err := LoadConfig("config")
+	conf, err := LoadConfig("config.toml")
 	if err != nil {
 		return defaultConfig
 	}
@@ -31,7 +31,7 @@ func ReadConfig(configName string) Config {
 }
 
 func LoadConfig(configName string) (Config, error) {
-	c := defaultConfig
+	c := Config{}
 	loadPath, err := conf.LoadConfig("tie", configName, &c)
 	if err != nil {
 		return defaultConfig, err

@@ -167,13 +167,14 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 			Hash:      hash,
 			Filename:  path,
 			ErrorMsg:  errorMsg,
-			MediaType: info.MediaType,
+			MediaType: contentType,
 		}
 	} else {
 		return StatusItem{
-			Hash:     string(body),
-			ErrorMsg: errorMsg,
-			Filename: path,
+			Hash:      string(body),
+			ErrorMsg:  errorMsg,
+			Filename:  path,
+			MediaType: contentType,
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -34,12 +35,14 @@ const (
 	TieMediaType                       // media-type
 	TieFileHost                        // filehost
 	TieTag                             // tag
-	TieTagCategory                     // tag-category
+	TieTags                            // tags
+	TieTagDate                         // tag-date
 	TieGalleryName                     // gallery-name
 	TieTypeProperty                    // tie-type
 	TieFiles                           // tie-files
 	TieDirectories                     // tie-directories
 	TieCategory                        // tie-category
+	TieGalleries                       // tie-galleries
 	TieAll                             // all
 )
 
@@ -111,9 +114,10 @@ func Tag(tie *TieClient, info TagInfo) error {
 	batch.Add(hash, str(TieName), name)
 	batch.Add(hash, str(TieMediaType), info.MediaType)
 	batch.Add(hash, str(TieTypeProperty), str(info.TieType))
+	batch.Add(hash, str(TieTagDate), time.Now().Format(time.DateTime))
 	for _, tag := range info.Tags {
 		batch.Add(hash, str(TieTag), tag)
-		batch.Add(str(TieTagCategory), str(TieAll), tag)
+		batch.Add(str(TieTags), str(TieAll), tag)
 	}
 
 	switch info.TieType {
@@ -121,6 +125,7 @@ func Tag(tie *TieClient, info TagInfo) error {
 		if info.Image.GalleryName != "" {
 			galleryName := replaceVariables(info.Image.GalleryName, info.File)
 			batch.Add(hash, str(TieGalleryName), galleryName)
+			batch.Add(str(TieGalleries), str(TieGalleryName), galleryName)
 		}
 		batch.Add(hash, str(TieCategory), str(TieFiles))
 	}

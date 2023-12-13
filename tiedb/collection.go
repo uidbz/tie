@@ -43,10 +43,10 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 
 func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 	if tree, found := ic.GetAssociations(key); found {
-		data := ic.GetTripleSet(tree, value1, SortOptions{Limit: -1})
+		data, _ := ic.GetTripleSet(tree, value1, SortOptions{Limit: -1})
 		if data != nil {
 			if reverse, found := ic.GetReverseAssociations(key); found {
-				associated := ic.GetTripleSet(reverse, value1, SortOptions{Limit: -1})
+				associated, _ := ic.GetTripleSet(reverse, value1, SortOptions{Limit: -1})
 				associated.ForEachKey(func(key string) {
 					data[key] = associated[key]
 				})
@@ -441,7 +441,7 @@ type SortOptions struct {
 	SortBy string // Value1 to sort by
 }
 
-func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple) {
+func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple, totalCount int) {
 	if o.Limit == 0 {
 		o.Limit = 1000
 	}
@@ -481,15 +481,17 @@ func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (s
 		}
 	})
 
-	if len(sorted) < o.Offset {
-		return make([]StringTriple, 0)
+	count := len(sorted)
+
+	if count < o.Offset {
+		return make([]StringTriple, 0), count
 	}
 
-	if o.Limit < 0 || len(sorted) < o.Offset+o.Limit {
-		return sorted[o.Offset:]
+	if o.Limit < 0 || count < o.Offset+o.Limit {
+		return sorted[o.Offset:], count
 	}
 
-	return sorted[o.Offset : o.Offset+o.Limit]
+	return sorted[o.Offset : o.Offset+o.Limit], count
 }
 
 func (ic *Collection) SortByNextLevelOne(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple) {
@@ -519,10 +521,10 @@ func (ic *Collection) GetValue2Trees(s *TieTree, value1Filter string) (value2Tre
 	return value2Trees
 }
 
-func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet) {
+func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
 	result = make(TripleSet)
 
-	tripleSlice := ic.Sort(s, value1Filter, o)
+	tripleSlice, totalCount := ic.Sort(s, value1Filter, o)
 
 	for _, t := range tripleSlice {
 		if !result.Has(t.Key) {
@@ -536,7 +538,7 @@ func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOption
 		}
 	}
 
-	return result
+	return result, totalCount
 }
 
 func (ic *Collection) closeDB() {
