@@ -3,11 +3,10 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"git.sr.ht/~uid/tie/tiedb"
-
-	"git.sr.ht/~uid/tie/io/putlib"
 
 	"git.sr.ht/~uid/conf"
 
@@ -222,7 +221,7 @@ func ImportImage() *cli.Command {
 		Aliases: []string{"img"},
 		Usage:   "Upload and tag an image",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "gallery", Aliases: []string{"g"}, Usage: "Tag with gallery name"},
+			&cli.StringFlag{Name: "gallery", Aliases: []string{"g"}, Usage: "Tag with gallery name (default parent dir)", Value: "$DIR"},
 			&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
 			&cli.StringSliceFlag{Name: "host"},
 		},
@@ -252,17 +251,30 @@ func ImportImage() *cli.Command {
 					}
 					fmt.Println("Uploading to", hosts)
 					for _, h := range hosts {
-						status := putlib.Upload(tie.Config.FileHosts[h], file, putlib.PutConfig{})
-						for _, x := range status.UploadedItems {
-							if x.ErrorMsg == "" {
-								fmt.Printf("%v %v\n", x.Hash, x.Filename)
-								info := client.EssentialTagInfo(x.Hash, file, x.MediaType, client.TieImageFile, ctx.StringSlice("tags"))
-								info.Image.GalleryName = ctx.String("gallery")
-								client.Tag(tie, info)
+						if fi, err := os.Stat(file); err == nil {
+							if fi.IsDir() {
+								err := tie.ImportDir(file, tie.Config.FileHosts[h], client.TieImageDir, ctx.StringSlice("tags"))
+								if err != nil {
+									fmt.Println(err)
+								}
 							} else {
-								fmt.Printf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
+								err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.StringSlice("tags"), ctx.String("gallery"), client.TieImageDir)
+								if err != nil {
+									fmt.Println(err)
+								}
 							}
 						}
+						// status := putlib.Upload(tie.Config.FileHosts[h], file, putlib.PutConfig{})
+						// for _, x := range status.UploadedItems {
+						// 	if x.ErrorMsg == "" {
+						// 		fmt.Printf("%v %v\n", x.Hash, x.Filename)
+						// 		info := client.EssentialTagInfo(x.Hash, file, x.MediaType, client.TieImageFile, ctx.StringSlice("tags"))
+						// 		info.Image.GalleryName = ctx.String("gallery")
+						// 		client.Tag(tie, info)
+						// 	} else {
+						// 		fmt.Printf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
+						// 	}
+						// }
 					}
 				}
 			}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"git.sr.ht/~uid/tie/io/putlib"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -13,13 +15,17 @@ import (
 
 type TieType int
 type TieProperty int
+type TieCategory int
 
 const (
-	TieImageFile       TieType = iota // image-file
+	TieUnknownFile     TieType = iota // unknown-file
+	TieImageFile                      // image-file
 	TieAudioFile                      // audio-file
 	TieVideoFile                      // video-file
 	TieDocumentFile                   // document-file
+	TieArchiveFile                    // archive-file
 	TieImageDir                       // image-dir
+	TieAudioDir                       // audio-dir
 	TieVideoDir                       // video-dir
 	TieDocumentDir                    // document-dir
 	TieImageArchive                   // image-archive
@@ -37,12 +43,8 @@ const (
 	TieTag                             // tag
 	TieTags                            // tags
 	TieTagDate                         // tag-date
-	TieGalleryName                     // gallery-name
+	TieCollection                      // collection
 	TieTypeProperty                    // tie-type
-	TieFiles                           // tie-files
-	TieDirectories                     // tie-directories
-	TieCategory                        // tie-category
-	TieGalleries                       // tie-galleries
 	TieAll                             // all
 )
 
@@ -68,25 +70,25 @@ func collection(tie *TieClient, tt TieType) string {
 }
 
 type TagInfo struct {
-	Hash      string
-	File      string
-	MediaType string
-	TieType   TieType
-	Tags      []string
-	Image     TagImage
+	Hash          string
+	File          string
+	MediaType     string
+	TieType       TieType
+	Tags          []string
+	Directory     string
+	DirectoryType TieType
 }
 
-type TagImage struct {
-	GalleryName string
-}
-
-func EssentialTagInfo(hash, file, mimeType string, ft TieType, tags []string) TagInfo {
+func EssentialTagInfo(hash, file, mediaType, directory string, ft TieType, dirType TieType, tags []string) TagInfo {
+	directory = replaceVariables(directory, file)
 	return TagInfo{
-		Hash:      hash,
-		File:      file,
-		MediaType: mimeType,
-		TieType:   ft,
-		Tags:      tags,
+		Hash:          hash,
+		File:          file,
+		MediaType:     mediaType,
+		Directory:     directory,
+		DirectoryType: dirType,
+		TieType:       ft,
+		Tags:          tags,
 	}
 }
 
@@ -98,6 +100,35 @@ func replaceVariables(str, file string) string {
 	str = strings.ReplaceAll(str, "$DIR", dirname)
 
 	return str
+}
+
+func (tie *TieClient) ImportFile(file string, host string, tags []string, directory string, dirType TieType) error {
+	fileType, err := GetTieTypeFromPath(file)
+	if err != nil {
+		return err
+	}
+	status := putlib.Upload(host, file, putlib.PutConfig{})
+	for _, x := range status.UploadedItems {
+		if x.ErrorMsg == "" {
+			info := EssentialTagInfo(x.Hash, file, x.MediaType, directory, fileType, dirType, tags)
+			Tag(tie, info)
+		} else {
+			return fmt.Errorf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
+		}
+	}
+	return nil
+}
+
+func (tie *TieClient) ImportDir(dir string, host string, dirType TieType, tags []string) error {
+	status := putlib.Upload(host, dir, putlib.PutConfig{})
+	if status.ErrorMsg == "" {
+		info := EssentialTagInfo(status.LastItem.Hash, dir, status.LastItem.MediaType, filepath.Base(dir), dirType, dirType, tags)
+		Tag(tie, info)
+	} else {
+		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
+	}
+
+	return nil
 }
 
 func Tag(tie *TieClient, info TagInfo) error {
@@ -116,18 +147,25 @@ func Tag(tie *TieClient, info TagInfo) error {
 	batch.Add(hash, str(TieTypeProperty), str(info.TieType))
 	batch.Add(hash, str(TieTagDate), time.Now().Format(time.DateTime))
 	for _, tag := range info.Tags {
-		batch.Add(hash, str(TieTag), tag)
-		batch.Add(str(TieTags), str(TieAll), tag)
-	}
-
-	switch info.TieType {
-	case TieImageFile:
-		if info.Image.GalleryName != "" {
-			galleryName := replaceVariables(info.Image.GalleryName, info.File)
-			batch.Add(hash, str(TieGalleryName), galleryName)
-			batch.Add(str(TieGalleries), str(TieGalleryName), galleryName)
+		if len(tag) > 0 {
+			if tag[0] == '-' {
+				batch.Delete(hash, str(TieTag), tag[1:])
+			} else {
+				batch.Add(hash, str(TieTag), tag)
+				batch.Add(str(TieTags), str(TieAll), tag)
+			}
 		}
-		batch.Add(hash, str(TieCategory), str(TieFiles))
+	}
+	if info.Directory != "" {
+		batch.Add(hash, str(TieDirectory), info.Directory)
+		switch info.DirectoryType {
+		case TieImageDir:
+			batch.Add(info.Directory, str(TieTypeProperty), str(TieImageDir))
+		case TieVideoDir:
+			batch.Add(info.Directory, str(TieTypeProperty), str(TieVideoDir))
+		case TieAudioDir:
+			batch.Add(info.Directory, str(TieTypeProperty), str(TieAudioDir))
+		}
 	}
 
 	var err error

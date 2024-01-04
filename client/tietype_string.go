@@ -8,21 +8,24 @@ func _() {
 	// An "invalid array index" compiler error signifies that the constant values have changed.
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
-	_ = x[TieImageFile-0]
-	_ = x[TieAudioFile-1]
-	_ = x[TieVideoFile-2]
-	_ = x[TieDocumentFile-3]
-	_ = x[TieImageDir-4]
-	_ = x[TieVideoDir-5]
-	_ = x[TieDocumentDir-6]
-	_ = x[TieImageArchive-7]
-	_ = x[TieVideoArchive-8]
-	_ = x[TieDocumentArchive-9]
+	_ = x[TieUnknownFile-0]
+	_ = x[TieImageFile-1]
+	_ = x[TieAudioFile-2]
+	_ = x[TieVideoFile-3]
+	_ = x[TieDocumentFile-4]
+	_ = x[TieArchiveFile-5]
+	_ = x[TieImageDir-6]
+	_ = x[TieAudioDir-7]
+	_ = x[TieVideoDir-8]
+	_ = x[TieDocumentDir-9]
+	_ = x[TieImageArchive-10]
+	_ = x[TieVideoArchive-11]
+	_ = x[TieDocumentArchive-12]
 }
 
-const _TieType_name = "image-fileaudio-filevideo-filedocument-fileimage-dirvideo-dirdocument-dirimage-archivevideo-archivedocument-archive"
+const _TieType_name = "unknown-fileimage-fileaudio-filevideo-filedocument-filearchive-fileimage-diraudio-dirvideo-dirdocument-dirimage-archivevideo-archivedocument-archive"
 
-var _TieType_index = [...]uint8{0, 10, 20, 30, 43, 52, 61, 73, 86, 99, 115}
+var _TieType_index = [...]uint8{0, 12, 22, 32, 42, 55, 67, 76, 85, 94, 106, 119, 132, 148}
 
 func (i TieType) String() string {
 	if i < 0 || i >= TieType(len(_TieType_index)-1) {
