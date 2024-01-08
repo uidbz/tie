@@ -286,7 +286,11 @@ func (ic *Collection) insertEntry(level int, e *Entry) {
 }
 
 func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
-	ic.secureLevelInIndex(level)
+	if level > a.Value2Level {
+		ic.secureLevelInIndex(level)
+	} else {
+		ic.secureLevelInIndex(a.Value2Level)
+	}
 	assTree, found := ic.levels[level].associations.Get(a.Key)
 	if !found {
 		ass := NewTreeWith(UniqueAssociationComparator)

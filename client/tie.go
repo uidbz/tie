@@ -55,6 +55,7 @@ type Config struct {
 type ImportConfig struct {
 	ImageCollection    string
 	VideoCollection    string
+	AudioCollection    string
 	DocumentCollection string
 	GeneralCollection  string
 }
