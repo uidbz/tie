@@ -15,16 +15,18 @@ func _() {
 	_ = x[TieMediaType-4]
 	_ = x[TieFileHost-5]
 	_ = x[TieTag-6]
-	_ = x[TieTags-7]
-	_ = x[TieTagDate-8]
-	_ = x[TieCollection-9]
-	_ = x[TieTypeProperty-10]
-	_ = x[TieAll-11]
+	_ = x[TiePath-7]
+	_ = x[TieParent-8]
+	_ = x[TieTags-9]
+	_ = x[TieTagDate-10]
+	_ = x[TieCollection-11]
+	_ = x[TieTypeProperty-12]
+	_ = x[TieAll-13]
 }
 
-const _TieProperty_name = "tie-uiddirectoryfilenamenamemedia-typefilehosttagtagstag-datecollectiontie-typeall"
+const _TieProperty_name = "tie-uiddirectoryfilenamenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typeall"
 
-var _TieProperty_index = [...]uint8{0, 7, 16, 24, 28, 38, 46, 49, 53, 61, 71, 79, 82}
+var _TieProperty_index = [...]uint8{0, 7, 16, 24, 28, 38, 46, 49, 53, 59, 63, 71, 81, 89, 92}
 
 func (i TieProperty) String() string {
 	if i < 0 || i >= TieProperty(len(_TieProperty_index)-1) {

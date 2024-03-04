@@ -1,13 +1,16 @@
 package client
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"git.sr.ht/~uid/tie/io/putlib"
+	"github.com/go-resty/resty/v2"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -16,6 +19,7 @@ import (
 type TieType int
 type TieProperty int
 type TieCategory int
+type DirUID string
 
 const (
 	TieUnknownFile     TieType = iota // unknown-file
@@ -41,12 +45,22 @@ const (
 	TieMediaType                       // media-type
 	TieFileHost                        // filehost
 	TieTag                             // tag
+	TiePath                            // path
+	TieParent                          // parent
 	TieTags                            // tags
 	TieTagDate                         // tag-date
 	TieCollection                      // collection
 	TieTypeProperty                    // tie-type
 	TieAll                             // all
 )
+
+const (
+	FileURIScheme string = "file:"
+)
+
+func (d DirUID) String() string {
+	return string(d)
+}
 
 func str(t fmt.Stringer) string {
 	return t.String()
@@ -75,34 +89,24 @@ type TagInfo struct {
 	MediaType     string
 	TieType       TieType
 	Tags          []string
-	Directory     string
+	Directory     DirUID
 	DirectoryType TieType
 }
 
-func EssentialTagInfo(hash, file, mediaType, directory string, ft TieType, dirType TieType, tags []string) TagInfo {
-	directory = replaceVariables(directory, file)
-	return TagInfo{
-		Hash:          hash,
-		File:          file,
-		MediaType:     mediaType,
-		Directory:     directory,
-		DirectoryType: dirType,
-		TieType:       ft,
-		Tags:          tags,
-	}
-}
+// func EssentialTagInfo(hash, file, mediaType string, directory DirUID, ft TieType, dirType TieType, tags []string) TagInfo {
+// 	directory = replaceVariables(directory, file)
+// 	return TagInfo{
+// 		Hash:          hash,
+// 		File:          file,
+// 		MediaType:     mediaType,
+// 		Directory:     directory,
+// 		DirectoryType: dirType,
+// 		TieType:       ft,
+// 		Tags:          tags,
+// 	}
+// }
 
-func replaceVariables(str, file string) string {
-	var dirname string
-	if path, err := filepath.Abs(file); err == nil {
-		dirname = filepath.Base(filepath.Dir(path))
-	}
-	str = strings.ReplaceAll(str, "$DIR", dirname)
-
-	return str
-}
-
-func (tie *TieClient) ImportFile(file string, host string, tags []string, directory string, dirType TieType) error {
+func (tie *TieClient) ImportFile(file string, host string, tags []string, directory DirUID, dirType TieType) error {
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
 		return err
@@ -110,7 +114,16 @@ func (tie *TieClient) ImportFile(file string, host string, tags []string, direct
 	status := putlib.Upload(host, file, putlib.PutConfig{})
 	for _, x := range status.UploadedItems {
 		if x.ErrorMsg == "" {
-			info := EssentialTagInfo(x.Hash, file, x.MediaType, directory, fileType, dirType, tags)
+			info := TagInfo{
+				Hash:          x.Hash,
+				File:          file,
+				MediaType:     x.MediaType,
+				Directory:     directory,
+				DirectoryType: dirType,
+				TieType:       fileType,
+				Tags:          tags,
+			}
+			// info := TagInfo {x.Hash, file, x.MediaType, directory, fileType, dirType, tags)
 			Tag(tie, info)
 		} else {
 			return fmt.Errorf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
@@ -119,10 +132,18 @@ func (tie *TieClient) ImportFile(file string, host string, tags []string, direct
 	return nil
 }
 
-func (tie *TieClient) ImportDir(dir string, host string, dirType TieType, tags []string) error {
+func (tie *TieClient) ImportDir(dir string, host string, parentDir DirUID, dirType TieType, tags []string) error {
 	status := putlib.Upload(host, dir, putlib.PutConfig{})
 	if status.ErrorMsg == "" {
-		info := EssentialTagInfo(status.LastItem.Hash, dir, status.LastItem.MediaType, filepath.Base(dir), dirType, dirType, tags)
+		info := TagInfo{
+			Hash:          status.LastItem.Hash,
+			File:          dir,
+			MediaType:     status.LastItem.MediaType,
+			Directory:     parentDir,
+			DirectoryType: dirType,
+			TieType:       dirType,
+			Tags:          tags,
+		}
 		Tag(tie, info)
 	} else {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
@@ -157,14 +178,14 @@ func Tag(tie *TieClient, info TagInfo) error {
 		}
 	}
 	if info.Directory != "" {
-		batch.Add(hash, str(TieDirectory), info.Directory)
+		batch.Add(hash, str(TieDirectory), str(info.Directory))
 		switch info.DirectoryType {
 		case TieImageDir:
-			batch.Add(info.Directory, str(TieTypeProperty), str(TieImageDir))
+			batch.Add(str(info.Directory), str(TieTypeProperty), str(TieImageDir))
 		case TieVideoDir:
-			batch.Add(info.Directory, str(TieTypeProperty), str(TieVideoDir))
+			batch.Add(str(info.Directory), str(TieTypeProperty), str(TieVideoDir))
 		case TieAudioDir:
-			batch.Add(info.Directory, str(TieTypeProperty), str(TieAudioDir))
+			batch.Add(str(info.Directory), str(TieTypeProperty), str(TieAudioDir))
 		}
 	}
 
@@ -179,4 +200,119 @@ func Tag(tie *TieClient, info TagInfo) error {
 	})
 
 	return err
+}
+
+func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
+	o := GetOptions{
+		Reverse: true,
+		Filter:  str(TiePath),
+	}
+	if !strings.HasPrefix(path, FileURIScheme) {
+		path = FileURIScheme + path
+	}
+	var err error
+	var uid DirUID
+	tie.Get(path, o, func(r GetReply) {
+		if r.Success {
+			if len(r.Result) > 1 {
+				err = errors.New(strconv.Itoa(len(r.Result)) + "UIDs found for path. Expected 1.")
+			} else {
+				for key, _ := range r.Result {
+					uid = DirUID(key)
+				}
+			}
+		} else {
+			err = errors.New("error:'" + r.Message + "'")
+		}
+	})
+
+	return uid, err
+}
+
+func (tie *TieClient) CreateTieRootDir() error {
+	rootpath := FileURIScheme + "/"
+	uid, _ := tie.DirUIDFromPath(rootpath)
+	if uid != "" {
+		return errors.New("Root dir already exists, with UID: " + uid.String())
+	}
+
+	id, err := tie.newDirUID()
+	if err != nil {
+		return err
+	}
+	uid = DirUID(id)
+
+	b := tie.NewBatch()
+	b.Add(str(uid), str(TieParent), str(uid))
+	b.Add(str(uid), str(TiePath), rootpath)
+	tie.Batch(b, func(r BatchReply) {
+		if !r.Success {
+			err = errors.New(r.Message)
+		}
+	})
+
+	return err
+}
+
+type directory struct {
+}
+
+func (tie *TieClient) ReadTieDir(path string) (DirUID, error) {
+	return "", nil
+}
+
+func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
+	if !strings.HasPrefix(path, FileURIScheme) {
+		path = FileURIScheme + path
+	}
+	uid, _ := tie.DirUIDFromPath(path)
+	if uid != "" { // Dir already exists
+		return uid, errors.New("Cannot create directory '" + path + "': Directory exists")
+	}
+
+	parentPath := filepath.Dir(path)
+	if parentPath == FileURIScheme {
+		parentPath = FileURIScheme + "/"
+	}
+
+	id, err := tie.newDirUID()
+	if err != nil {
+		return "", err
+	}
+	uid = DirUID(id)
+
+	parentUID, err := tie.DirUIDFromPath(parentPath)
+	if err != nil {
+		return "", err
+	}
+
+	b := tie.NewBatch()
+	b.Add(str(uid), str(TieParent), str(parentUID))
+	b.Add(str(uid), str(TiePath), path)
+	tie.Batch(b, func(r BatchReply) {
+		if !r.Success {
+			err = errors.New(r.Message)
+		}
+	})
+
+	return uid, err
+}
+
+type Uid struct {
+	Uid string
+}
+
+func (tie *TieClient) newDirUID() (uid DirUID, err error) {
+	var result Uid
+	url := tie.Config.UIDService + "/newjsonid"
+	resp, err := resty.New().R().Get(url)
+	if err != nil {
+		return DirUID(""), err
+	}
+	err = json.Unmarshal(resp.Body(), &result)
+	if err != nil {
+		return DirUID(""), err
+	}
+
+	return DirUID(result.Uid), nil
 }

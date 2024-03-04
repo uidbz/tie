@@ -45,6 +45,7 @@ type Config struct {
 	Namespace        string
 	Collection       string
 	Webservice       string
+	UIDService       string
 	DefaultFileHosts []string
 	Import           ImportConfig
 	FileHosts        map[string]string
