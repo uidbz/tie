@@ -195,7 +195,7 @@ func (ic *Collection) secureLevelInIndex(level int) {
 func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]byte) (*Entry, bool) {
 	ic.secureLevelInIndex(level)
 
-	if entry, found := ic.levels[level].uniqueValues.Get(UniqueValue{parentId, value}); found {
+	if entry, found := ic.levels[level].uniqueValues.Get(&UniqueValue{parentId, value}); found {
 		return entry.(*Entry), true
 	} else {
 		return nil, false
@@ -262,7 +262,7 @@ func (ic *Collection) getEntryFromString(value string) (entry *Entry, level int,
 
 func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]byte) *Entry {
 	e := &Entry{Id: ic.nextID(),
-		UniqueValue: UniqueValue{parentId, value},
+		UniqueValue: &UniqueValue{parentId, value},
 	}
 
 	if ic.writeToDisk {
@@ -415,6 +415,9 @@ func (ic *Collection) uniqueAssociationExists(keyLevel int, key *Entry, value1 *
 }
 
 func (ic *Collection) loadTriples(tree *TieTree, tripleChan chan Triple) {
+	ic.loadingTriples.Lock() // because dbReadwg.Wait() cannot be called multiple times
+	defer ic.loadingTriples.Unlock()
+
 	it := tree.Iterator()
 	for it.Next() {
 		pos := it.Value().(int64)
@@ -486,6 +489,10 @@ func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (s
 	})
 
 	count := len(sorted)
+
+	if o.Offset < 0 {
+		o.Offset = 0
+	}
 
 	if count < o.Offset {
 		return make([]StringTriple, 0), count

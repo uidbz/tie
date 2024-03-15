@@ -78,8 +78,8 @@ func UInt64Comparator(o1, o2 interface{}) int {
 }
 
 func UniqueValueComparator(o1, o2 interface{}) int {
-	k1 := o1.(UniqueValue)
-	k2 := o2.(UniqueValue)
+	k1 := o1.(*UniqueValue)
+	k2 := o2.(*UniqueValue)
 	switch {
 	case k1.ParentId > k2.ParentId:
 		return 1

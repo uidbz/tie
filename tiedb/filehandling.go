@@ -2,7 +2,9 @@ package tiedb
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -21,6 +23,8 @@ func (ic *Collection) bufToEntry(buf []byte) (Entry, int) {
 	next = last + SIZE_ID
 	e.Id = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
+
+	e.UniqueValue = &UniqueValue{}
 
 	next = last + SIZE_PARENTID
 	e.UniqueValue.ParentId = binary.LittleEndian.Uint64(buf[last:next])
@@ -117,8 +121,10 @@ func (t *Collection) loadDB(filename string) error {
 	var entry int64
 	for {
 		buf := make([]byte, ENTRY_SIZE*4194304)
-		v, _ := db.Read(buf)
-
+		v, err := db.Read(buf)
+		if err != nil && !errors.Is(err, io.EOF) {
+			panic("Error reading database: " + err.Error())
+		}
 		if v == 0 {
 			break
 		}

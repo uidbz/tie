@@ -67,6 +67,7 @@ type Collection struct {
 	secureLevel       sync.Mutex
 	totalEntriesMutex sync.Mutex
 	changeMutex       sync.Mutex
+	loadingTriples    sync.Mutex
 
 	levels     []entryLevel
 	levelCount int
@@ -94,7 +95,7 @@ type UniqueAssociation struct {
 
 type Entry struct {
 	Id          uint64
-	UniqueValue UniqueValue
+	UniqueValue *UniqueValue
 }
 
 type Triple struct {
