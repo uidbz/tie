@@ -167,6 +167,30 @@ func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	}
 }
 
+func ReadBytes(url string, sourceHash string) (b *bytes.Reader, err error) {
+	// Get the data
+	resp, err := http.Get(url + "/" + sourceHash)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Check server response
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	}
+	var buf bytes.Buffer
+	_, err = io.CopyN(&buf, resp.Body, 3)
+	mode := string(buf.Bytes())
+	_, err = io.Copy(&buf, resp.Body)
+
+	if mode == "dir" {
+		return nil, errors.New("Source is a directory; expected file.")
+	} else {
+		return bytes.NewReader(buf.Bytes()), nil
+	}
+}
+
 func ExecForEach(url string, sourceHash string, funcToExec TieFunc, relPath string) (err error) {
 	// Get the data
 	resp, err := http.Get(url + "/" + sourceHash)
