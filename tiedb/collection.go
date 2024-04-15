@@ -10,20 +10,20 @@ import (
 func (ic *Collection) Add(key string, value1 string, value2 string) {
 	ic.finishedAdding.Add(1)
 
-	k, keyLevel := ic.insert(key)
-	v1, value1Level := ic.insert(value1)
-	v2, value2Level := ic.insert(value2)
+	keyID, keyLevel := ic.insert(key)
+	value1ID, value1Level := ic.insert(value1)
+	value2ID, value2Level := ic.insert(value2)
 
 	ass := Triple{
-		Key:         k.Id,
+		Key:         keyID,
 		Level:       keyLevel,
 		Value1Level: value1Level,
-		Value1:      v1.Id,
+		Value1:      value1ID,
 		Value2Level: value2Level,
-		Value2:      v2.Id,
+		Value2:      value2ID,
 	}
 
-	if ic.uniqueAssociationExists(keyLevel, k, v1, v2) {
+	if ic.uniqueAssociationExists(keyLevel, keyID, value1ID, value2ID) {
 		ic.finishedAdding.Done()
 		return
 	} else {
@@ -61,18 +61,18 @@ func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 }
 
 func (ic *Collection) GetAssociations(value string) (*TieTree, bool) {
-	if e, level, found := ic.getEntryFromString(value); !found {
+	if entryID, level, found := ic.getEntryFromString(value); !found {
 		return &TieTree{}, false
 	} else {
-		return ic.getAssociationsFromEntry(level, e), true
+		return ic.getAssociations(level, entryID), true
 	}
 }
 
 func (ic *Collection) GetReverseAssociations(value string) (*TieTree, bool) {
-	if e, level, found := ic.getEntryFromString(value); !found {
+	if entryID, level, found := ic.getEntryFromString(value); !found {
 		return &TieTree{}, false
 	} else {
-		return ic.getReverseAssociationsFromEntry(level, e), true
+		return ic.getReverseAssociations(level, entryID), true
 	}
 }
 
@@ -87,17 +87,17 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (string, 
 
 		if f1 && f2 {
 			assKey := UniqueAssociation{
-				AssociateTo: v2.Id,
-				Relation:    v1.Id,
+				AssociateTo: v2,
+				Relation:    v1,
 			}
 			reverseAssKey := UniqueAssociation{
-				AssociateTo: k.Id,
-				Relation:    v1.Id,
+				AssociateTo: k,
+				Relation:    v1,
 			}
 
 			if a, found := asses.Get(assKey); found {
 				ic.deleteAssociation(asses, assKey, a.(int64))
-				ic.getReverseAssociationsFromEntry(l2, v2).Delete(reverseAssKey)
+				ic.getReverseAssociations(l2, v2).Delete(reverseAssKey)
 				return "", true
 			}
 		}
@@ -192,27 +192,27 @@ func (ic *Collection) secureLevelInIndex(level int) {
 	}
 }
 
-func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]byte) (*Entry, bool) {
+func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]byte) (uint64, bool) {
 	ic.secureLevelInIndex(level)
 
-	if entry, found := ic.levels[level].uniqueValues.Get(&UniqueValue{parentId, value}); found {
-		return entry.(*Entry), true
+	if entryID, found := ic.levels[level].uniqueValues.Get(&UniqueValue{parentId, value}); found {
+		return entryID.(uint64), true
 	} else {
-		return nil, false
+		return 0, false
 	}
 }
 
-func (ic *Collection) insert(value string) (parent *Entry, level int) {
+func (ic *Collection) insert(value string) (entryID uint64, level int) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
 
-	lastParent := &Entry{}
+	var lastParentID uint64
 	bytes := []byte(value)
 	checkExistance := true
 	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
 	bytes = append(bytes, align...)
 
-	var tmp *Entry
+	var tmp uint64
 
 	for i := 0; i < len(bytes); i = i + SIZE_VALUE {
 		end := i + SIZE_VALUE
@@ -221,20 +221,20 @@ func (ic *Collection) insert(value string) (parent *Entry, level int) {
 		value := ([SIZE_VALUE]byte)(bytes[i:end])
 
 		if checkExistance {
-			tmp, checkExistance = ic.valueExists(level, lastParent.Id, value)
+			tmp, checkExistance = ic.valueExists(level, lastParentID, value)
 		}
 		if checkExistance {
-			lastParent = tmp
+			lastParentID = tmp
 		} else {
 			checkExistance = false
-			lastParent = ic.insertValue(level, lastParent.Id, value)
+			lastParentID = ic.insertValue(level, lastParentID, value)
 		}
 	}
 
-	return lastParent, level
+	return lastParentID, level
 }
 
-func (ic *Collection) getEntryFromString(value string) (entry *Entry, level int, found bool) {
+func (ic *Collection) getEntryFromString(value string) (entryID uint64, level int, found bool) {
 	bytes := []byte(value)
 
 	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
@@ -250,39 +250,39 @@ func (ic *Collection) getEntryFromString(value string) (entry *Entry, level int,
 		value := ([SIZE_VALUE]byte)(bytes[i:end])
 
 		if tmp, exists := ic.valueExists(level, lastParentId, value); exists {
-			lastParentId = tmp.Id
+			lastParentId = tmp
 			lastLevel = level
 		} else {
-			return nil, 0, false
+			return 0, 0, false
 		}
 	}
 
-	return ic.getEntry(lastLevel, lastParentId), lastLevel, true
+	return lastParentId, lastLevel, true
 }
 
-func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]byte) *Entry {
-	e := &Entry{Id: ic.nextID(),
-		UniqueValue: &UniqueValue{parentId, value},
-	}
+func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]byte) (entryID uint64) {
+	entryID = ic.nextID()
+	uv := &UniqueValue{parentId, value}
 
 	if ic.writeToDisk {
 		m := FileMod{
-			EntryType: TYPE_ENTRY,
-			Mode:      FILE_ADD,
-			Level:     level,
-			Entry:     e,
+			EntryType:   TYPE_ENTRY,
+			Mode:        FILE_ADD,
+			Level:       level,
+			EntryID:     entryID,
+			UniqueValue: uv,
 		}
 		ic.dBWriteQueue <- m
 	}
-	ic.insertEntry(level, e)
+	ic.insertEntry(level, entryID, uv)
 
-	return e
+	return entryID
 }
 
-func (ic *Collection) insertEntry(level int, e *Entry) {
+func (ic *Collection) insertEntry(level int, id uint64, uv *UniqueValue) {
 	ic.secureLevelInIndex(level)
-	ic.levels[level].entries.Put(e.Id, e)
-	ic.levels[level].uniqueValues.Put(e.UniqueValue, e)
+	ic.levels[level].entries.Put(id, uv)
+	ic.levels[level].uniqueValues.Put(uv, id)
 }
 
 func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
@@ -331,30 +331,30 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	}
 }
 
-func (ic *Collection) getEntry(level int, id uint64) *Entry {
+func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 	if level < 0 {
 		return nil
 	}
 	if level < ic.levelCount {
 		if entry, found := ic.levels[level].entries.Get(id); found {
-			return entry.(*Entry)
+			return entry.(*UniqueValue)
 		}
 	}
 	return nil
 }
 
-func (ic *Collection) getAssociationsFromEntry(level int, e *Entry) *TieTree {
+func (ic *Collection) getAssociations(level int, entryID uint64) *TieTree {
 	if level >= 0 && level < ic.levelCount {
-		if set, found := ic.levels[level].associations.Get(e.Id); found {
+		if set, found := ic.levels[level].associations.Get(entryID); found {
 			return set.(*TieTree)
 		}
 	}
 	return NewTreeWith(UInt64Comparator)
 }
 
-func (ic *Collection) getReverseAssociationsFromEntry(level int, e *Entry) *TieTree {
+func (ic *Collection) getReverseAssociations(level int, entryID uint64) *TieTree {
 	if level >= 0 && level < ic.levelCount {
-		if set, found := ic.levels[level].reverseAssociations.Get(e.Id); found {
+		if set, found := ic.levels[level].reverseAssociations.Get(entryID); found {
 			return set.(*TieTree)
 		}
 	}
@@ -367,24 +367,17 @@ func (ic *Collection) getValue(level int, id uint64) []byte {
 		return []byte{}
 	}
 	if level == 0 {
-		return ic.getEntry(0, id).UniqueValue.Value[:]
+		return ic.getUniqueValue(0, id).Value[:]
 	}
-	e := ic.getEntry(level, id)
-	if e != nil {
-		return append(ic.getValue(level-1, e.UniqueValue.ParentId), e.UniqueValue.Value[:]...)
+	uv := ic.getUniqueValue(level, id)
+	if uv != nil {
+		return append(ic.getValue(level-1, uv.ParentId), uv.Value[:]...)
 	}
 	return nil
 }
 
-func (ic *Collection) getValueString(level int, id uint64) string {
-	value := ic.getValue(level, id)
-	value = bytes.Trim(value, "\x00")
-
-	return string(value)
-}
-
-func (ic *Collection) getValueStringFromEntry(level int, e *Entry) string {
-	value := ic.getValue(level, e.Id)
+func (ic *Collection) getValueString(level int, entryID uint64) string {
+	value := ic.getValue(level, entryID)
 	value = bytes.Trim(value, "\x00")
 
 	return string(value)
@@ -402,12 +395,12 @@ func (ic *Collection) deleteAssociation(tree *TieTree, key UniqueAssociation, tr
 	}
 }
 
-func (ic *Collection) uniqueAssociationExists(keyLevel int, key *Entry, value1 *Entry, value2 *Entry) bool {
-	asses := ic.getAssociationsFromEntry(keyLevel, key)
+func (ic *Collection) uniqueAssociationExists(keyLevel int, key uint64, value1 uint64, value2 uint64) bool {
+	asses := ic.getAssociations(keyLevel, key)
 
 	subkey := UniqueAssociation{
-		Relation:    value1.Id,
-		AssociateTo: value2.Id,
+		Relation:    value1,
+		AssociateTo: value2,
 	}
 	_, found := asses.Get(subkey)
 
@@ -511,26 +504,26 @@ func (ic *Collection) SortByNextLevelOne(tree *TieTree, value1Filter string, o S
 	return []StringTriple{}
 }
 
-func (ic *Collection) GetValue2Trees(s *TieTree, value1Filter string) (value2Trees map[string]*TieTree) {
-	value2Trees = make(map[string]*TieTree)
+// func (ic *Collection) GetValue2Trees(s *TieTree, value1Filter string) (value2Trees map[string]*TieTree) {
+// 	value2Trees = make(map[string]*TieTree)
 
-	c := make(chan Triple, 10000)
-	go ic.loadTriples(s, c)
+// 	c := make(chan Triple, 10000)
+// 	go ic.loadTriples(s, c)
 
-	filterActive := value1Filter != ""
+// 	filterActive := value1Filter != ""
 
-	for x := range c {
-		t := ic.makeStringTriple(x)
-		if filterActive && t.Value1 != value1Filter {
-			continue
-		}
-		if _, ok := value2Trees[t.Value2]; !ok {
-			value2Trees[t.Value2] = ic.getAssociationsFromEntry(x.Level, ic.getEntry(x.Value2Level, x.Value2))
-		}
-	}
+// 	for x := range c {
+// 		t := ic.makeStringTriple(x)
+// 		if filterActive && t.Value1 != value1Filter {
+// 			continue
+// 		}
+// 		if _, ok := value2Trees[t.Value2]; !ok {
+// 			value2Trees[t.Value2] = ic.getAssociations(x.Level, ic.getEntry(x.Value2Level, x.Value2)) // I'm not sure how this is supposed to work
+// 		}
+// 	}
 
-	return value2Trees
-}
+// 	return value2Trees
+// }
 
 func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
 	result = make(TripleSet)

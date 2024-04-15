@@ -44,7 +44,7 @@ type CollectionKey struct {
 
 type RawDataEntry struct {
 	Position int64
-	Data     []byte
+	Data     [ENTRY_SIZE]byte
 }
 
 type entryLevel struct {
@@ -60,9 +60,6 @@ type Collection struct {
 	dBFullPath        string
 	totalEntries      uint64
 	totalAssociations uint64
-
-	rawDataToLoad chan RawDataEntry
-	allDataLoaded sync.WaitGroup
 
 	secureLevel       sync.Mutex
 	totalEntriesMutex sync.Mutex
@@ -91,11 +88,6 @@ type UniqueValue struct {
 type UniqueAssociation struct {
 	AssociateTo uint64
 	Relation    uint64
-}
-
-type Entry struct {
-	Id          uint64
-	UniqueValue *UniqueValue
 }
 
 type Triple struct {
@@ -196,7 +188,8 @@ type FileMod struct {
 	EntryType   int
 	Position    int64
 	Association *Triple
-	Entry       *Entry
+	EntryID     uint64
+	UniqueValue *UniqueValue
 }
 
 type ReadRequest struct {
@@ -204,7 +197,7 @@ type ReadRequest struct {
 	ReplyChan chan Triple
 }
 
-func (e *Entry) toBytes(level int) []byte {
+func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
 	datatype := make([]byte, SIZE_DATATYPE)
 	levelBytes := make([]byte, SIZE_LEVEL)
 	id := make([]byte, SIZE_ID)
@@ -212,15 +205,15 @@ func (e *Entry) toBytes(level int) []byte {
 
 	binary.LittleEndian.PutUint16(datatype, TYPE_ENTRY)
 	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
-	binary.LittleEndian.PutUint64(id, e.Id)
-	binary.LittleEndian.PutUint64(parentId, e.UniqueValue.ParentId)
+	binary.LittleEndian.PutUint64(id, entryID)
+	binary.LittleEndian.PutUint64(parentId, uv.ParentId)
 
 	out := make([]byte, ENTRY_SIZE)
 
 	out = append(datatype[:], levelBytes[:]...)
 	out = append(out, id[:]...)
 	out = append(out, parentId[:]...)
-	out = append(out, e.UniqueValue.Value[:]...)
+	out = append(out, uv.Value[:]...)
 
 	return out
 }

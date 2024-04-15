@@ -253,12 +253,12 @@ func ImportImage() *cli.Command {
 					for _, h := range hosts {
 						if fi, err := os.Stat(file); err == nil {
 							if fi.IsDir() {
-								err := tie.ImportDir(file, tie.Config.FileHosts[h], client.TieImageDir, ctx.StringSlice("tags"))
+								err := tie.ImportDir(file, tie.Config.FileHosts[h], "", client.TieImageDir, ctx.StringSlice("tags")) // TODO: Figure out how dirID should work
 								if err != nil {
 									fmt.Println(err)
 								}
 							} else {
-								err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.StringSlice("tags"), ctx.String("gallery"), client.TieImageDir)
+								err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.StringSlice("tags"), "") // TODO: Figure out how dirID should work
 								if err != nil {
 									fmt.Println(err)
 								}

@@ -12,32 +12,31 @@ import (
 	"time"
 )
 
-func (ic *Collection) bufToEntry(buf []byte) (Entry, int) {
+func (ic *Collection) bufToEntry(buf [ENTRY_SIZE]byte) (level int, entryID uint64, uv *UniqueValue) {
 	var last int = SIZE_DATATYPE
-	var e Entry
 
 	next := last + SIZE_LEVEL
-	level := int(binary.LittleEndian.Uint64(buf[last:next]))
+	level = int(binary.LittleEndian.Uint64(buf[last:next]))
 	last = next
 
 	next = last + SIZE_ID
-	e.Id = binary.LittleEndian.Uint64(buf[last:next])
+	entryID = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
 
-	e.UniqueValue = &UniqueValue{}
+	uv = &UniqueValue{}
 
 	next = last + SIZE_PARENTID
-	e.UniqueValue.ParentId = binary.LittleEndian.Uint64(buf[last:next])
+	uv.ParentId = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
 
 	next = last + SIZE_VALUE
-	e.UniqueValue.Value = ([SIZE_VALUE]byte)(buf[last:next])
+	uv.Value = ([SIZE_VALUE]byte)(buf[last:next])
 	last = next
 
-	return e, level
+	return level, entryID, uv
 }
 
-func (ic *Collection) bufToAssociation(buf []byte) Triple {
+func (ic *Collection) bufToAssociation(buf [ENTRY_SIZE]byte) Triple {
 	var a Triple
 	var last int = SIZE_DATATYPE
 
@@ -68,17 +67,17 @@ func (ic *Collection) bufToAssociation(buf []byte) Triple {
 	return a
 }
 
-func (ic *Collection) inserterWorker(wg *sync.WaitGroup) {
-	for entry := range ic.rawDataToLoad {
+func (ic *Collection) inserterWorker(rawDataToLoad chan RawDataEntry, wg *sync.WaitGroup) {
+	for entry := range rawDataToLoad {
 		switch int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) {
 		case TYPE_ENTRY:
-			e, level := ic.bufToEntry(entry.Data)
+			level, entryID, uv := ic.bufToEntry(entry.Data)
 			ic.totalEntriesMutex.Lock()
-			if e.Id > ic.totalEntries {
-				ic.totalEntries = e.Id
+			if entryID > ic.totalEntries {
+				ic.totalEntries = entryID
 			}
 			ic.totalEntriesMutex.Unlock()
-			ic.insertEntry(level, &e)
+			ic.insertEntry(level, entryID, uv)
 
 		case TYPE_ASSOCIATION:
 			a := ic.bufToAssociation(entry.Data)
@@ -108,19 +107,19 @@ func (t *Collection) loadDB(filename string) error {
 	defer db.Close()
 
 	Info(dbname + "Loading DB...")
-	t.rawDataToLoad = make(chan RawDataEntry, 100000)
+	rawDataToLoad := make(chan RawDataEntry, 1024*1024*64)
 
 	// Start inserter workers
-	workers := 1
+	workers := 2
 	workersFinished := sync.WaitGroup{}
+	workersFinished.Add(workers)
 	for i := 0; i < workers; i++ {
-		workersFinished.Add(1)
-		go t.inserterWorker(&workersFinished)
+		go t.inserterWorker(rawDataToLoad, &workersFinished)
 	}
 
 	var entry int64
 	for {
-		buf := make([]byte, ENTRY_SIZE*4194304)
+		buf := make([]byte, ENTRY_SIZE*1024*1024)
 		v, err := db.Read(buf)
 		if err != nil && !errors.Is(err, io.EOF) {
 			panic("Error reading database: " + err.Error())
@@ -132,13 +131,13 @@ func (t *Collection) loadDB(filename string) error {
 		for i := 0; i < v; i = i + ENTRY_SIZE {
 			r := RawDataEntry{
 				Position: entry * ENTRY_SIZE,
-				Data:     buf[i : i+ENTRY_SIZE],
 			}
-			t.rawDataToLoad <- r
+			copy(r.Data[:], buf[i:i+ENTRY_SIZE])
+			rawDataToLoad <- r
 			entry++
 		}
 	}
-	close(t.rawDataToLoad)
+	close(rawDataToLoad)
 	workersFinished.Wait()
 	Info(dbname + "Loading DB: Done!")
 	return nil
@@ -215,7 +214,7 @@ func (ic *Collection) dBWriter() {
 				if err != nil {
 					log.Println("Read error:", err, "bytes read,", n, "expected", ENTRY_SIZE)
 				} else {
-					req.ReplyChan <- ic.bufToAssociation(b)
+					req.ReplyChan <- ic.bufToAssociation([ENTRY_SIZE]byte(b))
 				}
 				ic.dbReadWg.Done()
 				openLock.Unlock()
@@ -254,7 +253,7 @@ func (ic *Collection) dBWriter() {
 						n, err = db.WriteAt(file_mod.Association.toBytes(), pos)
 						ic.finishedAdding.Done()
 					case TYPE_ENTRY:
-						n, err = db.WriteAt(file_mod.Entry.toBytes(file_mod.Level), pos)
+						n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)
 					default:
 						panic("Wrong EntryType provided for DB writer.")
 					}
