@@ -9,26 +9,24 @@ func _() {
 	// Re-run the stringer command to generate them again.
 	var x [1]struct{}
 	_ = x[TieUid-0]
-	_ = x[TieDirectory-1]
-	_ = x[TieIsDir-2]
-	_ = x[TieFilename-3]
-	_ = x[TieFilesize-4]
-	_ = x[TieName-5]
-	_ = x[TieMediaType-6]
-	_ = x[TieFileHost-7]
-	_ = x[TieTag-8]
-	_ = x[TiePath-9]
-	_ = x[TieParent-10]
-	_ = x[TieTags-11]
-	_ = x[TieTagDate-12]
-	_ = x[TieCollection-13]
-	_ = x[TieTypeProperty-14]
-	_ = x[TieAll-15]
+	_ = x[TieFilename-1]
+	_ = x[TieFilesize-2]
+	_ = x[TieName-3]
+	_ = x[TieMediaType-4]
+	_ = x[TieFileHost-5]
+	_ = x[TieTag-6]
+	_ = x[TiePath-7]
+	_ = x[TieParent-8]
+	_ = x[TieTags-9]
+	_ = x[TieTagDate-10]
+	_ = x[TieCollection-11]
+	_ = x[TieTypeProperty-12]
+	_ = x[TieAll-13]
 }
 
-const _TieProperty_name = "tie-uiddirectoryis-dirfilenamefilesizenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typeall"
+const _TieProperty_name = "tie-uidfilenamefilesizenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typeall"
 
-var _TieProperty_index = [...]uint8{0, 7, 16, 22, 30, 38, 42, 52, 60, 63, 67, 73, 77, 85, 95, 103, 106}
+var _TieProperty_index = [...]uint8{0, 7, 15, 23, 27, 37, 45, 48, 52, 58, 62, 70, 80, 88, 91}
 
 func (i TieProperty) String() string {
 	if i < 0 || i >= TieProperty(len(_TieProperty_index)-1) {

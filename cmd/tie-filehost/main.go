@@ -63,16 +63,21 @@ func AddressOf(key []byte, input io.Reader) (string, error) { // function to com
 	return hex.EncodeToString(dest), err
 }
 
-func MakeDestinationPath(hash string) string {
-	var dest string = destination
-
+func PathFromHash(dest, hash string) string {
 	max := lvlDeep * dirWidth
 	for i := 0; i <= max; i = i + dirWidth {
 		dest = filepath.Join(dest, hash[i:i+dirWidth])
 	}
-	os.MkdirAll(dest, 0755)
 
 	return filepath.Join(dest, hash)
+}
+
+func MakeDestinationPath(hash string) string {
+	dest := PathFromHash(destination, hash)
+
+	os.MkdirAll(filepath.Dir(dest), 0755) // TODO: Error handling
+
+	return dest
 }
 
 func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {

@@ -36,12 +36,12 @@ const (
 	TieImageArchive                   // image-archive
 	TieVideoArchive                   // video-archive
 	TieDocumentArchive                // document-archive
+	TieDirectory                      // directory
+	TieFile                           // file
 )
 
 const (
 	TieUid          TieProperty = iota // tie-uid
-	TieDirectory                       // directory
-	TieIsDir                           // is-dir
 	TieFilename                        // filename
 	TieFilesize                        // filesize
 	TieName                            // name
@@ -87,14 +87,14 @@ func collection(tie *TieClient, tt TieType) string {
 }
 
 type TagInfo struct {
-	Hash          string
-	File          string
-	Size          int
-	MediaType     string
-	TieType       TieType
-	Tags          []string
-	Directory     DirUID
-	DirectoryType TieType
+	Hash      string
+	File      string
+	Size      int
+	MediaType string
+	TieType   TieType
+	Tags      []string
+	Directory DirUID
+	IsDir     bool
 }
 
 // func EssentialTagInfo(hash, file, mediaType string, directory DirUID, ft TieType, dirType TieType, tags []string) TagInfo {
@@ -110,7 +110,8 @@ type TagInfo struct {
 // 	}
 // }
 
-func (tie *TieClient) ImportFile(file string, host string, tags []string, directory DirUID, dirType TieType) error {
+func (tie *TieClient) ImportFile(file string, host string, tags []string, directory DirUID) error {
+	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
 		return err
@@ -120,16 +121,17 @@ func (tie *TieClient) ImportFile(file string, host string, tags []string, direct
 		return err
 	}
 	status := putlib.Upload(host, file, putlib.PutConfig{})
+
 	if status.ErrorMsg == "" {
 		info := TagInfo{
-			Hash:          status.LastItem.Hash,
-			File:          file,
-			Size:          int(stat.Size()),
-			MediaType:     status.LastItem.MediaType,
-			Directory:     directory,
-			DirectoryType: dirType,
-			TieType:       fileType,
-			Tags:          tags,
+			Hash:      status.LastItem.Hash,
+			File:      file,
+			Size:      int(stat.Size()),
+			MediaType: status.LastItem.MediaType,
+			Directory: directory,
+			TieType:   fileType,
+			Tags:      tags,
+			IsDir:     stat.IsDir(),
 		}
 		// info := TagInfo {x.Hash, file, x.MediaType, directory, fileType, dirType, tags)
 		Tag(tie, info)
@@ -139,18 +141,18 @@ func (tie *TieClient) ImportFile(file string, host string, tags []string, direct
 	return nil
 }
 
+// TODO: FIX this
 func (tie *TieClient) ImportDir(dir string, host string, parentDir DirUID, dirType TieType, tags []string) error {
 	status := putlib.Upload(host, dir, putlib.PutConfig{})
 	for _, x := range status.UploadedItems {
 		if x.ErrorMsg == "" {
 			info := TagInfo{
-				Hash:          x.Hash,
-				File:          dir,
-				MediaType:     x.MediaType,
-				Directory:     parentDir,
-				DirectoryType: dirType,
-				TieType:       dirType,
-				Tags:          tags,
+				Hash:      x.Hash,
+				File:      dir,
+				MediaType: x.MediaType,
+				Directory: parentDir,
+				TieType:   dirType,
+				Tags:      tags,
 			}
 			Tag(tie, info)
 		} else {
@@ -161,6 +163,7 @@ func (tie *TieClient) ImportDir(dir string, host string, parentDir DirUID, dirTy
 }
 
 func Tag(tie *TieClient, info TagInfo) error {
+	fmt.Println("tagging", info.Hash)
 	origCollection := tie.Config.Collection
 	defer func() {
 		tie.Config.Collection = origCollection
@@ -186,16 +189,13 @@ func Tag(tie *TieClient, info TagInfo) error {
 			}
 		}
 	}
+	if info.IsDir {
+		batch.Add(hash, str(TieTypeProperty), str(TieDirectory))
+	} else {
+		batch.Add(hash, str(TieTypeProperty), str(TieFile))
+	}
 	if info.Directory != "" {
-		batch.Add(hash, str(TieDirectory), str(info.Directory))
-		switch info.DirectoryType {
-		case TieImageDir:
-			batch.Add(str(info.Directory), str(TieTypeProperty), str(TieImageDir))
-		case TieVideoDir:
-			batch.Add(str(info.Directory), str(TieTypeProperty), str(TieVideoDir))
-		case TieAudioDir:
-			batch.Add(str(info.Directory), str(TieTypeProperty), str(TieAudioDir))
-		}
+		batch.Add(hash, str(TieParent), str(info.Directory))
 	}
 
 	var err error
@@ -254,7 +254,7 @@ func (tie *TieClient) CreateTieRootDir() error {
 	b := tie.NewBatch()
 	b.Add(str(uid), str(TieParent), str(uid))
 	b.Add(str(uid), str(TiePath), rootpath)
-	b.Add(str(uid), str(TieIsDir), "true")
+	b.Add(str(uid), str(TieTypeProperty), str(TieDirectory))
 	tie.Batch(b, func(r BatchReply) {
 		if !r.Success {
 			err = errors.New(r.Message)
@@ -286,9 +286,16 @@ func (tie *TieClient) MkTieDirAll(path string) (DirUID, error) {
 	parts[0] = FileURIScheme
 	var uid DirUID
 	for i, _ := range parts {
-		uid, err = tie.MkTieDir(filepath.Join(parts[0:i]...))
-		if err != nil && !strings.HasPrefix(err.Error(), "Cannot create directory") {
+		if i == 0 {
+			continue
+		}
+		uid, err = tie.MkTieDir(filepath.Join(parts[0 : i+1]...))
+		if err != nil && !strings.HasSuffix(err.Error(), "Directory exists") {
+			fmt.Println("huh")
+			fmt.Println(err.Error(), !strings.HasSuffix(err.Error(), "Directory exists"))
 			return "", err
+		} else {
+			err = nil
 		}
 	}
 
@@ -323,7 +330,7 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 	b := tie.NewBatch()
 	b.Add(str(uid), str(TieParent), str(parentUID))
 	b.Add(str(uid), str(TiePath), path)
-	b.Add(str(uid), str(TieIsDir), "true")
+	b.Add(str(uid), str(TieTypeProperty), str(TieDirectory))
 	tie.Batch(b, func(r BatchReply) {
 		if !r.Success {
 			err = errors.New(r.Message)
@@ -331,6 +338,15 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 	})
 
 	return uid, err
+}
+
+func (tie *TieClient) SetDirType(uid DirUID, dirType TieType) (err error) {
+	tie.Add(str(uid), str(TieTypeProperty), str(dirType), func(r AddReply) {
+		if !r.Success {
+			err = errors.New(r.Message)
+		}
+	})
+	return err
 }
 
 type Uid struct {
