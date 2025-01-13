@@ -126,16 +126,6 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 	}
 	defer out.Close()
 
-	// r.Body
-
-	// f, _, errFormFile := r.FormFile("file")
-	// if errFormFile != nil {
-	// 	fmt.Println("whut")
-	// 	fmt.Fprint(w, h)
-	// 	log.Println(errFormFile.Error())
-	// 	return
-
-	// }
 	_, errCopy := io.Copy(out, r.Body)
 	if errCopy != nil {
 		log.Println(err)

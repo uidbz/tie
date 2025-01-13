@@ -2,6 +2,7 @@ package tiedb
 
 import (
 	"encoding/binary"
+	"strings"
 	"sync"
 )
 
@@ -174,6 +175,18 @@ func (s Value2) One() (string, bool) {
 func (s Value2) Has(value2 string) bool {
 	_, ok := s[value2]
 	return ok
+}
+
+func (s Value2) ToString() string {
+	return strings.Join(s.ToSlice(), ", ")
+}
+
+func (s Value2) ToSlice() []string {
+	tmp := make([]string, 0, len(s))
+	for value2 := range s {
+		tmp = append(tmp, value2)
+	}
+	return tmp
 }
 
 func (s Value2) ForEach(do func(value2 string)) {

@@ -238,10 +238,12 @@ func UploadNoHash(url string, file io.Reader, length int, config PutConfig) *Sta
 	s := config.UploadMultipart(url, file, length, "dummyfilename")
 
 	// When uploading from reader we don't calculate local hash
-	config.Validate(s.Hash, s, status)
+	validate(s.Hash, s, status)
 
 	return status
 }
+
+const dirHeader = "dir\n---\n"
 
 func upload(url string, file string, config PutConfig, status *Status) {
 	fi, errStat := os.Lstat(file)
@@ -255,24 +257,25 @@ func upload(url string, file string, config PutConfig, status *Status) {
 		if err != nil {
 			fmt.Println("Error reading directory", file, "Error:", err.Error())
 		}
-		var hashes string = "dir\n---\n"
+		var hashes string = dirHeader
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
 			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
 			upload(url, abs, config, status)
-			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\n"
+			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\t" + status.LastItem.MediaType + "\n"
 		}
 		localhash, _ := config.AddressOf(strings.NewReader(hashes))
 		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), len(hashes), file)
-		config.Validate(localhash, uploadStatus, status)
+		uploadStatus.MediaType = "inode/directory"
+		validate(localhash, uploadStatus, status)
 	} else {
 		localhash, _ := config.AddressOfFile(file)
 		uploadStatus := config.UploadFile(url+localhash, file)
-		config.Validate(localhash, uploadStatus, status)
+		validate(localhash, uploadStatus, status)
 	}
 }
 
-func (pc *PutConfig) Validate(localhash string, uploadStatus StatusItem, status *Status) {
+func validate(localhash string, uploadStatus StatusItem, status *Status) {
 	if localhash != uploadStatus.Hash {
 		errMsg := "Validation error: Upload checksum failed"
 		if uploadStatus.ErrorMsg == "" {

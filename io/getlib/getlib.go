@@ -20,6 +20,7 @@ const (
 	dirWidth = 2
 	max      = lvlDeep * dirWidth
 )
+const dirHeader = "dir\n---\n"
 
 type TieFunc interface {
 	Run(file io.Reader, relPath string) (err error)
@@ -128,14 +129,14 @@ func IsDir(url string, sourceHash string) (isDir bool, err error) {
 	}
 
 	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, 3)
+	_, err = io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
 	mode := string(buf.Bytes())
 
 	if err != nil {
 		return false, err
 	}
 
-	if mode == "dir" {
+	if mode == dirHeader {
 		return true, nil
 	} else {
 		return false, nil
@@ -156,11 +157,11 @@ func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	}
 
 	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, 3)
+	_, err = io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
 	mode := string(buf.Bytes())
 	_, err = io.Copy(&buf, resp.Body)
 
-	if mode == "dir" {
+	if mode == dirHeader {
 		return nil, errors.New("Source is a directory; expected file.")
 	} else {
 		return &buf, nil
@@ -180,11 +181,11 @@ func ReadBytes(url string, sourceHash string) (b *bytes.Reader, err error) {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, 3)
+	_, err = io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
 	mode := string(buf.Bytes())
 	_, err = io.Copy(&buf, resp.Body)
 
-	if mode == "dir" {
+	if mode == dirHeader {
 		return nil, errors.New("Source is a directory; expected file.")
 	} else {
 		return bytes.NewReader(buf.Bytes()), nil
@@ -192,40 +193,32 @@ func ReadBytes(url string, sourceHash string) (b *bytes.Reader, err error) {
 }
 
 func ExecForEach(url string, sourceHash string, funcToExec TieFunc, relPath string) (err error) {
-	// Get the data
 	resp, err := http.Get(url + "/" + sourceHash)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	// Check server response
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status: %s", resp.Status)
 	}
 
 	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, 3)
+	io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
 	mode := string(buf.Bytes())
 	_, err = io.Copy(&buf, resp.Body)
+	if err != nil {
+		return err
+	}
 
-	if mode == "dir" {
+	if mode == dirHeader {
 		scanner := bufio.NewScanner(&buf)
-		var begin bool
 		for scanner.Scan() {
-			input := scanner.Text()
-			if input == "---" {
-				begin = true
-				continue
-			}
-			if begin {
-				parts := strings.Split(input, "\t")
-				if len(parts) == 2 {
-					ExecForEach(url, parts[0], funcToExec, parts[1])
-				}
+			parts := strings.Split(scanner.Text(), "\t")
+			if len(parts) >= 2 { // skips dir and ---
+				ExecForEach(url, parts[0], funcToExec, parts[1])
 			}
 		}
-
 		if err := scanner.Err(); err != nil {
 			log.Fatal(err)
 		}

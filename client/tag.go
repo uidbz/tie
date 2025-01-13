@@ -69,6 +69,48 @@ func str(t fmt.Stringer) string {
 	return t.String()
 }
 
+func StringToTieType(t string) TieType {
+	switch t {
+	case "image-file":
+		return TieImageFile
+	case "audio-file":
+		return TieAudioFile
+	case "video-file":
+		return TieVideoFile
+	case "document-file":
+		return TieDocumentFile
+	case "archive-file":
+		return TieArchiveFile
+	case "image-dir":
+		return TieImageDir
+	case "audio-dir":
+		return TieAudioDir
+	case "video-dir":
+		return TieVideoDir
+	case "document-dir":
+		return TieDocumentDir
+	case "image-archive":
+		return TieImageArchive
+	case "video-archive":
+		return TieVideoArchive
+	case "document-archive":
+		return TieDocumentArchive
+	case "directory":
+		return TieDirectory
+	case "file":
+		return TieFile
+	}
+
+	return TieUnknownFile
+}
+
+func SliceToTieType(types []string) (t []TieType) {
+	for _, x := range types {
+		t = append(t, StringToTieType(x))
+	}
+	return t
+}
+
 func collection(tie *TieClient, tt TieType) string {
 	var col string
 
@@ -224,7 +266,7 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 	tie.Get(path, o, func(r GetReply) {
 		if r.Success {
 			if len(r.Result) > 1 {
-				err = errors.New(strconv.Itoa(len(r.Result)) + "UIDs found for path. Expected 1.")
+				err = errors.New("Multiple (" + strconv.Itoa(len(r.Result)) + ") UIDs found for path. Expected 1.")
 			} else {
 				for key, _ := range r.Result {
 					uid = DirUID(key)
@@ -264,12 +306,113 @@ func (tie *TieClient) CreateTieRootDir() error {
 	return err
 }
 
-type directory struct {
+type Directory struct {
+	Paths      []string
+	Uid        DirUID
+	SubDirs    []SubDirectory
+	Files      []File
+	ParentUIDs []DirUID
 }
 
-func (tie *TieClient) ReadTieDir(path string) (DirUID, error) {
-	return "", nil
+type SubDirectory struct {
+	Paths    []string
+	Uid      DirUID
+	DirTypes []TieType
 }
+
+type File struct {
+	Filename  string
+	Uid       string
+	TieType   TieType
+	MediaType string
+}
+
+func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
+	var err error
+	setError := func(msg string) {
+		if err == nil { // only record first error
+			err = errors.New(msg)
+		}
+	}
+	var dir Directory
+	tie.SimpleGet(string(uid), func(r GetReply) {
+		if r.Success {
+			r.Result.ForEachKey(func(key string) {
+				dir.Uid = uid
+				entry := r.Result[key]
+				dir.Paths = entry[str(TiePath)].ToSlice()
+				parents := entry[str(TieParent)].ToSlice()
+				dir.ParentUIDs = make([]DirUID, 0, len(parents))
+				for _, x := range parents {
+					dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
+				}
+			})
+		} else {
+			setError("error:'" + r.Message + "'")
+		}
+	})
+	if err != nil {
+		return dir, err
+	}
+	o := GetOptions{
+		Reverse:      true,
+		GetNextLevel: true,
+	}
+	tie.Get(string(uid), o, func(r GetReply) {
+		if r.Success {
+			r.Result.ForEachKey(func(key string) {
+				meta := r.NextLevelResult[key]
+				types := meta[str(TieTypeProperty)]
+				switch true {
+				case types.Has(str(TieDirectory)):
+					subDir := SubDirectory{
+						Uid:      DirUID(key),
+						Paths:    meta[str(TiePath)].ToSlice(),
+						DirTypes: SliceToTieType(types.ToSlice()),
+					}
+					dir.SubDirs = append(dir.SubDirs, subDir)
+				case types.Has(str(TieImageFile)):
+					fallthrough
+				case types.Has(str(TieVideoFile)):
+					fallthrough
+				case types.Has(str(TieAudioFile)):
+					fallthrough
+				case types.Has(str(TieDocumentFile)):
+					f := File{
+						Uid:       key,
+						Filename:  meta[str(TieFilename)].ToString(),
+						TieType:   StringToTieType(types.ToString()),
+						MediaType: meta[str(TieMediaType)].ToString(),
+					}
+					dir.Files = append(dir.Files, f)
+
+				}
+			})
+		} else {
+			setError("error:'" + r.Message + "'")
+		}
+	})
+
+	return dir, err
+}
+
+// func (tie *TieClient) ReadTieDir(uid DirUID) (Directory, error) {
+// 	o := GetOptions{
+// 		GetNextLevel:    true,
+// 		NextLevelFilter: str(TieTypeProperty),
+// 	}
+// 	var err error
+// 	tie.Get(uid, o, func(r GetReply) {
+// 		if r.Success {
+// 			r.Result.ForEachValue2(key, val1, val2 string) {
+// 				// Write here
+// 			}
+// 		} else {
+// 			err = errors.New("error:'" + r.Message + "'")
+// 		}
+// 	})
+// 	return "", nil
+// }
 
 func (tie *TieClient) MkTieDirAll(path string) (DirUID, error) {
 	if strings.HasPrefix(path, FileURIScheme) {
