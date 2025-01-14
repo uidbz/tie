@@ -48,6 +48,7 @@ type StatusItem struct {
 	MediaType string
 	Filename  string
 	ErrorMsg  string
+	Size      int
 }
 
 func InitKey() []byte {
@@ -168,6 +169,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 			Filename:  path,
 			ErrorMsg:  errorMsg,
 			MediaType: contentType,
+			Size:      length,
 		}
 	} else {
 		return StatusItem{
@@ -175,11 +177,12 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 			ErrorMsg:  errorMsg,
 			Filename:  path,
 			MediaType: contentType,
+			Size:      length,
 		}
 	}
 }
 
-func ValidateURL(url string, status *Status) string {
+func (status *Status) validateURL(url string) string {
 	if len(url) < 5 {
 		status.ErrorMsg = "Url to short"
 		return url
@@ -196,7 +199,7 @@ func ValidateURL(url string, status *Status) string {
 func Upload(url string, file string, config PutConfig) *Status {
 	status := &Status{}
 
-	url = ValidateURL(url, status)
+	url = status.validateURL(url)
 	if status.ErrorMsg != "" {
 		return status
 	}
@@ -221,7 +224,7 @@ func Upload(url string, file string, config PutConfig) *Status {
 		}
 	}
 
-	upload(url, file, config, status)
+	status.upload(url, file, config)
 
 	return status
 }
@@ -245,7 +248,7 @@ func UploadNoHash(url string, file io.Reader, length int, config PutConfig) *Sta
 
 const dirHeader = "dir\n---\n"
 
-func upload(url string, file string, config PutConfig, status *Status) {
+func (status *Status) upload(url string, file string, config PutConfig) {
 	fi, errStat := os.Lstat(file)
 	if errStat != nil {
 		status.ErrorMsg += "Error stat file: " + file + errStat.Error()
@@ -261,8 +264,8 @@ func upload(url string, file string, config PutConfig, status *Status) {
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
 			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
-			upload(url, abs, config, status)
-			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\t" + status.LastItem.MediaType + "\n"
+			status.upload(url, abs, config)
+			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\t" + status.LastItem.MediaType + "\t" + strconv.Itoa(status.LastItem.Size) + "\n"
 		}
 		localhash, _ := config.AddressOf(strings.NewReader(hashes))
 		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), len(hashes), file)
