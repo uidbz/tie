@@ -11,7 +11,7 @@ require (
 	github.com/h2non/filetype v1.1.3
 	github.com/hanwen/go-fuse/v2 v2.7.2
 	github.com/julienschmidt/httprouter v1.3.0
-	github.com/minio/highwayhash v1.0.2
+	github.com/minio/highwayhash v1.0.3
 	github.com/urfave/cli/v2 v2.27.1
 )
 
@@ -31,7 +31,7 @@ require (
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.24.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
-	golang.org/x/sys v0.19.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	golang.org/x/tools v0.20.0 // indirect
 )
