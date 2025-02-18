@@ -9,6 +9,7 @@ require (
 	github.com/emirpasic/gods v1.18.1
 	github.com/go-resty/resty/v2 v2.12.0
 	github.com/h2non/filetype v1.1.3
+	github.com/hanwen/go-fuse/v2 v2.7.2
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/minio/highwayhash v1.0.2
 	github.com/urfave/cli/v2 v2.27.1

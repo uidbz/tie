@@ -4,11 +4,11 @@ import (
 	"testing"
 )
 
-const license_hash = "29772659acbae6471b57f25df3aba740a639f7bd30f523f5a60ef6040531fc50"
+const license_hash = "f237c0e59ea0166af622b855b7c933cb37e25ed233048f7d85e22ef714111a02"
 
 func TestAddressOfFile(t *testing.T) {
 	pc := &PutConfig{}
-	if hash, err := pc.AddressOfFile("LICENSE"); err != nil {
+	if hash, err := pc.AddressOfFile("../../LICENSE"); err != nil {
 		t.Error(err)
 	} else {
 		if hash != license_hash {

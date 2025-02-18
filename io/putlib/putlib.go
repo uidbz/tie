@@ -246,7 +246,7 @@ func UploadNoHash(url string, file io.Reader, length int, config PutConfig) *Sta
 	return status
 }
 
-const dirHeader = "dir\n---\n"
+const dirHeader = "tiedir-v1\n---\n"
 
 func (status *Status) upload(url string, file string, config PutConfig) {
 	fi, errStat := os.Lstat(file)

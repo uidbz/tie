@@ -20,7 +20,7 @@ const (
 	dirWidth = 2
 	max      = lvlDeep * dirWidth
 )
-const dirHeader = "dir\n---\n"
+const dirHeader = "tiedir-v1\n---\n"
 
 type TieFunc interface {
 	Run(file io.Reader, relPath string) (err error)
