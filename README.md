@@ -1,43 +1,58 @@
-# tie is a collection of programs and libraries to tie things together
+# tie
 
-tie is written in Go (golang)
+`tie` is a collection of Go programs and libraries built around a triple store,
+focused on **tagging and content-addressed storage**: files live in a
+content-addressed blob server, their tags and metadata live in the triple store,
+and the file's content hash is the key that joins the two.
 
-Programs:
-* tie-daemon is a webservice which provides an interface to a tie database
-* tie is CLI client that can talk with a tie-daemon
-* tie-fileserver is a content addressed file server
-* tie-upload can upload files and directories to a tie-fileserver
-* tie-download can download files and directories from a tie-fileserver
+The store itself stays general — it holds arbitrary `(key, value1, value2)`
+triples — but the tooling is oriented toward tagging files and browsing them as
+a virtual filesystem.
 
-Packages:
-* tiedb is an in-memory triplestore.
-* client can talk with a tie-daemon
-* io/getlib can download files from a tie-fileserver
-* io/putlib can upload files to a tie-fileserver
+## Programs (`cmd/`)
 
-## tiedb
+| Program        | What it does |
+|----------------|--------------|
+| `tie-daemon`   | Web service exposing a tie triple store over HTTP. |
+| `tie`          | CLI client for a `tie-daemon`: add/get/delete triples, import & tag files, dump/restore, and mount. |
+| `tie-filehost` | Content-addressed file server. Stores file bytes and immutable directory (`tiedir`) blobs, addressed by highwayhash. |
+| `tie-upload`   | Upload files or directories to a `tie-filehost`. |
+| `tie-download` | Download files or directories from a `tie-filehost`. |
+| `tie-handle`   | Pipe content-addressed files through an external program (batch processing). |
 
-tiedb is an in-memory triplestore, which is also written to disk for persistence.
+## Packages
 
-The idea was originally to store trains of thought, but it has not directly succeeded in doing this so far.
-The premise is that every-thing is an association. The word is the thing. All words are explained by associations to other words. The relation between the associations is an association as well.
+| Package       | What it does |
+|---------------|--------------|
+| `tiedb`       | In-memory triple store, persisted to disk. |
+| `client`      | Talks to a `tie-daemon`; also the tagging / virtual-directory layer. |
+| `api`         | Request/reply types shared by client and server. |
+| `webservice`  | HTTP transport and auth for the daemon. |
+| `metadata`    | The `tiedir` directory-blob format (headers, entry lines, media-type detection). |
+| `io/putlib`   | Upload files to a `tie-filehost`. |
+| `io/getlib`   | Download files from a `tie-filehost`. |
+| `io/fuselib`  | Mount tie directories as a FUSE filesystem. |
 
-That gives us:
-thing association relation
+## The data model
 
-thing, association, relation is the same thing which I call an association, because no thing can stand alone; it only makes sense in relation to something else.
+Everything in `tiedb` is an **association** — a triple of `key`, `value1`,
+`value2`. The idea is that nothing stands alone; a thing only means something in
+relation to another thing. `key` is what you look something up by; `value1` is
+the relation; `value2` is the associated value. For example:
 
-So what we need is 2 things: Self/other, full/empty, key/value.
-But for convenience, lets throw in a 'relation', which is just another 'value' which is just another 'key', which is just another 'value'.
+```
+pizza  topping  cheese
+pizza  topping  basil
+pizza  baking-time  7 min
+```
 
-To initiate a look up, you need a key - so the first value is called 'key'. Association and Relation are just values (and keys), so I call them Value1 and Value2.
-These 3 go together. I call this a 'triple'.
+A query returns a `TripleSet` — a map of maps of maps
+(`key → value1 → value2`) — with helper methods for reading results ergonomically.
+Order is not retained.
 
-When querying the database the result is a TripleSet which essentially is a map, within a map, within a map - coupled with helper functions to read the Result more easily.
+### Example
 
-Here is a full program that shows how it works - see 'examples' for more.
-
-``` Go
+```go
 package main
 
 import (
@@ -50,43 +65,95 @@ func main() {
 	config := client.DefaultConfig()
 	tie := client.NewTieClient(config)
 
-	handleError := func(reply client.AddReply) {
-		if !reply.Success {
-			fmt.Println("Error adding triple to database:", reply.Message)
+	add := func(key, value1, value2 string) {
+		if _, err := tie.Add(key, value1, value2); err != nil {
+			fmt.Println("Error adding triple:", err)
 		}
 	}
 
-	tie.Add("pizza", "topping", "tomato", handleError)
-	tie.Add("pizza", "topping", "cheese", handleError)
-	tie.Add("pizza", "topping", "basil", handleError)
-	tie.Add("pizza", "baking-time", "7 min", handleError)
-	tie.Add("pizza", "baking-temperature", "250 °C", handleError)
+	add("pizza", "topping", "tomato")
+	add("pizza", "topping", "cheese")
+	add("pizza", "topping", "basil")
+	add("pizza", "baking-time", "7 min")
+	add("pizza", "baking-temperature", "250 °C")
+	tie.Sync()
 
-	tie.Get("pizza", func(reply client.GetReply) {
-		if reply.Success {
-			cat := reply.Result["pizza"]["topping"]
-			cat.ForEach(func(value2 string) {
-				fmt.Println(value2)
-			})
-			// One way of reading the result
-			if value2, ok := reply.Result["pizza"]["baking-time"].One(); ok {
-				fmt.Println(value2)
-			}
-			// Here is a shortcut to the same function
-			if value2, ok := reply.OneValue2("baking-temperature"); ok {
-				fmt.Println(value2)
-			}
-		} else {
-			fmt.Println("Error getting result:", reply.Message)
-		}
+	reply, err := tie.Get("pizza", client.GetOptions{})
+	if err != nil {
+		fmt.Println("Error getting result:", err)
+		return
+	}
+
+	// All value2s under a given value1 ("category").
+	reply.Result["pizza"]["topping"].ForEach(func(value2 string) {
+		fmt.Println(value2)
 	})
+
+	// A single expected value2.
+	if value2, ok := reply.OneValue2("baking-temperature"); ok {
+		fmt.Println(value2)
+	}
 }
 ```
-Example output (notice that the order is not retained):
+
+Client methods return `(reply, error)`; `error` is non-nil for both transport
+failures and API-level failures. `client.ErrNotFound` distinguishes "no such
+key" from a real error — check it with `errors.Is`.
+
+More runnable examples live in `examples/`.
+
+## Content-addressed storage and `tiedir`
+
+`tie-filehost` stores each file under its content hash, so identical content is
+stored once. A **directory** is stored as a `tiedir` blob: an immutable listing
+of `(hash, filename, size, head)` entries. Because the blob's own hash changes
+whenever its contents change, directories are versioned like git trees. The
+`metadata` package defines this format and can recover a file's media type from
+the stored head bytes.
+
+## The `tie` CLI
+
 ```
-basil
-cheese
-tomato
-7 min
-250 °C
+tie add <key> <value1> <value2>      add a triple
+tie get [-r] [-f value1] <key>       query triples (reverse, filtered)
+tie del <key> <value1> <value2>      delete triples
+tie import ...                       upload and tag files
+tie dump                             export the collection as TSV
+tie restore                          import TSV (additive)
+tie mount <hash> <mountpoint>        mount an immutable content-addressed tree
+tie mount --db <mountpoint>          mount the live tag-derived filesystem
+tie conf create [name]               write a default config file
 ```
+
+`tie -c <config>` selects a config file (searched in the working directory
+first). Run `tie conf create` to generate one.
+
+### Mounting
+
+`tie mount <hash> <mountpoint>` mounts a `tiedir` blob as a read-only,
+content-addressed tree.
+
+`tie mount --db <mountpoint>` mounts a live filesystem derived from tags in the
+triple store, laid out as `by-tag/<tag>/<file>`. It reflects the store on every
+directory read, so re-tagging shows up without remounting. A tagged directory
+appears as a real directory and expands into its immutable `tiedir` snapshot.
+
+### Backup / interop
+
+```sh
+tie dump    > backup.tsv     # every triple as key<TAB>value1<TAB>value2
+tie restore < backup.tsv     # additive, idempotent merge
+```
+
+Restore re-adds triples via a batch; adding an existing triple is a no-op, so it
+merges rather than replaces. Point `-c` at a config with a different collection
+to copy data between collections.
+
+## Building
+
+```sh
+go build ./...
+```
+
+Requires Go 1.20+. Mounting additionally requires FUSE (`/dev/fuse`,
+`fusermount`).
