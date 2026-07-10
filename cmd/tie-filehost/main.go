@@ -17,17 +17,15 @@ import (
 )
 
 var (
-	key          []byte
-	listenOn     string = ":1162"
-	destination  string = "/data"
-	thumbnailDir string = ""
+	key         []byte
+	listenOn    string = ":1162"
+	destination string = "/data"
 )
 
 const (
 	tieKey       = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
 	lvlDeep      = 3
 	dirWidth     = 2
-	max          = lvlDeep * dirWidth
 	hashFunction = "hh" // highway hash
 )
 
@@ -107,10 +105,6 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		switch jsonOut {
 		case "json":
 			fmt.Fprint(w, string(jsonData))
-		case "json-force-generate-thumbnails":
-			_, mediatype, _ := GetMetadata(dest, h)
-			GenerateThumbnail(thumbnailDir, dest, h, mediatype)
-			fmt.Fprint(w, string(jsonData))
 		default:
 			fmt.Fprint(w, h)
 		}
@@ -155,8 +149,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 		dest = dest2
 	}
 	log.Println("Calculated hash:", hashHex)
-	jsonData, mediatype, _ := GetMetadata(dest, hashHex)
-	GenerateThumbnail(thumbnailDir, dest, hashHex, mediatype)
+	jsonData, _, _ := GetMetadata(dest, hashHex)
 	if jsonOut == "json" {
 		fmt.Fprint(w, string(jsonData))
 	} else {
@@ -215,7 +208,6 @@ func main() {
 	var keyFile = flag.String("tls-key", "", "Private key filename.")
 	var path = flag.String("path", "/data", "Path to store data.")
 	var addr = flag.String("listen", ":1162", "Listen on particular address/port (ignored if using certmagic).")
-	var thumbs = flag.String("thumbs", "", "Path to store thumbnails of uploaded media files.")
 	var host = flag.String("host", "", "Hostname for certmagic")
 	var useCertmagic = flag.Bool("certmagic", false, "Use Let's encrypt for TLS certificate")
 
@@ -237,9 +229,6 @@ func main() {
 	}
 	destination = filepath.Clean(*path)
 	listenOn = *addr
-	if *thumbs != "" {
-		thumbnailDir = filepath.Clean(*thumbs)
-	}
 
 	if *insecure {
 		fmt.Println("Listening on http://" + listenOn + "\n")

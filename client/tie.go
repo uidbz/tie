@@ -68,8 +68,7 @@ type ImportConfig struct {
 }
 
 type TagOptions struct {
-	AddOriginalPath               bool
-	PutlibForceGenerateThumbnails bool
+	AddOriginalPath bool
 }
 
 func NewTieClient(config Config) (client *TieClient) {
@@ -229,4 +228,3 @@ func (tc *TieClient) Exists(key string) bool {
 	reply, err := tc.SimpleGet(key)
 	return err == nil && reply.Success
 }
-

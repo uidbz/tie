@@ -26,10 +26,9 @@ const (
 )
 
 type PutConfig struct {
-	PathToWorkdir           bool
-	JsonOutput              bool
-	ForceGenerateThumbnails bool
-	currentKey              []byte
+	PathToWorkdir bool
+	JsonOutput    bool
+	currentKey    []byte
 }
 
 type Info struct {
@@ -119,9 +118,6 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 
 	if pc.JsonOutput {
 		url += "/json"
-	}
-	if pc.ForceGenerateThumbnails {
-		url += "-force-generate-thumbnails"
 	}
 	req, err := http.NewRequest(http.MethodPut, url, bufferedFileReader)
 	check(err)
