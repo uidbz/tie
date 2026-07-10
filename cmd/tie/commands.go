@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"git.sr.ht/~uid/tie/tiedb"
 
@@ -12,7 +14,9 @@ import (
 
 	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/client"
+	"git.sr.ht/~uid/tie/io/fuselib"
 
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/urfave/cli/v2"
 	// "github.com/spf13/cobra"
 )
@@ -99,6 +103,74 @@ func cmdGet() *cli.Command {
 			reply.Result.ForEachValue2(func(key, value1, value2 string) {
 				fmt.Println(key + "\t" + value1 + "\t" + value2)
 			})
+
+			return nil
+		},
+	}
+}
+
+func cmdMount() *cli.Command {
+	return &cli.Command{
+		Name: "mount",
+		Usage: "Mount a content-addressed directory (mount [dir-hash] [mountpoint]) " +
+			"or the live tag-derived filesystem (mount --db [mountpoint])",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first DefaultFileHosts)"},
+			&cli.IntFlag{Name: "cache", Usage: "In-memory file cache size in GB", Value: 1},
+			&cli.BoolFlag{Name: "db", Usage: "Mount the live tag-derived filesystem instead of a dir-hash"},
+		},
+		Action: func(ctx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
+
+			hostName := ctx.String("host")
+			if hostName == "" {
+				if len(tie.Config.DefaultFileHosts) == 0 {
+					return errors.New("No filehost configured: set DefaultFileHosts or pass --host")
+				}
+				hostName = tie.Config.DefaultFileHosts[0]
+			}
+			filehost, ok := tie.Config.FileHosts[hostName]
+			if !ok {
+				return errors.New("Unknown filehost '" + hostName + "'")
+			}
+
+			var server *fuse.Server
+			var what, mountpoint string
+			if ctx.Bool("db") {
+				if ctx.Args().Len() < 1 {
+					return errors.New("Need 1 arg: mountpoint")
+				}
+				mountpoint = ctx.Args().Get(0)
+				state := fuselib.NewTieDBFuse(tie, filehost, ctx.Int("cache"))
+				s, err := state.MountDB(mountpoint)
+				if err != nil {
+					return err
+				}
+				server, what = s, "tag-derived filesystem"
+			} else {
+				if ctx.Args().Len() < 2 {
+					return errors.New("Need 2 args: dir-hash, mountpoint")
+				}
+				hash := ctx.Args().Get(0)
+				mountpoint = ctx.Args().Get(1)
+				state := fuselib.NewTieFuse(filehost, ctx.Int("cache"))
+				server, what = state.Mount(hash, mountpoint), hash
+			}
+
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sig
+				fmt.Println("\nUnmounting", mountpoint)
+				if err := server.Unmount(); err != nil {
+					fmt.Println("Unmount error:", err.Error())
+				}
+			}()
+
+			fmt.Println("Mounted", what, "at", mountpoint, "(Ctrl-C to unmount)")
+			server.Wait()
 
 			return nil
 		},

@@ -35,6 +35,7 @@ func main() {
 			cmdGet(),
 			cmdConf(),
 			cmdImport(),
+			cmdMount(),
 		},
 		Before: func(cCtx *cli.Context) error {
 			config, err := client.LoadConfig(cCtx.String("config"))
