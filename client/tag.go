@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -69,38 +70,20 @@ func str(t fmt.Stringer) string {
 	return t.String()
 }
 
-func StringToTieType(t string) TieType {
-	switch t {
-	case "image-file":
-		return TieImageFile
-	case "audio-file":
-		return TieAudioFile
-	case "video-file":
-		return TieVideoFile
-	case "document-file":
-		return TieDocumentFile
-	case "archive-file":
-		return TieArchiveFile
-	case "image-dir":
-		return TieImageDir
-	case "audio-dir":
-		return TieAudioDir
-	case "video-dir":
-		return TieVideoDir
-	case "document-dir":
-		return TieDocumentDir
-	case "image-archive":
-		return TieImageArchive
-	case "video-archive":
-		return TieVideoArchive
-	case "document-archive":
-		return TieDocumentArchive
-	case "directory":
-		return TieDirectory
-	case "file":
-		return TieFile
+// tieTypeByName inverts TieType.String() so the name->value mapping stays in
+// sync with the stringer output instead of being hand-maintained.
+var tieTypeByName = func() map[string]TieType {
+	m := make(map[string]TieType)
+	for t := TieUnknownFile; t <= TieFile; t++ {
+		m[t.String()] = t
 	}
+	return m
+}()
 
+func StringToTieType(t string) TieType {
+	if tt, ok := tieTypeByName[t]; ok {
+		return tt
+	}
 	return TieUnknownFile
 }
 
@@ -371,35 +354,108 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 	return dir, nil
 }
 
-func (tie *TieClient) MkTieDirAll(path string) (DirUID, error) {
-	if strings.HasPrefix(path, FileURIScheme) {
-		path, _ = strings.CutPrefix(path, FileURIScheme)
+// TaggedFile is one entry in a tag-derived virtual directory: its content hash
+// (used to fetch bytes, or a tiedir blob, from the filehost), display filename,
+// size, and whether it is a directory. A tagged directory's hash points at an
+// immutable tiedir blob, so it can be expanded with the content-addressed tree.
+type TaggedFile struct {
+	Hash     string
+	Filename string
+	Size     int
+	IsDir    bool
+}
+
+// ListTags returns every tag name known to the store, read from the
+// ("tags", "all", <tag>) registry that Tag writes. The result is unordered.
+func (tie *TieClient) ListTags() ([]string, error) {
+	r, err := tie.Get(str(TieTags), GetOptions{Filter: str(TieAll)})
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
 	}
-	err := tie.CreateTieRootDir()
-	if err != nil && !strings.HasPrefix(err.Error(), "Root dir already exists") {
+	if err != nil {
+		return nil, err
+	}
+	var tags []string
+	r.Result.ForEachValue2(func(_, _, tag string) {
+		tags = append(tags, tag)
+	})
+	return tags, nil
+}
+
+// FilesWithTag returns the files tagged with tag. Files are stored as forward
+// triples (hash, "tag", tag), so a reverse lookup on the tag name yields the
+// hashes; GetNextLevel pulls each hash's filename and size in the same call.
+func (tie *TieClient) FilesWithTag(tag string) ([]TaggedFile, error) {
+	o := GetOptions{
+		Reverse:      true,
+		Filter:       str(TieTag),
+		GetNextLevel: true,
+	}
+	r, err := tie.Get(tag, o)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var files []TaggedFile
+	r.Result.ForEachKey(func(hash string) {
+		meta := r.NextLevelResult[hash]
+		filename := meta[str(TieFilename)].ToString()
+		if filename == "" {
+			filename = hash
+		}
+		size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
+		isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
+		files = append(files, TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir})
+	})
+	return files, nil
+}
+
+// tieDirAncestors returns the virtual directory paths that make up p, from the
+// top-level directory down to p itself, each prefixed with FileURIScheme. The
+// root "file:/" is not included (it is created separately). Virtual paths are
+// always absolute, so a leading slash is assumed and the input is cleaned to
+// collapse "." / ".." and redundant separators.
+//
+//	"file:/a/b/c" -> ["file:/a", "file:/a/b", "file:/a/b/c"]
+//	"/a/b"        -> ["file:/a", "file:/a/b"]
+//	"file:/"      -> [] (root only)
+func tieDirAncestors(p string) []string {
+	p = strings.TrimPrefix(p, FileURIScheme)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = path.Clean(p)
+	if p == "/" {
+		return nil
+	}
+	segments := strings.Split(strings.TrimPrefix(p, "/"), "/")
+	ancestors := make([]string, 0, len(segments))
+	prefix := FileURIScheme
+	for _, seg := range segments {
+		prefix = prefix + "/" + seg
+		ancestors = append(ancestors, prefix)
+	}
+	return ancestors
+}
+
+func (tie *TieClient) MkTieDirAll(dirPath string) (DirUID, error) {
+	if err := tie.CreateTieRootDir(); err != nil &&
+		!strings.HasPrefix(err.Error(), "Root dir already exists") {
 		return "", err
 	}
-	parts := strings.Split(path, string(os.PathSeparator))
-	if len(parts) < 1 {
-		return "", errors.New("Incomplete path")
-	}
-	parts[0] = FileURIScheme
+
 	var uid DirUID
-	for i, _ := range parts {
-		if i == 0 {
-			continue
-		}
-		uid, err = tie.MkTieDir(filepath.Join(parts[0 : i+1]...))
+	for _, ancestor := range tieDirAncestors(dirPath) {
+		created, err := tie.MkTieDir(ancestor)
 		if err != nil && !strings.HasSuffix(err.Error(), "Directory exists") {
-			fmt.Println("huh")
-			fmt.Println(err.Error(), !strings.HasSuffix(err.Error(), "Directory exists"))
 			return "", err
-		} else {
-			err = nil
 		}
+		uid = created
 	}
 
-	return uid, err
+	return uid, nil
 }
 
 func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
