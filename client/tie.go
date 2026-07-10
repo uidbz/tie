@@ -31,6 +31,7 @@ const (
 )
 
 type AssociatedReply = *api.AssociatedReply
+type DumpReply = *api.DumpReply
 type AddReply = *api.AddReply
 type GetReply = *api.GetReply
 type DeleteReply = *api.DeleteReply
@@ -221,6 +222,42 @@ func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 		return nil, err
 	}
 	return reply, replyError(reply.ReplyStatus)
+}
+
+// Dump returns every forward triple in the current collection, for backup or
+// interop. Order is unspecified.
+func (tc *TieClient) Dump() (DumpReply, error) {
+	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	request := col.NewDumpRequest()
+
+	reply, err := run[api.DumpReply](tc, request)
+	if err != nil {
+		return nil, err
+	}
+	return reply, replyError(reply.ReplyStatus)
+}
+
+// Restore adds every (key, value1, value2) triple into the current collection
+// via a single batch. It is additive and idempotent: re-adding an existing
+// triple is a no-op, so restoring a dump merges rather than replaces.
+func (tc *TieClient) Restore(triples [][3]string) error {
+	if len(triples) == 0 {
+		return nil
+	}
+	b := tc.NewBatch()
+	for _, t := range triples {
+		b.Add(t[0], t[1], t[2])
+	}
+	reply, err := tc.Batch(b)
+	if err != nil {
+		return err
+	}
+	for _, a := range reply.AddReplys {
+		if !a.Success {
+			return errors.New("restore failed for key '" + a.OrigKey + "': " + a.Message)
+		}
+	}
+	return nil
 }
 
 // Check if the key exists

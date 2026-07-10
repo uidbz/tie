@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -104,6 +105,67 @@ func cmdGet() *cli.Command {
 				fmt.Println(key + "\t" + value1 + "\t" + value2)
 			})
 
+			return nil
+		},
+	}
+}
+
+func cmdDump() *cli.Command {
+	return &cli.Command{
+		Name:  "dump",
+		Usage: "Dump every triple in the current collection as TSV (key<TAB>value1<TAB>value2) to stdout",
+		Action: func(ctx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
+			reply, err := tie.Dump()
+			if err != nil {
+				return errors.New("Dump Error: " + err.Error())
+			}
+			w := bufio.NewWriter(os.Stdout)
+			defer w.Flush()
+			for _, t := range reply.Triples {
+				fmt.Fprintln(w, t.Key+"\t"+t.Value1+"\t"+t.Value2)
+			}
+			return nil
+		},
+	}
+}
+
+func cmdRestore() *cli.Command {
+	return &cli.Command{
+		Name:  "restore",
+		Usage: "Restore triples from TSV (key<TAB>value1<TAB>value2) on stdin into the current collection (additive)",
+		Action: func(ctx *cli.Context) error {
+			if tie == nil {
+				return errors.New("Error: Config not loaded")
+			}
+			var triples [][3]string
+			scanner := bufio.NewScanner(os.Stdin)
+			scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+			line := 0
+			for scanner.Scan() {
+				line++
+				text := scanner.Text()
+				if text == "" {
+					continue
+				}
+				parts := strings.SplitN(text, "\t", 3)
+				if len(parts) != 3 {
+					return fmt.Errorf("Malformed line %d (need 3 tab-separated fields): %q", line, text)
+				}
+				triples = append(triples, [3]string{parts[0], parts[1], parts[2]})
+			}
+			if err := scanner.Err(); err != nil {
+				return errors.New("Read Error: " + err.Error())
+			}
+			if err := tie.Restore(triples); err != nil {
+				return errors.New("Restore Error: " + err.Error())
+			}
+			if err := tie.Sync(); err != nil {
+				return errors.New("Sync Error: " + err.Error())
+			}
+			fmt.Fprintf(os.Stderr, "Restored %d triples\n", len(triples))
 			return nil
 		},
 	}

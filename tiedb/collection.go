@@ -498,6 +498,24 @@ func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOption
 	return result, totalCount
 }
 
+// ForEachTriple calls do for every forward triple in the collection. It walks
+// each level's associations tree (keyed by entry ID) and runs each key's
+// association subtree through the same Sort path used by Get, so the emitted
+// triples match query results exactly. Intended for full-collection export.
+func (ic *Collection) ForEachTriple(do func(StringTriple)) {
+	for level := 0; level < ic.levelCount; level++ {
+		it := ic.levels[level].associations.Iterator()
+		for it.Next() {
+			entryID := it.Key().(uint64)
+			subtree := ic.getAssociations(level, entryID)
+			triples, _ := ic.Sort(subtree, "", SortOptions{Limit: -1})
+			for _, t := range triples {
+				do(t)
+			}
+		}
+	}
+}
+
 func (ic *Collection) closeDB() {
 	ic.finished.Wait() // wait until finished writing
 	ic.dBCloseWriter <- true
