@@ -11,7 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
+
+	"git.sr.ht/~uid/tie/metadata"
 )
 
 // Used for cache path
@@ -20,7 +21,7 @@ const (
 	dirWidth = 2
 	max      = lvlDeep * dirWidth
 )
-const dirHeader = "tiedir-v1\n---\n"
+const dirHeader = metadata.DirHeader
 
 type TieFunc interface {
 	Run(file io.Reader, relPath string) (err error)
@@ -214,9 +215,8 @@ func ExecForEach(url string, sourceHash string, funcToExec TieFunc, relPath stri
 	if mode == dirHeader {
 		scanner := bufio.NewScanner(&buf)
 		for scanner.Scan() {
-			parts := strings.Split(scanner.Text(), "\t")
-			if len(parts) >= 2 { // skips dir and ---
-				ExecForEach(url, parts[0], funcToExec, parts[1])
+			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
+				ExecForEach(url, entry.Hash, funcToExec, entry.Filename)
 			}
 		}
 		if err := scanner.Err(); err != nil {

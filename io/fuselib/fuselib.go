@@ -11,10 +11,10 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 
+	"git.sr.ht/~uid/tie/metadata"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -251,7 +251,7 @@ func (n *node) AddChild(child *node) {
 	n.Children = append(n.Children, child)
 }
 
-const dirHeader = "tiedir-v1\n---\n"
+const dirHeader = metadata.DirHeader
 
 func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 	resp, err := http.Get(state.config.filehost + "/" + sourceHash)
@@ -281,19 +281,18 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		n.Mode = fuse.S_IFDIR
 		scanner := bufio.NewScanner(&buf)
 		for scanner.Scan() {
-			parts := strings.Split(scanner.Text(), "\t")
-			if len(parts) == 4 { // skips dir and ---
+			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
 				child := &node{
-					Hash:  parts[0],
-					Name:  filepath.Base(parts[1]),
+					Hash:  entry.Hash,
+					Name:  filepath.Base(entry.Filename),
+					Size:  entry.Size,
 					State: state,
 				}
-				if parts[2] == "inode/directory" {
+				if metadata.IsDirHead(entry.Head) {
 					child.Mode = fuse.S_IFDIR
 				} else {
 					child.Mode = fuse.S_IFREG
 				}
-				child.Size, _ = strconv.Atoi(parts[3])
 				n.AddChild(child)
 			}
 		}

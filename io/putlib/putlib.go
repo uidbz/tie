@@ -49,6 +49,7 @@ type StatusItem struct {
 	Filename  string
 	ErrorMsg  string
 	Size      int
+	Head      []byte // first bytes of the content, for recomputable media-type detection
 }
 
 func InitKey() []byte {
@@ -126,10 +127,10 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 	check(err)
 
 	contentType := "application/octet-stream"
-	if b, err := bufferedFileReader.Peek(261); err == nil {
-		if t, err := filetype.Get(b); err == nil {
-			contentType = t.MIME.Value
-		}
+	b, _ := bufferedFileReader.Peek(metadata.MagicNumber) // returns available bytes even for short files
+	head := append([]byte(nil), b...)
+	if t, err := filetype.Get(b); err == nil {
+		contentType = t.MIME.Value
 	}
 	req.Header.Add("Content-Type", contentType)
 	req.Header.Add("Content-Length", strconv.Itoa(length))
@@ -170,6 +171,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 			ErrorMsg:  errorMsg,
 			MediaType: contentType,
 			Size:      length,
+			Head:      head,
 		}
 	} else {
 		return StatusItem{
@@ -178,6 +180,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 			Filename:  path,
 			MediaType: contentType,
 			Size:      length,
+			Head:      head,
 		}
 	}
 }
@@ -246,8 +249,6 @@ func UploadNoHash(url string, file io.Reader, length int, config PutConfig) *Sta
 	return status
 }
 
-const dirHeader = "tiedir-v1\n---\n"
-
 func (status *Status) upload(url string, file string, config PutConfig) {
 	fi, errStat := os.Lstat(file)
 	if errStat != nil {
@@ -260,12 +261,17 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 		if err != nil {
 			fmt.Println("Error reading directory", file, "Error:", err.Error())
 		}
-		var hashes string = dirHeader
+		var hashes string = metadata.DirHeader
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
 			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
 			status.upload(url, abs, config)
-			hashes += status.LastItem.Hash + "\t" + status.LastItem.Filename + "\t" + status.LastItem.MediaType + "\t" + strconv.Itoa(status.LastItem.Size) + "\n"
+			hashes += metadata.DirEntry{
+				Hash:     status.LastItem.Hash,
+				Filename: status.LastItem.Filename,
+				Size:     status.LastItem.Size,
+				Head:     status.LastItem.Head,
+			}.Line()
 		}
 		localhash, _ := config.AddressOf(strings.NewReader(hashes))
 		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), len(hashes), file)
