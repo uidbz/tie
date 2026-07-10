@@ -1,0 +1,17 @@
+Username = 'defaultuser'
+Password = 'defaultpassword'
+Namespace = 'Collections'
+Collection = 'Main'
+Webservice = 'http://localhost:1161'
+UIDService = ''
+DefaultFileHosts = ['default']
+
+[Import]
+ImageCollection = ''
+VideoCollection = ''
+AudioCollection = ''
+DocumentCollection = ''
+GeneralCollection = ''
+
+[FileHosts]
+default = 'http://localhost:1162'

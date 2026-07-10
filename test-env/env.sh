@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Shared environment for the tie local test setup.
+# Sourced by all other scripts. Edit paths here if you move things.
+
+# Absolute path to this test-env directory.
+export TIE_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Path to the tie source repo (where `go` builds from). This directory lives at
+# <repo>/test-env, so the repo root is its parent. Override TIE_SRC to build
+# from a checkout elsewhere.
+export TIE_SRC="${TIE_SRC:-$(cd "$TIE_ENV/.." && pwd)}"
+
+# Local, insecure endpoints.
+export TIE_WEBSERVICE="http://localhost:1161"
+export TIE_FILEHOST_HOST="localhost:1162"        # host:port, for -server flags
+export TIE_FILEHOST_URL="http://${TIE_FILEHOST_HOST}"
+
+# Data locations.
+export TIE_DB_PATH="${TIE_ENV}/db"               # daemon triple-store data
+export TIE_DATA_PATH="${TIE_ENV}/data"           # filehost content-addressed blobs
+export TIE_MNT="${TIE_ENV}/mnt"                  # FUSE mountpoint
+export TIE_SAMPLES="${TIE_ENV}/sample-files"     # files to upload/tag
+export TIE_LOGS="${TIE_ENV}/logs"
+export TIE_BIN="${TIE_ENV}/bin"
+export TIE_CONFIG="${TIE_ENV}/config.toml"       # tie CLI config (local, insecure)
+
+# PID files.
+export TIE_DAEMON_PID="${TIE_ENV}/logs/daemon.pid"
+export TIE_FILEHOST_PID="${TIE_ENV}/logs/filehost.pid"
+
+# The tie CLI resolves -c as a *filename* searched in the current working dir
+# first (via conf.PathCurrentDir = cwd/<name>), so scripts cd into $TIE_ENV and
+# pass the bare filename rather than an absolute path.
+export TIE_CONFIG_NAME="config.toml"
+tie_cli() { ( cd "$TIE_ENV" && "$TIE_BIN/tie" -c "$TIE_CONFIG_NAME" "$@" ); }
