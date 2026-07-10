@@ -35,15 +35,12 @@ func cmdAdd() *cli.Command {
 				return errors.New("Need 3 args: Key, Value1, Value2")
 			}
 			args := cCtx.Args().Slice()
-			var err error = nil
 
-			tie.Add(args[0], args[1], args[2], func(reply *api.AddReply) {
-				if !reply.Success {
-					err = errors.New("Add Error: " + reply.Message)
-				}
-			})
+			if _, err := tie.Add(args[0], args[1], args[2]); err != nil {
+				return errors.New("Add Error: " + err.Error())
+			}
 
-			return err
+			return nil
 		},
 	}
 
@@ -70,7 +67,6 @@ func cmdGet() *cli.Command {
 			}
 			args := ctx.Args().Slice()
 			var reverse bool = false
-			var err error = nil
 			if len(args) > 1 {
 				reverse = true
 			} else {
@@ -96,17 +92,15 @@ func cmdGet() *cli.Command {
 					SortBy: ctx.String("sortby"),
 				},
 			}
-			tie.Get(args[0], o, func(reply *api.GetReply) {
-				if reply.Success {
-					reply.Result.ForEachValue2(func(key, value1, value2 string) {
-						fmt.Println(key + "\t" + value1 + "\t" + value2)
-					})
-				} else {
-					err = errors.New("Get Error: " + reply.Message)
-				}
+			reply, err := tie.Get(args[0], o)
+			if err != nil {
+				return errors.New("Get Error: " + err.Error())
+			}
+			reply.Result.ForEachValue2(func(key, value1, value2 string) {
+				fmt.Println(key + "\t" + value1 + "\t" + value2)
 			})
 
-			return err
+			return nil
 		},
 	}
 }
@@ -124,55 +118,50 @@ func cmdDel() *cli.Command {
 				return errors.New("Need 3 args: Key, Value1, Value2")
 			}
 			args := cCtx.Args().Slice()
-			var err error = nil
-			handleReply := func(reply *api.DeleteReply) {
-				if !reply.Success {
-					err = errors.New("Delete Error: " + reply.Message)
+			deleteBatch := func(filter string) error {
+				o := api.GetOptions{
+					Filter: filter,
+					Sort:   tiedb.SortOptions{Limit: -1},
 				}
-			}
-			deleteBatch := func(reply *api.GetReply) {
-				if reply.Success {
-					b := tie.NewBatch()
-					reply.Result.ForEachValue2(func(key, val1, val2 string) {
-						b.Delete(key, val1, val2)
-					})
-					tie.Batch(b, func(reply *api.BatchReply) {
-						for _, d := range reply.DeleteReplys {
-							if !d.Success {
-								err = errors.New("First Delete Error: " + reply.Message)
-								break
-							}
-						}
-					})
-				} else {
-					fmt.Println("Error:", reply.Message)
+				reply, err := tie.Get(args[0], o)
+				if err != nil {
+					fmt.Println("Error:", err.Error())
+					return nil
 				}
+				b := tie.NewBatch()
+				reply.Result.ForEachValue2(func(key, val1, val2 string) {
+					b.Delete(key, val1, val2)
+				})
+				batchReply, err := tie.Batch(b)
+				if err != nil {
+					return errors.New("Delete Error: " + err.Error())
+				}
+				for _, d := range batchReply.DeleteReplys {
+					if !d.Success {
+						return errors.New("First Delete Error: " + d.Message)
+					}
+				}
+				return nil
 			}
 			switch true {
 			case args[1] == "*" && args[2] == "*":
-				o := api.GetOptions{
-					Filter: args[1],
-					Sort:   tiedb.SortOptions{Limit: -1},
-				}
-				tie.Get(args[0], o, deleteBatch)
+				return deleteBatch(args[1])
 
 			case args[1] != "*" && args[2] == "*":
-				o := api.GetOptions{
-					Filter: args[1],
-					Sort:   tiedb.SortOptions{Limit: -1},
-				}
-				tie.Get(args[0], o, deleteBatch)
+				return deleteBatch(args[1])
 
 			case args[1] == "*" && args[2] != "*":
 				fmt.Println("Function to delete specific value2 from all value1's is not implemented, because it is most likely a typo.")
 				fmt.Println("Did you mean: tie delete", args[0], args[2], "* (delete all value2's from specific key + value1 pair?)")
 
 			default:
-				tie.Delete(args[0], args[1], args[2], handleReply)
+				if _, err := tie.Delete(args[0], args[1], args[2]); err != nil {
+					return errors.New("Delete Error: " + err.Error())
+				}
 
 			}
 
-			return err
+			return nil
 		},
 	}
 }

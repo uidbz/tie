@@ -139,19 +139,6 @@ type TagInfo struct {
 	IsDir     bool
 }
 
-// func EssentialTagInfo(hash, file, mediaType string, directory DirUID, ft TieType, dirType TieType, tags []string) TagInfo {
-// 	directory = replaceVariables(directory, file)
-// 	return TagInfo{
-// 		Hash:          hash,
-// 		File:          file,
-// 		MediaType:     mediaType,
-// 		Directory:     directory,
-// 		DirectoryType: dirType,
-// 		TieType:       ft,
-// 		Tags:          tags,
-// 	}
-// }
-
 func (tie *TieClient) ImportFile(file string, host string, tags []string, directory DirUID) error {
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
@@ -240,17 +227,17 @@ func Tag(tie *TieClient, info TagInfo) error {
 		batch.Add(hash, str(TieParent), str(info.Directory))
 	}
 
-	var err error
-	tie.Batch(batch, func(r BatchReply) {
-		for _, a := range r.AddReplys {
-			if a.Success {
-				err = errors.New("Error tagging: " + a.OrigKey + "First error message: " + a.Message)
-				break
-			}
+	r, err := tie.Batch(batch)
+	if err != nil {
+		return err
+	}
+	for _, a := range r.AddReplys {
+		if !a.Success {
+			return errors.New("Error tagging: " + a.OrigKey + " First error message: " + a.Message)
 		}
-	})
+	}
 
-	return err
+	return nil
 }
 
 func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
@@ -261,23 +248,22 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 	if !strings.HasPrefix(path, FileURIScheme) {
 		path = FileURIScheme + path
 	}
-	var err error
 	var uid DirUID
-	tie.Get(path, o, func(r GetReply) {
-		if r.Success {
-			if len(r.Result) > 1 {
-				err = errors.New("Multiple (" + strconv.Itoa(len(r.Result)) + ") UIDs found for path. Expected 1.")
-			} else {
-				for key, _ := range r.Result {
-					uid = DirUID(key)
-				}
-			}
-		} else {
-			err = errors.New("error:'" + r.Message + "'")
-		}
-	})
+	r, err := tie.Get(path, o)
+	if errors.Is(err, ErrNotFound) {
+		return "", nil // path not tied to any UID yet
+	}
+	if err != nil {
+		return "", errors.New("error:'" + err.Error() + "'")
+	}
+	if len(r.Result) > 1 {
+		return "", errors.New("Multiple (" + strconv.Itoa(len(r.Result)) + ") UIDs found for path. Expected 1.")
+	}
+	for key := range r.Result {
+		uid = DirUID(key)
+	}
 
-	return uid, err
+	return uid, nil
 }
 
 func (tie *TieClient) CreateTieRootDir() error {
@@ -297,13 +283,11 @@ func (tie *TieClient) CreateTieRootDir() error {
 	b.Add(str(uid), str(TieParent), str(uid))
 	b.Add(str(uid), str(TiePath), rootpath)
 	b.Add(str(uid), str(TieTypeProperty), str(TieDirectory))
-	tie.Batch(b, func(r BatchReply) {
-		if !r.Success {
-			err = errors.New(r.Message)
-		}
-	})
+	if _, err := tie.Batch(b); err != nil {
+		return err
+	}
 
-	return err
+	return nil
 }
 
 type Directory struct {
@@ -328,91 +312,64 @@ type File struct {
 }
 
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
-	var err error
-	setError := func(msg string) {
-		if err == nil { // only record first error
-			err = errors.New(msg)
-		}
-	}
 	var dir Directory
-	tie.SimpleGet(string(uid), func(r GetReply) {
-		if r.Success {
-			r.Result.ForEachKey(func(key string) {
-				dir.Uid = uid
-				entry := r.Result[key]
-				dir.Paths = entry[str(TiePath)].ToSlice()
-				parents := entry[str(TieParent)].ToSlice()
-				dir.ParentUIDs = make([]DirUID, 0, len(parents))
-				for _, x := range parents {
-					dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
-				}
-			})
-		} else {
-			setError("error:'" + r.Message + "'")
+	r, err := tie.SimpleGet(string(uid))
+	if err != nil {
+		return dir, errors.New("error:'" + err.Error() + "'")
+	}
+	r.Result.ForEachKey(func(key string) {
+		dir.Uid = uid
+		entry := r.Result[key]
+		dir.Paths = entry[str(TiePath)].ToSlice()
+		parents := entry[str(TieParent)].ToSlice()
+		dir.ParentUIDs = make([]DirUID, 0, len(parents))
+		for _, x := range parents {
+			dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
 		}
 	})
-	if err != nil {
-		return dir, err
-	}
+
 	o := GetOptions{
 		Reverse:      true,
 		GetNextLevel: true,
 	}
-	tie.Get(string(uid), o, func(r GetReply) {
-		if r.Success {
-			r.Result.ForEachKey(func(key string) {
-				meta := r.NextLevelResult[key]
-				types := meta[str(TieTypeProperty)]
-				switch true {
-				case types.Has(str(TieDirectory)):
-					subDir := SubDirectory{
-						Uid:      DirUID(key),
-						Paths:    meta[str(TiePath)].ToSlice(),
-						DirTypes: SliceToTieType(types.ToSlice()),
-					}
-					dir.SubDirs = append(dir.SubDirs, subDir)
-				case types.Has(str(TieImageFile)):
-					fallthrough
-				case types.Has(str(TieVideoFile)):
-					fallthrough
-				case types.Has(str(TieAudioFile)):
-					fallthrough
-				case types.Has(str(TieDocumentFile)):
-					f := File{
-						Uid:       key,
-						Filename:  meta[str(TieFilename)].ToString(),
-						TieType:   StringToTieType(types.ToString()),
-						MediaType: meta[str(TieMediaType)].ToString(),
-					}
-					dir.Files = append(dir.Files, f)
+	r, err = tie.Get(string(uid), o)
+	if errors.Is(err, ErrNotFound) {
+		return dir, nil // directory has no children
+	}
+	if err != nil {
+		return dir, errors.New("error:'" + err.Error() + "'")
+	}
+	r.Result.ForEachKey(func(key string) {
+		meta := r.NextLevelResult[key]
+		types := meta[str(TieTypeProperty)]
+		switch true {
+		case types.Has(str(TieDirectory)):
+			subDir := SubDirectory{
+				Uid:      DirUID(key),
+				Paths:    meta[str(TiePath)].ToSlice(),
+				DirTypes: SliceToTieType(types.ToSlice()),
+			}
+			dir.SubDirs = append(dir.SubDirs, subDir)
+		case types.Has(str(TieImageFile)):
+			fallthrough
+		case types.Has(str(TieVideoFile)):
+			fallthrough
+		case types.Has(str(TieAudioFile)):
+			fallthrough
+		case types.Has(str(TieDocumentFile)):
+			f := File{
+				Uid:       key,
+				Filename:  meta[str(TieFilename)].ToString(),
+				TieType:   StringToTieType(types.ToString()),
+				MediaType: meta[str(TieMediaType)].ToString(),
+			}
+			dir.Files = append(dir.Files, f)
 
-				}
-			})
-		} else {
-			setError("error:'" + r.Message + "'")
 		}
 	})
 
-	return dir, err
+	return dir, nil
 }
-
-// func (tie *TieClient) ReadTieDir(uid DirUID) (Directory, error) {
-// 	o := GetOptions{
-// 		GetNextLevel:    true,
-// 		NextLevelFilter: str(TieTypeProperty),
-// 	}
-// 	var err error
-// 	tie.Get(uid, o, func(r GetReply) {
-// 		if r.Success {
-// 			r.Result.ForEachValue2(key, val1, val2 string) {
-// 				// Write here
-// 			}
-// 		} else {
-// 			err = errors.New("error:'" + r.Message + "'")
-// 		}
-// 	})
-// 	return "", nil
-// }
 
 func (tie *TieClient) MkTieDirAll(path string) (DirUID, error) {
 	if strings.HasPrefix(path, FileURIScheme) {
@@ -474,21 +431,15 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 	b.Add(str(uid), str(TieParent), str(parentUID))
 	b.Add(str(uid), str(TiePath), path)
 	b.Add(str(uid), str(TieTypeProperty), str(TieDirectory))
-	tie.Batch(b, func(r BatchReply) {
-		if !r.Success {
-			err = errors.New(r.Message)
-		}
-	})
+	if _, err := tie.Batch(b); err != nil {
+		return uid, err
+	}
 
-	return uid, err
+	return uid, nil
 }
 
-func (tie *TieClient) SetDirType(uid DirUID, dirType TieType) (err error) {
-	tie.Add(str(uid), str(TieTypeProperty), str(dirType), func(r AddReply) {
-		if !r.Success {
-			err = errors.New(r.Message)
-		}
-	})
+func (tie *TieClient) SetDirType(uid DirUID, dirType TieType) error {
+	_, err := tie.Add(str(uid), str(TieTypeProperty), str(dirType))
 	return err
 }
 

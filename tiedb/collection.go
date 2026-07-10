@@ -131,47 +131,27 @@ func (ic *Collection) Sync() {
 	ic.finishedAdding.Wait()
 }
 
-// Update first occurence of a value2. More expensive SimpleUpdateUsingSet - use that if udating many values
+// SimpleUpdate makes a scalar (single-valued) field equal to newValue2:
+// it removes every existing value2 for (key, value1) and adds newValue2.
+// When the field does not yet exist it adds newValue2 only if addOnFail is set.
+// Use this for fields that are meant to hold exactly one value.
 func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (string, bool) {
-	// found, set := ic.Get(key, value1)
-	// if found {
-	// 	// TODO: Fix
-	// 	// if len(set.Value1) != len(set.Value2) { // TODO: Understand what was the idea behind this. Don't remember.
-	// 	// 	return false, "Assertion: Length of set.Value1 and set.Value2 must be equal"
-	// 	// }
-	// 	// if (*set)[key][value1][]
-	// 	// ic.Update(key, value1, (*set)[key][value1], newValue2)
-	// 	// for i, x := range set.Value1 {
-	// 	// 	if x == value1 {
-	// 	// 		return ic.Update(key, value1, set.Value2[i], newValue2)
-	// 	// 	}
-	// 	// }
-	// }
-	// if addOnFail {
-	// 	ic.Add(key, value1, newValue2)
-	// 	return true, ""
-	// }
-	return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
+	existing, found := ic.Get(key, value1)
+	if !found {
+		if addOnFail {
+			ic.Add(key, value1, newValue2)
+			return "", true
+		}
+		return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
+	}
+	if set, ok := existing[key][value1]; ok {
+		set.ForEach(func(value2 string) {
+			ic.Delete(key, value1, value2)
+		})
+	}
+	ic.Add(key, value1, newValue2)
+	return "", true
 }
-
-// Update first occurence of a value2
-// func (ic *Collection) SimpleUpdateUsingSet(key string, value1 string, newValue2 string, addOnFail bool, set *StringSliceSet) (string, bool) {
-// 	if set != nil && set.Value1 != nil && set.Value2 != nil {
-// 		if len(set.Value1) != len(set.Value2) {
-// 			return "Assertion: Length of set.Value1 and set.Value2 must be equal", false
-// 		}
-// 		for i, x := range set.Value1 {
-// 			if x == value1 {
-// 				return ic.Update(key, value1, set.Value2[i], newValue2)
-// 			}
-// 		}
-// 	}
-// 	if addOnFail {
-// 		ic.Add(key, value1, newValue2)
-// 		return "", true
-// 	}
-// 	return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
-// }
 
 func (ic *Collection) secureLevelInIndex(level int) {
 	if level < ic.levelCount {
@@ -497,33 +477,6 @@ func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (s
 
 	return sorted[o.Offset : o.Offset+o.Limit], count
 }
-
-func (ic *Collection) SortByNextLevelOne(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple) {
-
-	// TODO
-	return []StringTriple{}
-}
-
-// func (ic *Collection) GetValue2Trees(s *TieTree, value1Filter string) (value2Trees map[string]*TieTree) {
-// 	value2Trees = make(map[string]*TieTree)
-
-// 	c := make(chan Triple, 10000)
-// 	go ic.loadTriples(s, c)
-
-// 	filterActive := value1Filter != ""
-
-// 	for x := range c {
-// 		t := ic.makeStringTriple(x)
-// 		if filterActive && t.Value1 != value1Filter {
-// 			continue
-// 		}
-// 		if _, ok := value2Trees[t.Value2]; !ok {
-// 			value2Trees[t.Value2] = ic.getAssociations(x.Level, ic.getEntry(x.Value2Level, x.Value2)) // I'm not sure how this is supposed to work
-// 		}
-// 	}
-
-// 	return value2Trees
-// }
 
 func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
 	result = make(TripleSet)

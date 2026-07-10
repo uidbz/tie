@@ -36,7 +36,6 @@ type GetOptions struct {
 	Exclude         []Transform
 	Filter          string
 	Reverse         bool
-	SortOnNextLevel bool
 	GetNextLevel    bool
 	NextLevelFilter string
 	Sort            tiedb.SortOptions
@@ -120,25 +119,21 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		}
 	} else {
 		if direct, found := col.GetAssociations(request.Key); found {
-			if request.Options.SortOnNextLevel {
-				// TODO
-			} else {
-				direct = transform(direct, col, request.Options.Intersect, false)
-				direct = transform(direct, col, request.Options.Exclude, true)
-				reply.Result, reply.TotalCount = col.GetTripleSet(direct, request.Options.Filter, request.Options.Sort)
-				if request.Options.GetNextLevel {
-					reply.NextLevelResult = make(tiedb.TripleSet, 0)
-					trees := make(map[string]bool)
-					reply.Result.ForEachValue2(func(_, _, val2 string) {
-						if _, ok := trees[val2]; !ok { // only lookup not previously looked up
-							trees[val2] = true
-							if t, ok := col.GetAssociations(val2); ok {
-								set, _ := col.GetTripleSet(t, request.Options.NextLevelFilter, request.Options.Sort)
-								reply.NextLevelResult[val2] = set[val2]
-							}
+			direct = transform(direct, col, request.Options.Intersect, false)
+			direct = transform(direct, col, request.Options.Exclude, true)
+			reply.Result, reply.TotalCount = col.GetTripleSet(direct, request.Options.Filter, request.Options.Sort)
+			if request.Options.GetNextLevel {
+				reply.NextLevelResult = make(tiedb.TripleSet, 0)
+				trees := make(map[string]bool)
+				reply.Result.ForEachValue2(func(_, _, val2 string) {
+					if _, ok := trees[val2]; !ok { // only lookup not previously looked up
+						trees[val2] = true
+						if t, ok := col.GetAssociations(val2); ok {
+							set, _ := col.GetTripleSet(t, request.Options.NextLevelFilter, request.Options.Sort)
+							reply.NextLevelResult[val2] = set[val2]
 						}
-					})
-				}
+					}
+				})
 			}
 		}
 	}

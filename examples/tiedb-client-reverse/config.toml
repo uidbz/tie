@@ -1,6 +1,0 @@
-Username = 'defaultuser'
-Password = 'defaultpassword'
-Namespace = 'Examples'
-Collection = 'reverse'
-Webservice = 'http://localhost:1161'
-Filehost = 'http://localhost:1162'
