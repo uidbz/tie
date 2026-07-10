@@ -24,8 +24,8 @@ var (
 
 const (
 	tieKey       = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
-	lvlDeep      = 3
-	dirWidth     = 2
+	shardLevels  = 2    // directory nesting depth; uniform hashes cap dir count at 256^shardLevels
+	dirWidth     = 2    // hex chars per level
 	hashFunction = "hh" // highway hash
 )
 
@@ -62,8 +62,7 @@ func AddressOf(key []byte, input io.Reader) (string, error) { // function to com
 }
 
 func PathFromHash(dest, hash string) string {
-	max := lvlDeep * dirWidth
-	for i := 0; i <= max; i = i + dirWidth {
+	for i := 0; i < shardLevels*dirWidth; i += dirWidth {
 		dest = filepath.Join(dest, hash[i:i+dirWidth])
 	}
 
@@ -159,17 +158,12 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 
 func DownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	hash := p.ByName("hash")
-	var path string = destination
 	if len(hash) != 64 {
 		fmt.Println("Invalid hash:", hash)
 		fmt.Fprint(w, "Invalid hash:", hash)
 		return
 	}
-	max := lvlDeep * dirWidth
-	for i := 0; i <= max; i = i + dirWidth {
-		path = filepath.Join(path, hash[i:i+dirWidth])
-	}
-	path = filepath.Join(path, hash)
+	path := PathFromHash(destination, hash)
 	fmt.Println("Client want:", hash)
 	http.ServeFile(w, r, path)
 }
@@ -177,17 +171,12 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params
 func NamedDownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	hash := p.ByName("hash")
 	filename := p.ByName("filename")
-	var path string = destination
 	if len(hash) != 64 {
 		fmt.Println("Invalid hash:", hash)
 		fmt.Fprint(w, "Invalid hash:", hash)
 		return
 	}
-	max := lvlDeep * dirWidth
-	for i := 0; i <= max; i = i + dirWidth {
-		path = filepath.Join(path, hash[i:i+dirWidth])
-	}
-	path = filepath.Join(path, hash)
+	path := PathFromHash(destination, hash)
 	fmt.Println("Client want:", hash)
 	info, err := os.Stat(path)
 	if err != nil {

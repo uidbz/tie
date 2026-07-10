@@ -17,9 +17,8 @@ import (
 
 // Used for cache path
 const (
-	lvlDeep  = 3
-	dirWidth = 2
-	max      = lvlDeep * dirWidth
+	shardLevels = 2 // directory nesting depth; must match tie-filehost
+	dirWidth    = 2 // hex chars per level
 )
 const dirHeader = metadata.DirHeader
 
@@ -68,8 +67,7 @@ func InitCache(customLocation string) Cache {
 func (c *Cache) ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	var dest string = c.CacheDir
 
-	max := lvlDeep * dirWidth
-	for i := 0; i <= max; i = i + dirWidth {
+	for i := 0; i < shardLevels*dirWidth; i += dirWidth {
 		dest = filepath.Join(dest, sourceHash[i:i+dirWidth])
 	}
 	dir := dest
