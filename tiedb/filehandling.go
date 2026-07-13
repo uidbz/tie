@@ -67,7 +67,12 @@ func (ic *Collection) bufToAssociation(buf [ENTRY_SIZE]byte) Triple {
 	return a
 }
 
-func (ic *Collection) inserterWorker(rawDataToLoad chan RawDataEntry, wg *sync.WaitGroup) {
+// loadEntries is pass 1 of the two-pass load: it inserts trie entries (and
+// reclaims freed slots) but skips associations. Associations must wait until
+// every entry exists, because shouldBuildReverse resolves a relation's string
+// by walking the entries trie, and loadAssociations runs workers concurrently
+// in arbitrary order.
+func (ic *Collection) loadEntries(rawDataToLoad chan RawDataEntry, wg *sync.WaitGroup) {
 	for entry := range rawDataToLoad {
 		switch int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) {
 		case TYPE_ENTRY:
@@ -79,14 +84,22 @@ func (ic *Collection) inserterWorker(rawDataToLoad chan RawDataEntry, wg *sync.W
 			ic.totalEntriesMutex.Unlock()
 			ic.insertEntry(level, entryID, uv)
 
-		case TYPE_ASSOCIATION:
-			a := ic.bufToAssociation(entry.Data)
-			ic.insertAssociation(a.Level, &a, entry.Position)
-
 		case TYPE_DELETE:
 			if len(ic.freespace) < MaxFreespace {
 				ic.freespace <- entry.Position
 			}
+		}
+	}
+	wg.Done()
+}
+
+// loadAssociations is pass 2 of the two-pass load: it inserts associations once
+// all entries from pass 1 are present.
+func (ic *Collection) loadAssociations(rawDataToLoad chan RawDataEntry, wg *sync.WaitGroup) {
+	for entry := range rawDataToLoad {
+		if int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) == TYPE_ASSOCIATION {
+			a := ic.bufToAssociation(entry.Data)
+			ic.insertAssociation(a.Level, &a, entry.Position)
 		}
 	}
 	wg.Done()
@@ -107,14 +120,34 @@ func (t *Collection) loadDB(filename string) error {
 	defer db.Close()
 
 	Info(dbname + "Loading DB...")
+
+	// Two passes over the file: entries first, then associations. Associations
+	// resolve their relation string against the entries trie (shouldBuildReverse),
+	// so every entry must exist before any association is inserted.
+	if err := t.loadPass(db, t.loadEntries); err != nil {
+		return err
+	}
+	if _, err := db.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if err := t.loadPass(db, t.loadAssociations); err != nil {
+		return err
+	}
+
+	Info(dbname + "Loading DB: Done!")
+	return nil
+}
+
+// loadPass streams every record of the open db file through worker, which
+// consumes a channel of RawDataEntry and decides which record types to handle.
+func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.WaitGroup)) error {
 	rawDataToLoad := make(chan RawDataEntry, 1024*1024*64)
 
-	// Start inserter workers
 	workers := 2
 	workersFinished := sync.WaitGroup{}
 	workersFinished.Add(workers)
 	for i := 0; i < workers; i++ {
-		go t.inserterWorker(rawDataToLoad, &workersFinished)
+		go worker(rawDataToLoad, &workersFinished)
 	}
 
 	var entry int64
@@ -139,7 +172,6 @@ func (t *Collection) loadDB(filename string) error {
 	}
 	close(rawDataToLoad)
 	workersFinished.Wait()
-	Info(dbname + "Loading DB: Done!")
 	return nil
 }
 

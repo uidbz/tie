@@ -1,6 +1,7 @@
 package tiedb
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -67,7 +68,7 @@ func TestAddAssociation(t *testing.T) {
 	asses, found := col.GetAssociations("superkey")
 
 	if found {
-		out, _ := col.GetTripleSet("superkey", "", asses)
+		out, _ := col.GetTripleSet(asses, "", SortOptions{Limit: -1})
 		if !out["superkey"]["value1"].Has("value2-1") {
 			t.Errorf("Error input1, didn't have %s", "value2-1")
 		}
@@ -76,6 +77,78 @@ func TestAddAssociation(t *testing.T) {
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "superkey")
+	}
+}
+
+// reverseKeys returns the set of keys reachable via a reverse lookup on value2.
+func reverseKeys(t *testing.T, col *Collection, value2 string) map[string]bool {
+	t.Helper()
+	keys := make(map[string]bool)
+	rev, found := col.GetReverseAssociations(value2)
+	if !found {
+		return keys
+	}
+	set, _ := col.GetTripleSet(rev, "", SortOptions{Limit: -1})
+	set.ForEachKey(func(k string) { keys[k] = true })
+	return keys
+}
+
+// TestReverseRelationAllowlist verifies that only whitelisted relations get a
+// reverse index while forward lookups still work for every relation.
+func TestReverseRelationAllowlist(t *testing.T) {
+	db := NewDB(true)
+	db.SetDefaultReverseRelations([]string{"tag"})
+	col := db.GetCollection(CollectionKey{t.TempDir(), "revfilter"})
+
+	col.Add("hashA", "tag", "sometag")
+	col.Add("hashB", "tag", "sometag")
+	col.Add("hashA", "filename", "myfile.ext")
+	col.Sync()
+
+	// Reverse lookup on the whitelisted relation's value works.
+	if got := reverseKeys(t, col, "sometag"); !got["hashA"] || !got["hashB"] {
+		t.Errorf("reverse lookup on tag 'sometag' = %v, want hashA and hashB", got)
+	}
+
+	// Reverse lookup on a non-whitelisted relation's value yields nothing.
+	if got := reverseKeys(t, col, "myfile.ext"); len(got) != 0 {
+		t.Errorf("reverse lookup on filename 'myfile.ext' = %v, want empty", got)
+	}
+
+	// Forward lookup still works for the non-whitelisted relation.
+	fwd, found := col.GetAssociations("hashA")
+	if !found {
+		t.Fatal("forward lookup on hashA failed")
+	}
+	out, _ := col.GetTripleSet(fwd, "filename", SortOptions{Limit: -1})
+	if !out["hashA"]["filename"].Has("myfile.ext") {
+		t.Errorf("forward filename lookup missing value, got %v", out)
+	}
+}
+
+// TestReverseAllowlistSurvivesReload verifies the two-pass loader rebuilds the
+// same reverse index after a close/reopen cycle.
+func TestReverseAllowlistSurvivesReload(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "revreload")
+
+	db := NewDB(true)
+	db.SetDefaultReverseRelations([]string{"tag"})
+	col := db.GetCollection(CollectionKey{dbPath, "col"})
+	col.Add("hashA", "tag", "sometag")
+	col.Add("hashA", "filename", "myfile.ext")
+	col.Sync()
+	col.closeDB()
+
+	db = NewDB(true)
+	db.SetDefaultReverseRelations([]string{"tag"})
+	col = db.GetCollection(CollectionKey{dbPath, "col"})
+
+	if got := reverseKeys(t, col, "sometag"); !got["hashA"] {
+		t.Errorf("after reload, reverse lookup on 'sometag' = %v, want hashA", got)
+	}
+	if got := reverseKeys(t, col, "myfile.ext"); len(got) != 0 {
+		t.Errorf("after reload, reverse lookup on 'myfile.ext' = %v, want empty", got)
 	}
 }
 

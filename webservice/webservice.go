@@ -63,6 +63,12 @@ type WebserviceConfig struct {
 	AuthFile      string
 	authKey       tiedb.CollectionKey
 	DbPath        string
+
+	// ReverseRelations restricts which relations (value1) collections index in
+	// reverse. Empty/nil indexes every relation (the original behavior). Set it
+	// to just the relations queried in reverse to cut association memory roughly
+	// in half on metadata-heavy stores.
+	ReverseRelations []string
 }
 
 type MailSettings struct {
@@ -81,6 +87,7 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	ws.Config.authKey = tiedb.CollectionKey{ws.DbPath(config.AuthNamespace), config.AuthFile}
 	ws.requests = requests
 	ws.db = tiedb.NewDB(true)
+	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	ws.validationCodes = make(map[string]string)
 	ws.validationTimers = make(map[string]*time.Timer)
 	rand.Seed(time.Now().UnixNano())

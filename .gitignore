@@ -42,3 +42,6 @@ examples/tiedb-client-reverse/tiedb-client-reverse
 examples/webservice/server/server
 examples/webservice/server/authentication
 examples/webservice/client/client
+
+# tiedb test artifact (TestAddAssociation writes to a relative path)
+tiedb/Collections/

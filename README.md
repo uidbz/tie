@@ -24,7 +24,7 @@ a virtual filesystem.
 
 | Package       | What it does |
 |---------------|--------------|
-| `tiedb`       | In-memory triple store, persisted to disk. |
+| `tiedb`       | In-memory triple store, persisted to disk. See [docs/internals.md](docs/internals.md) for its data structures, file format, and memory model. |
 | `client`      | Talks to a `tie-daemon`; also the tagging / virtual-directory layer. |
 | `api`         | Request/reply types shared by client and server. |
 | `webservice`  | HTTP transport and auth for the daemon. |

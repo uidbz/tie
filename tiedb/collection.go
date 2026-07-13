@@ -7,6 +7,30 @@ import (
 	"sync/atomic"
 )
 
+// SetReverseRelations restricts which relations (value1) this collection indexes
+// in reverse. Pass nil to index every relation (the default). Call before adding
+// triples; it does not rebuild reverse indexes for triples already inserted.
+func (ic *Collection) SetReverseRelations(relations []string) {
+	if relations == nil {
+		ic.reverseRelations = nil
+		return
+	}
+	set := make(map[string]bool, len(relations))
+	for _, r := range relations {
+		set[r] = true
+	}
+	ic.reverseRelations = set
+}
+
+// shouldBuildReverse reports whether a triple's relation (value1) should get a
+// reverse-association node. A nil reverseRelations set means index everything.
+func (ic *Collection) shouldBuildReverse(a *Triple) bool {
+	if ic.reverseRelations == nil {
+		return true
+	}
+	return ic.reverseRelations[ic.getValueString(a.Value1Level, a.Value1)]
+}
+
 func (ic *Collection) Add(key string, value1 string, value2 string) {
 	ic.finishedAdding.Add(1)
 
@@ -291,7 +315,10 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 
 	atomic.AddUint64(&ic.totalAssociations, 1)
 
-	// Insert reverse association
+	// Insert reverse association (only for relations we index in reverse)
+	if !ic.shouldBuildReverse(a) {
+		return
+	}
 	reverseAssTree, found := ic.levels[a.Value2Level].reverseAssociations.Get(a.Value2)
 	if !found {
 		ass := NewTreeWith(UniqueAssociationComparator)

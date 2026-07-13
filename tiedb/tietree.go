@@ -15,6 +15,17 @@ type TieTree struct {
 	writeToDisk bool
 	colMutex    sync.Mutex
 	changeLock  sync.RWMutex
+
+	// defaultReverseRelations is applied to every Collection this DB creates.
+	// nil means "index all relations in reverse"; see Collection.reverseRelations.
+	defaultReverseRelations []string
+}
+
+// SetDefaultReverseRelations restricts which relations (value1) newly created
+// collections index in reverse. Pass nil to index every relation (the default).
+// Call before collections are created; existing collections are unaffected.
+func (tree *TieTree) SetDefaultReverseRelations(relations []string) {
+	tree.defaultReverseRelations = relations
 }
 
 func NewDB(writeToDisk bool) *TieTree {
@@ -142,6 +153,7 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.dBPath = path
 	ic.dBName = dbname
 	ic.dBFullPath = path + "/" + dbname + ".tie"
+	ic.SetReverseRelations(db.defaultReverseRelations)
 
 	if db.writeToDisk {
 		fmt.Println("Initializing", ic.dBFullPath)

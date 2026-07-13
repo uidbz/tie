@@ -48,6 +48,11 @@ func main() {
 		UserNamespace: "userdata",
 		AuthFile:      "db",
 		DbPath:        *path,
+		// Only these relations are ever queried in reverse (tag lookups, path->UID,
+		// and UID children via parent). Restricting the reverse index to them keeps
+		// the bulk of file metadata (filename, size, media-type, ...) from doubling
+		// association memory.
+		ReverseRelations: []string{"tag", "path", "parent"},
 	}
 
 	c := api.CollectionInfo{}

@@ -70,6 +70,12 @@ type Collection struct {
 	levels     []entryLevel
 	levelCount int
 
+	// reverseRelations, when non-nil, restricts which relations (value1) get a
+	// reverse-association index. A nil set means index every relation in reverse
+	// (the original behavior). Limiting this near-halves association memory on
+	// stores where most triples are never queried in reverse.
+	reverseRelations map[string]bool
+
 	dbReadWg       sync.WaitGroup
 	dBWriteQueue   chan FileMod
 	dBReadQueue    chan ReadRequest
