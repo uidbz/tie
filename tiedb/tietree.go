@@ -157,10 +157,15 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 
 	if db.writeToDisk {
 		fmt.Println("Initializing", ic.dBFullPath)
-		os.MkdirAll(path, 0777)
+		if err := os.MkdirAll(path, 0777); err != nil {
+			log.Fatal("Error creating DB directory ", path, ": ", err, "\nExiting")
+		}
 		ic.freespace = make(chan int64, MaxFreespace)
+		ic.cache = newTripleCache(defaultTripleCacheSize)
 		if clearExistingDB {
-			os.Remove(ic.dBFullPath)
+			if err := os.Remove(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
+				log.Fatal("Error clearing DB ", ic.dBFullPath, ": ", err, "\nExiting")
+			}
 		}
 		err := ic.loadDB(ic.dBFullPath)
 		if err != nil && !os.IsNotExist(err) {
@@ -168,10 +173,6 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 		}
 		ic.dBWriter()
 	}
-	// e, dbLevel := ic.insert(dbname)
-
-	// ic.level = dbLevel
-	// ic.id = e.Id
 
 	return &ic
 }

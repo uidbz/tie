@@ -32,8 +32,6 @@ func (ic *Collection) shouldBuildReverse(a *Triple) bool {
 }
 
 func (ic *Collection) Add(key string, value1 string, value2 string) {
-	ic.finishedAdding.Add(1)
-
 	keyID, keyLevel := ic.insert(key)
 	value1ID, value1Level := ic.insert(value1)
 	value2ID, value2Level := ic.insert(value2)
@@ -48,20 +46,23 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 	}
 
 	if ic.uniqueAssociationExists(keyLevel, keyID, value1ID, value2ID) {
-		ic.finishedAdding.Done()
 		return
-	} else {
-		ic.insertAssociation(keyLevel, &ass, -1) // Position will be updated after being written to disk
 	}
 
+	// Insert immediately so duplicate Adds queued before the disk writer runs
+	// are deduplicated. In disk mode the stored value is the position -1; the
+	// writer overwrites it with the real position (and signals finishedAdding).
+	// In memory mode the resident Triple is the final value.
+	ic.insertAssociation(keyLevel, &ass, -1)
+
 	if ic.writeToDisk {
-		m := FileMod{
+		ic.finishedAdding.Add(1)
+		ic.dBWriteQueue <- FileMod{
 			EntryType:   TYPE_ASSOCIATION,
 			Level:       keyLevel,
 			Mode:        FILE_ADD,
 			Association: &ass,
 		}
-		ic.dBWriteQueue <- m
 	}
 }
 
@@ -120,7 +121,7 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (string, 
 			}
 
 			if a, found := asses.Get(assKey); found {
-				ic.deleteAssociation(asses, assKey, a.(int64))
+				ic.deleteAssociation(asses, assKey, assocPos(a))
 				ic.getReverseAssociations(l2, v2).Delete(reverseAssKey)
 				return "", true
 			}
@@ -140,11 +141,12 @@ func (ic *Collection) Update(key string, value1 string, value2 string, newValue2
 	}
 }
 
-// Try to update value2 to newvalue2. Add if unsuccessful. TODO: Add error checking
+// UpdateAdd replaces value2 with newValue2, adding newValue2 even when the
+// original (key, value1, value2) did not exist. It always succeeds; the message
+// notes when a fallback add was used instead of an update.
 func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (string, bool) {
-	if msg, ok := ic.Delete(key, value1, value2); ok {
-		ic.Add(key, value1, newValue2)
-		return "", true
+	if msg, ok := ic.Update(key, value1, value2, newValue2); ok {
+		return msg, true
 	} else {
 		ic.Add(key, value1, newValue2)
 		return msg + ": could not update; adding new value as requested.", true
@@ -178,7 +180,10 @@ func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, 
 }
 
 func (ic *Collection) secureLevelInIndex(level int) {
-	if level < ic.levelCount {
+	ic.secureLevel.RLock()
+	enough := level < ic.levelCount
+	ic.secureLevel.RUnlock()
+	if enough {
 		return
 	}
 
@@ -196,10 +201,26 @@ func (ic *Collection) secureLevelInIndex(level int) {
 	}
 }
 
+// levelAt returns the entryLevel at level under a read lock, guarding against a
+// concurrent secureLevelInIndex append reallocating the levels slice. The
+// second return is false when level is out of range.
+func (ic *Collection) levelAt(level int) (entryLevel, bool) {
+	ic.secureLevel.RLock()
+	defer ic.secureLevel.RUnlock()
+	if level < 0 || level >= ic.levelCount {
+		return entryLevel{}, false
+	}
+	return ic.levels[level], true
+}
+
 func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]byte) (uint64, bool) {
 	ic.secureLevelInIndex(level)
 
-	if entryID, found := ic.levels[level].uniqueValues.Get(&UniqueValue{parentId, value}); found {
+	lvl, ok := ic.levelAt(level)
+	if !ok {
+		return 0, false
+	}
+	if entryID, found := lvl.uniqueValues.Get(&UniqueValue{parentId, value}); found {
 		return entryID.(uint64), true
 	} else {
 		return 0, false
@@ -285,8 +306,32 @@ func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]
 
 func (ic *Collection) insertEntry(level int, id uint64, uv *UniqueValue) {
 	ic.secureLevelInIndex(level)
-	ic.levels[level].entries.Put(id, uv)
-	ic.levels[level].uniqueValues.Put(uv, id)
+	lvl, _ := ic.levelAt(level) // level exists after secureLevelInIndex
+	lvl.entries.Put(id, uv)
+	lvl.uniqueValues.Put(uv, id)
+}
+
+// assocValue is what an association subtree stores. In disk-backed mode we keep
+// only the on-disk position (lean); the decoded Triple is read from disk (via
+// the cache) on query. In memory-only mode we keep the Triple resident so
+// queries never touch disk. Both directions store the same forward Triple: the
+// position points at the single forward record and makeStringTriple reconstructs
+// (key, value1, value2) regardless of lookup direction.
+func (ic *Collection) assocValue(a *Triple, pos int64) interface{} {
+	if ic.writeToDisk {
+		return pos
+	}
+	return *a
+}
+
+func putAssoc(parent *TieTree, outerKey uint64, subKey UniqueAssociation, value interface{}) {
+	if subTree, found := parent.Get(outerKey); found {
+		subTree.(*TieTree).Put(subKey, value)
+		return
+	}
+	subTree := NewTreeWith(UniqueAssociationComparator)
+	subTree.Put(subKey, value)
+	parent.Put(outerKey, subTree)
 }
 
 func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
@@ -295,23 +340,12 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	} else {
 		ic.secureLevelInIndex(a.Value2Level)
 	}
-	assTree, found := ic.levels[level].associations.Get(a.Key)
-	if !found {
-		ass := NewTreeWith(UniqueAssociationComparator)
-		key := UniqueAssociation{
-			AssociateTo: a.Value2,
-			Relation:    a.Value1,
-		}
-		ass.Put(key, pos)
-		ic.levels[level].associations.Put(a.Key, ass)
-	} else {
-		ass := assTree.(*TieTree)
-		key := UniqueAssociation{
-			AssociateTo: a.Value2,
-			Relation:    a.Value1,
-		}
-		ass.Put(key, pos)
-	}
+
+	value := ic.assocValue(a, pos)
+
+	fwd, _ := ic.levelAt(level) // level exists after secureLevelInIndex
+	putAssoc(fwd.associations, a.Key,
+		UniqueAssociation{AssociateTo: a.Value2, Relation: a.Value1}, value)
 
 	atomic.AddUint64(&ic.totalAssociations, 1)
 
@@ -319,31 +353,14 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	if !ic.shouldBuildReverse(a) {
 		return
 	}
-	reverseAssTree, found := ic.levels[a.Value2Level].reverseAssociations.Get(a.Value2)
-	if !found {
-		ass := NewTreeWith(UniqueAssociationComparator)
-		key := UniqueAssociation{
-			AssociateTo: a.Key,
-			Relation:    a.Value1,
-		}
-		ass.Put(key, pos)
-		ic.levels[a.Value2Level].reverseAssociations.Put(a.Value2, ass)
-	} else {
-		ass := reverseAssTree.(*TieTree)
-		key := UniqueAssociation{
-			AssociateTo: a.Key,
-			Relation:    a.Value1,
-		}
-		ass.Put(key, pos)
-	}
+	rev, _ := ic.levelAt(a.Value2Level) // level exists after secureLevelInIndex
+	putAssoc(rev.reverseAssociations, a.Value2,
+		UniqueAssociation{AssociateTo: a.Key, Relation: a.Value1}, value)
 }
 
 func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
-	if level < 0 {
-		return nil
-	}
-	if level < ic.levelCount {
-		if entry, found := ic.levels[level].entries.Get(id); found {
+	if lvl, ok := ic.levelAt(level); ok {
+		if entry, found := lvl.entries.Get(id); found {
 			return entry.(*UniqueValue)
 		}
 	}
@@ -351,8 +368,8 @@ func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 }
 
 func (ic *Collection) getAssociations(level int, entryID uint64) *TieTree {
-	if level >= 0 && level < ic.levelCount {
-		if set, found := ic.levels[level].associations.Get(entryID); found {
+	if lvl, ok := ic.levelAt(level); ok {
+		if set, found := lvl.associations.Get(entryID); found {
 			return set.(*TieTree)
 		}
 	}
@@ -360,8 +377,8 @@ func (ic *Collection) getAssociations(level int, entryID uint64) *TieTree {
 }
 
 func (ic *Collection) getReverseAssociations(level int, entryID uint64) *TieTree {
-	if level >= 0 && level < ic.levelCount {
-		if set, found := ic.levels[level].reverseAssociations.Get(entryID); found {
+	if lvl, ok := ic.levelAt(level); ok {
+		if set, found := lvl.reverseAssociations.Get(entryID); found {
 			return set.(*TieTree)
 		}
 	}
@@ -394,6 +411,9 @@ func (ic *Collection) deleteAssociation(tree *TieTree, key UniqueAssociation, tr
 	tree.Delete(key)
 
 	if ic.writeToDisk {
+		if ic.cache != nil && triplePos >= 0 {
+			ic.cache.Evict(triplePos)
+		}
 		m := FileMod{
 			Mode:     FILE_DELETE,
 			Position: triplePos,
@@ -414,22 +434,58 @@ func (ic *Collection) uniqueAssociationExists(keyLevel int, key uint64, value1 u
 	return found
 }
 
-func (ic *Collection) loadTriples(tree *TieTree, tripleChan chan Triple) {
-	ic.loadingTriples.Lock() // because dbReadwg.Wait() cannot be called multiple times
-	defer ic.loadingTriples.Unlock()
+// assocPos returns the on-disk position stored for an association, or -1 when
+// the value is a resident Triple (memory-only mode).
+func assocPos(value interface{}) int64 {
+	if pos, ok := value.(int64); ok {
+		return pos
+	}
+	return -1
+}
 
-	it := tree.Iterator()
-	for it.Next() {
-		pos := it.Value().(int64)
-		if pos != -1 {
-			ic.dbReadWg.Add(1)
-			ic.dBReadQueue <- ReadRequest{
-				Position:  it.Value().(int64),
-				ReplyChan: tripleChan,
-			}
+// resolveTriple turns an association subtree value into a Triple. In memory-only
+// mode the value already is a Triple. In disk-backed mode it is an int64
+// position; we serve it from the cache, falling back to a disk read.
+func (ic *Collection) resolveTriple(value interface{}) (Triple, bool) {
+	if t, ok := value.(Triple); ok {
+		return t, true
+	}
+	pos := value.(int64)
+	if pos < 0 {
+		return Triple{}, false
+	}
+	if ic.cache != nil {
+		if t, ok := ic.cache.Get(pos); ok {
+			return t, true
 		}
 	}
-	ic.dbReadWg.Wait()
+	t, ok := ic.readTripleAt(pos)
+	if ok && ic.cache != nil {
+		ic.cache.Put(pos, t)
+	}
+	return t, ok
+}
+
+// readTripleAt reads and decodes the association record at pos from disk. The
+// read is serviced by the writer goroutine, which owns the file handle; each
+// call has its own reply channel, so concurrent queries do not serialize.
+func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
+	reply := make(chan Triple, 1)
+	ic.dBReadQueue <- ReadRequest{Position: pos, ReplyChan: reply}
+	t, ok := <-reply
+	return t, ok
+}
+
+// loadTriples walks an association subtree and emits each Triple. It is a pure
+// in-memory traversal: memory-only mode reads resident Triples, disk mode
+// resolves positions through the cache/disk. No collection-wide serialization.
+func (ic *Collection) loadTriples(tree *TieTree, tripleChan chan Triple) {
+	it := tree.Iterator()
+	for it.Next() {
+		if t, ok := ic.resolveTriple(it.Value()); ok {
+			tripleChan <- t
+		}
+	}
 	close(tripleChan)
 }
 
@@ -506,11 +562,21 @@ func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (s
 }
 
 func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
+	result, _, totalCount = ic.GetPage(s, value1Filter, o)
+	return result, totalCount
+}
+
+// GetPage runs one Sort and returns both views of the page: the unordered
+// TripleSet map (for the existing OneKey/OneValue2 helpers and back-compat) and
+// the ordered, paginated slice (for clients that need a stable sequence),
+// together with the pre-pagination total. Building both from a single Sort
+// avoids sorting twice.
+func (ic *Collection) GetPage(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, sorted []StringTriple, totalCount int) {
 	result = make(TripleSet)
 
-	tripleSlice, totalCount := ic.Sort(s, value1Filter, o)
+	sorted, totalCount = ic.Sort(s, value1Filter, o)
 
-	for _, t := range tripleSlice {
+	for _, t := range sorted {
 		if !result.Has(t.Key) {
 			result[t.Key] = make(Value1)
 		}
@@ -522,7 +588,7 @@ func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOption
 		}
 	}
 
-	return result, totalCount
+	return result, sorted, totalCount
 }
 
 // ForEachTriple calls do for every forward triple in the collection. It walks
@@ -530,8 +596,15 @@ func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOption
 // association subtree through the same Sort path used by Get, so the emitted
 // triples match query results exactly. Intended for full-collection export.
 func (ic *Collection) ForEachTriple(do func(StringTriple)) {
-	for level := 0; level < ic.levelCount; level++ {
-		it := ic.levels[level].associations.Iterator()
+	ic.secureLevel.RLock()
+	levelCount := ic.levelCount
+	ic.secureLevel.RUnlock()
+	for level := 0; level < levelCount; level++ {
+		lvl, ok := ic.levelAt(level)
+		if !ok {
+			continue
+		}
+		it := lvl.associations.Iterator()
 		for it.Next() {
 			entryID := it.Key().(uint64)
 			subtree := ic.getAssociations(level, entryID)

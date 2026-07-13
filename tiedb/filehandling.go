@@ -36,8 +36,11 @@ func (ic *Collection) bufToEntry(buf [ENTRY_SIZE]byte) (level int, entryID uint6
 	return level, entryID, uv
 }
 
-func (ic *Collection) bufToAssociation(buf [ENTRY_SIZE]byte) Triple {
+func (ic *Collection) bufToAssociation(buf [ENTRY_SIZE]byte) (Triple, error) {
 	var a Triple
+	if dt := binary.LittleEndian.Uint16(buf[:SIZE_DATATYPE]); dt != TYPE_ASSOCIATION {
+		return a, fmt.Errorf("expected association record (type %d), got type %d", TYPE_ASSOCIATION, dt)
+	}
 	var last int = SIZE_DATATYPE
 
 	next := last + SIZE_LEVEL
@@ -64,7 +67,7 @@ func (ic *Collection) bufToAssociation(buf [ENTRY_SIZE]byte) Triple {
 	a.Value1 = binary.LittleEndian.Uint64(buf[last:next])
 	last = next
 
-	return a
+	return a, nil
 }
 
 // loadEntries is pass 1 of the two-pass load: it inserts trie entries (and
@@ -98,7 +101,11 @@ func (ic *Collection) loadEntries(rawDataToLoad chan RawDataEntry, wg *sync.Wait
 func (ic *Collection) loadAssociations(rawDataToLoad chan RawDataEntry, wg *sync.WaitGroup) {
 	for entry := range rawDataToLoad {
 		if int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) == TYPE_ASSOCIATION {
-			a := ic.bufToAssociation(entry.Data)
+			a, err := ic.bufToAssociation(entry.Data)
+			if err != nil {
+				log.Println("Skipping corrupt association at", entry.Position, ":", err)
+				continue
+			}
 			ic.insertAssociation(a.Level, &a, entry.Position)
 		}
 	}
@@ -180,29 +187,24 @@ func (t *Collection) openDB() *os.File {
 	if err != nil {
 		panic(err)
 	}
-	fi, _ := os.Stat(t.dBFullPath)
+	fi, err := f.Stat()
+	if err != nil {
+		panic(err)
+	}
 	t.db_size = fi.Size()
-	if t.db_size%ENTRY_SIZE != 0 {
-		panic("Assertion: db_size % ENTRY_SIZE != 0. DB probably corrupt.")
+	// A crash mid-write can leave a trailing partial record. That tail was never
+	// acknowledged, so trim it back to a record boundary rather than refusing to
+	// open the whole DB.
+	if rem := t.db_size % ENTRY_SIZE; rem != 0 {
+		trimmed := t.db_size - rem
+		log.Printf("tiedb: %s has a %d-byte partial trailing record; truncating to %d bytes",
+			t.dBFullPath, rem, trimmed)
+		if err := f.Truncate(trimmed); err != nil {
+			panic("tiedb: failed to truncate partial record: " + err.Error())
+		}
+		t.db_size = trimmed
 	}
 	return f
-}
-
-func (ic *Collection) getAssociationPosition(level int, a *Triple) (pos int64) {
-	pos = -1
-
-	if s, found := ic.levels[level].associations.Get(a.Key); found {
-		ass := s.(*TieTree)
-		key := UniqueAssociation{
-			AssociateTo: a.Value2,
-			Relation:    a.Value1,
-		}
-		if v, f := ass.Get(key); f {
-			pos = v.(int64)
-		}
-	}
-
-	return pos
 }
 
 func (ic *Collection) dBWriter() {
@@ -225,8 +227,12 @@ func (ic *Collection) dBWriter() {
 			timeout = time.AfterFunc(closeAfter, func() {
 				openLock.Lock()
 				open = false
-				db.Sync()
-				db.Close()
+				if err := db.Sync(); err != nil {
+					log.Println("tiedb: DB sync error on idle close:", err)
+				}
+				if err := db.Close(); err != nil {
+					log.Println("tiedb: DB close error on idle close:", err)
+				}
 				openLock.Unlock()
 				ic.finished.Done()
 			})
@@ -245,10 +251,16 @@ func (ic *Collection) dBWriter() {
 				n, err := db.ReadAt(b, req.Position)
 				if err != nil {
 					log.Println("Read error:", err, "bytes read,", n, "expected", ENTRY_SIZE)
+					close(req.ReplyChan) // signal failure to readTripleAt
 				} else {
-					req.ReplyChan <- ic.bufToAssociation([ENTRY_SIZE]byte(b))
+					a, decodeErr := ic.bufToAssociation([ENTRY_SIZE]byte(b))
+					if decodeErr != nil {
+						log.Println("Decode error at", req.Position, ":", decodeErr)
+						close(req.ReplyChan)
+					} else {
+						req.ReplyChan <- a
+					}
 				}
-				ic.dbReadWg.Done()
 				openLock.Unlock()
 
 			case file_mod := <-ic.dBWriteQueue:
@@ -308,9 +320,15 @@ func (ic *Collection) dBWriter() {
 			case closewriter := <-ic.dBCloseWriter:
 				if closewriter {
 					openLock.Lock()
-					open = false
-					db.Sync()
-					db.Close()
+					if open {
+						open = false
+						if err := db.Sync(); err != nil {
+							log.Println("tiedb: DB sync error on close:", err)
+						}
+						if err := db.Close(); err != nil {
+							log.Println("tiedb: DB close error on close:", err)
+						}
+					}
 					fmt.Println("Closing DB writer")
 					openLock.Unlock()
 					return

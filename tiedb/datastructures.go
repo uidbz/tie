@@ -62,10 +62,9 @@ type Collection struct {
 	totalEntries      uint64
 	totalAssociations uint64
 
-	secureLevel       sync.Mutex
+	secureLevel       sync.RWMutex
 	totalEntriesMutex sync.Mutex
 	changeMutex       sync.Mutex
-	loadingTriples    sync.Mutex
 
 	levels     []entryLevel
 	levelCount int
@@ -76,7 +75,13 @@ type Collection struct {
 	// stores where most triples are never queried in reverse.
 	reverseRelations map[string]bool
 
-	dbReadWg       sync.WaitGroup
+	// cache is non-nil only in disk-backed mode, where association trees keep
+	// just an int64 position resident and the decoded Triple is read from disk.
+	// It is a bounded LRU that spares that disk read for hot triples. In
+	// memory-only mode Triples are resident in the association trees and cache
+	// stays nil.
+	cache *tripleCache
+
 	dBWriteQueue   chan FileMod
 	dBReadQueue    chan ReadRequest
 	dBCloseWriter  chan bool

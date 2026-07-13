@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"git.sr.ht/~uid/tie/io/putlib"
+	"git.sr.ht/~uid/tie/tiedb"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -365,41 +366,49 @@ type TaggedFile struct {
 	IsDir    bool
 }
 
-// ListTags returns every tag name known to the store, read from the
-// ("tags", "all", <tag>) registry that Tag writes. The result is unordered.
-func (tie *TieClient) ListTags() ([]string, error) {
-	r, err := tie.Get(str(TieTags), GetOptions{Filter: str(TieAll)})
+// ListTags returns tag names known to the store, read from the
+// ("tags", "all", <tag>) registry that Tag writes, ordered by tag name.
+// offset/limit paginate; limit <= 0 means no limit. The second return is the
+// total number of tags before pagination.
+func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
+	o := GetOptions{Filter: str(TieAll)}
+	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
+	r, err := tie.Get(str(TieTags), o)
 	if errors.Is(err, ErrNotFound) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var tags []string
-	r.Result.ForEachValue2(func(_, _, tag string) {
-		tags = append(tags, tag)
-	})
-	return tags, nil
+	for _, t := range r.SortedResult {
+		tags = append(tags, t.Value2)
+	}
+	return tags, r.TotalCount, nil
 }
 
-// FilesWithTag returns the files tagged with tag. Files are stored as forward
-// triples (hash, "tag", tag), so a reverse lookup on the tag name yields the
-// hashes; GetNextLevel pulls each hash's filename and size in the same call.
-func (tie *TieClient) FilesWithTag(tag string) ([]TaggedFile, error) {
+// FilesWithTag returns the files tagged with tag, ordered by content hash.
+// Files are stored as forward triples (hash, "tag", tag), so a reverse lookup on
+// the tag name yields the hashes; GetNextLevel pulls each hash's filename and
+// size in the same call. offset/limit paginate; limit <= 0 means no limit. The
+// second return is the total number of files before pagination.
+func (tie *TieClient) FilesWithTag(tag string, offset, limit int) ([]TaggedFile, int, error) {
 	o := GetOptions{
 		Reverse:      true,
 		Filter:       str(TieTag),
 		GetNextLevel: true,
 	}
+	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
 	r, err := tie.Get(tag, o)
 	if errors.Is(err, ErrNotFound) {
-		return nil, nil
+		return nil, 0, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var files []TaggedFile
-	r.Result.ForEachKey(func(hash string) {
+	for _, t := range r.SortedResult {
+		hash := t.Key
 		meta := r.NextLevelResult[hash]
 		filename := meta[str(TieFilename)].ToString()
 		if filename == "" {
@@ -408,8 +417,8 @@ func (tie *TieClient) FilesWithTag(tag string) ([]TaggedFile, error) {
 		size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
 		isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
 		files = append(files, TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir})
-	})
-	return files, nil
+	}
+	return files, r.TotalCount, nil
 }
 
 // tieDirAncestors returns the virtual directory paths that make up p, from the

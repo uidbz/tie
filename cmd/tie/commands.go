@@ -101,9 +101,9 @@ func cmdGet() *cli.Command {
 			if err != nil {
 				return errors.New("Get Error: " + err.Error())
 			}
-			reply.Result.ForEachValue2(func(key, value1, value2 string) {
-				fmt.Println(key + "\t" + value1 + "\t" + value2)
-			})
+			for _, t := range reply.SortedResult {
+				fmt.Println(t.Key + "\t" + t.Value1 + "\t" + t.Value2)
+			}
 
 			return nil
 		},

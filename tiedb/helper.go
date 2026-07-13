@@ -135,13 +135,3 @@ func ValueComparator(o1, o2 interface{}) int {
 	k2 := o2.([]byte)
 	return bytes.Compare(k1, k2)
 }
-
-// func GetCollectionId(value string) []byte {
-// 	b := []byte(value)
-// 	// if len(b) == 0 {
-
-// 	// 	return []byte(hex.EncodeToString([]byte{97}))
-// 	// }
-// 	// return []byte(hex.EncodeToString(b[0:DB_GRANULARITY]))
-// 	return b[0:DB_GRANULARITY]
-// }

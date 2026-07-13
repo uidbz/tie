@@ -48,9 +48,14 @@ type Transform struct {
 
 type GetReply struct {
 	ws.ReplyStatus
-	Result          tiedb.TripleSet
+	Result tiedb.TripleSet
+	// SortedResult is the same triples as Result but ordered by the request's
+	// Sort options and paginated (Offset/Limit). Result is an unordered map and
+	// loses that order; clients that need a stable, paged sequence read this.
+	SortedResult    []tiedb.StringTriple
 	NextLevelResult tiedb.TripleSet
-	TotalCount      int
+	// TotalCount is the number of matches before Offset/Limit were applied.
+	TotalCount int
 }
 
 // Returns (value of Value2, true) from Result, if the only key in the Result is the requested key, and if only 1 Value2 exists.
@@ -106,7 +111,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		if reverse, found := col.GetReverseAssociations(request.Key); found {
 			reverse = transform(reverse, col, request.Options.Intersect, false)
 			reverse = transform(reverse, col, request.Options.Exclude, true)
-			reply.Result, reply.TotalCount = col.GetTripleSet(reverse, request.Options.Filter, request.Options.Sort)
+			reply.Result, reply.SortedResult, reply.TotalCount = col.GetPage(reverse, request.Options.Filter, request.Options.Sort)
 			if request.Options.GetNextLevel {
 				reply.NextLevelResult = make(tiedb.TripleSet, 0)
 				for key := range reply.Result {
@@ -121,7 +126,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		if direct, found := col.GetAssociations(request.Key); found {
 			direct = transform(direct, col, request.Options.Intersect, false)
 			direct = transform(direct, col, request.Options.Exclude, true)
-			reply.Result, reply.TotalCount = col.GetTripleSet(direct, request.Options.Filter, request.Options.Sort)
+			reply.Result, reply.SortedResult, reply.TotalCount = col.GetPage(direct, request.Options.Filter, request.Options.Sort)
 			if request.Options.GetNextLevel {
 				reply.NextLevelResult = make(tiedb.TripleSet, 0)
 				trees := make(map[string]bool)

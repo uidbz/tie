@@ -1,7 +1,9 @@
 package tiedb
 
 import (
+	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -152,89 +154,169 @@ func TestReverseAllowlistSurvivesReload(t *testing.T) {
 	}
 }
 
-/*
-
-func TestReOpen(t *testing.T) {
-	db := NewDB(true)
-	col := db.GetCollection(CollectionKey{"Collections", "test4"})
-
-	col.Add("superkey", "value1", "file0")
-	col.Add("superkey", "value2", "file1")
-
-	col.closeDB()
-	db = NewDB(true)
-	col = db.GetCollection(CollectionKey{"Collections", "test4"})
-
-	col.Add("superkey2", "value3", "file2")
-	col.Add("superkey2", "value4", "file3")
-
-	found, asses := col.GetAssociations("superkey2")
-
-	if found {
-		out, _ := col.SetToString("superkey2", "", asses)
-		if out.Value1[0] != "value3" {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Value1[0], "value3")
-		}
-		if out.Value1[1] != "value4" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Value1[1], "value4")
-		}
-		if out.Value2[0] != "file2" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[0], "file2")
-		}
-		if out.Value2[1] != "file3" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Value2[1], "file3")
-		}
-	} else {
-		t.Error("Error GetAssociations, did not find", "superkey2")
+// getVal2s returns the set of value2s for (key, value1) via a forward Get.
+func getVal2s(t *testing.T, col *Collection, key, value1 string) map[string]bool {
+	t.Helper()
+	out := make(map[string]bool)
+	res, found := col.Get(key, value1)
+	if !found {
+		return out
 	}
-
-	found, asses = col.GetAssociations("superkey")
-
-	if found {
-		out, _ := col.SetToString("superkey", "", asses)
-		if out.Value1[0] != "value1" {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Value1[0], "value1")
+	if v1, ok := res[key]; ok {
+		if set, ok := v1[value1]; ok {
+			set.ForEach(func(v2 string) { out[v2] = true })
 		}
-		if out.Value1[1] != "value2" {
-			t.Errorf("Error input2, got: %s, want: %s.", out.Value1[1], "value2")
-		}
-		if out.Value2[0] != "file0" {
-			t.Errorf("Error input3, got: %s, want: %s.", out.Value2[0], "file0")
-		}
-		if out.Value2[1] != "file1" {
-			t.Errorf("Error input4, got: %s, want: %s.", out.Value2[1], "file1")
-		}
-	} else {
-		t.Error("Error GetAssociations, did not find", "superkey")
 	}
+	return out
 }
 
-func TestUpdate(t *testing.T) {
+// TestMemoryModeAddSyncGet is the core memory-mode regression: Add -> Sync (must
+// not deadlock) -> Get returns values with no disk involved.
+func TestMemoryModeAddSyncGet(t *testing.T) {
 	db := NewDB(false)
-	col := db.GetCollection(CollectionKey{"Collections", "test5"})
+	col := db.GetCollection(CollectionKey{"mem", "c"})
 
-	key := "superkey"
-	val1 := "value1"
-	val2 := "value2"
-	val3 := "value3"
-	col.Add(key, val1, val2)
-	success, err := col.Update(key, val1, val2, val3)
-	if !success {
-		t.Errorf("Error Update returned false, msg: %s.", err)
+	col.Add("hashA", "tag", "sometag")
+	col.Add("hashA", "filename", "myfile.ext")
+	col.Sync() // must return; previously deadlocked in memory mode
+
+	if got := getVal2s(t, col, "hashA", "tag"); !got["sometag"] {
+		t.Errorf("tag lookup = %v, want sometag", got)
 	}
-
-	found, asses := col.GetAssociations("superkey")
-
-	if found {
-		out, _ := col.SetToString(key, "", asses)
-		if out.Value2[0] != val3 {
-			t.Errorf("Error input1, got: %s, want: %s.", out.Value2[0], val3)
-		}
-	} else {
-		t.Error("Error GetAssociations, did not find", "superkey")
+	if got := getVal2s(t, col, "hashA", "filename"); !got["myfile.ext"] {
+		t.Errorf("filename lookup = %v, want myfile.ext", got)
 	}
 }
-*/
 
-//TODO: MAKE TEST that create newDB. Add. Query. Close DB. Read DB. Add more. Make same query. Tjeck if 2 queries are identical.
-// I think we have error in reading DB.
+// TestDiskModeGetUsesCache verifies disk-mode queries serve triples from the
+// cache: a second identical query does not add cache entries (all hits).
+func TestDiskModeGetUsesCache(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+	col.Add("hashA", "tag", "sometag")
+	col.Sync()
+
+	if got := getVal2s(t, col, "hashA", "tag"); !got["sometag"] {
+		t.Fatalf("first get = %v, want sometag", got)
+	}
+	sizeAfterFirst := col.cache.ll.Len()
+	if sizeAfterFirst == 0 {
+		t.Fatal("cache empty after first query; expected the triple to be cached")
+	}
+	// Second identical query must be served entirely from cache (no growth).
+	getVal2s(t, col, "hashA", "tag")
+	if got := col.cache.ll.Len(); got != sizeAfterFirst {
+		t.Errorf("cache size changed on repeat query: %d -> %d (expected all hits)", sizeAfterFirst, got)
+	}
+}
+
+// TestCacheInvalidationOnSlotReuse guards the correctness of freespace reuse:
+// after Delete + a new Add that reuses the freed slot, a query must return the
+// new triple, never the evicted one.
+func TestCacheInvalidationOnSlotReuse(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	col.Add("hashA", "tag", "old")
+	col.Sync()
+	getVal2s(t, col, "hashA", "tag") // populate cache for the triple's position
+
+	if _, ok := col.Delete("hashA", "tag", "old"); !ok {
+		t.Fatal("delete failed")
+	}
+	col.Add("hashA", "tag", "new")
+	col.Sync()
+
+	got := getVal2s(t, col, "hashA", "tag")
+	if got["old"] {
+		t.Error("stale value 'old' returned after delete + slot-reusing add")
+	}
+	if !got["new"] {
+		t.Errorf("new value missing, got %v", got)
+	}
+}
+
+// TestSortedPagination checks that GetPage returns triples in a stable order,
+// honors Offset/Limit, and reports the pre-pagination total.
+func TestSortedPagination(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	const n = 25
+	for i := 0; i < n; i++ {
+		// zero-padded so lexical order is well-defined
+		col.Add("key", "rel", "v"+padded(i))
+	}
+	col.Sync()
+
+	tree, found := col.GetAssociations("key")
+	if !found {
+		t.Fatal("GetAssociations(key) not found")
+	}
+
+	// Full ordered result.
+	_, all, total := col.GetPage(tree, "", SortOptions{Limit: -1})
+	if total != n {
+		t.Errorf("total = %d, want %d", total, n)
+	}
+	if len(all) != n {
+		t.Fatalf("len(all) = %d, want %d", len(all), n)
+	}
+	for i := 1; i < len(all); i++ {
+		if all[i-1].Value2 > all[i].Value2 {
+			t.Fatalf("results not sorted at %d: %q > %q", i, all[i-1].Value2, all[i].Value2)
+		}
+	}
+
+	// A page in the middle.
+	_, page, total := col.GetPage(tree, "", SortOptions{Offset: 10, Limit: 5})
+	if total != n {
+		t.Errorf("paged total = %d, want %d", total, n)
+	}
+	if len(page) != 5 {
+		t.Fatalf("page len = %d, want 5", len(page))
+	}
+	for i := range page {
+		if page[i].Value2 != all[10+i].Value2 {
+			t.Errorf("page[%d] = %q, want %q", i, page[i].Value2, all[10+i].Value2)
+		}
+	}
+}
+
+// TestTornWriteRecovery appends a partial (sub-record) tail to a DB file and
+// confirms reopening loads prior data instead of panicking.
+func TestTornWriteRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{dir, "c"})
+	col.Add("hashA", "tag", "sometag")
+	col.Sync()
+	col.closeDB()
+
+	// Append a partial record (fewer than ENTRY_SIZE bytes).
+	path := filepath.Join(dir, "c.tie")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Reopen: must not panic, and prior data must survive.
+	db = NewDB(true)
+	col = db.GetCollection(CollectionKey{dir, "c"})
+	if got := getVal2s(t, col, "hashA", "tag"); !got["sometag"] {
+		t.Errorf("after torn-write recovery, tag lookup = %v, want sometag", got)
+	}
+}
+
+func padded(i int) string {
+	s := strconv.Itoa(i)
+	for len(s) < 3 {
+		s = "0" + s
+	}
+	return s
+}

@@ -46,14 +46,23 @@ A triple's association is stored keyed by entry IDs, not strings. Per level
 (`entryLevel`):
 
 - `associations`: `key (uint64)` → subtree of
-  `UniqueAssociation{AssociateTo: value2, Relation: value1}` → `pos (int64)`
+  `UniqueAssociation{AssociateTo: value2, Relation: value1}` → value
 - `reverseAssociations`: `value2 (uint64)` → subtree of
-  `UniqueAssociation{AssociateTo: key, Relation: value1}` → `pos (int64)`
+  `UniqueAssociation{AssociateTo: key, Relation: value1}` → value
 
-`pos` is the byte offset of that triple's record in the on-disk file (or `-1`
-before it has been written). Both indexes point at the *same* record; the reverse
-index is a pure in-memory acceleration structure and is never persisted
-separately — it is rebuilt from the file on load.
+The subtree *value* depends on the mode (`assocValue` in `collection.go`):
+
+- **disk-backed mode** stores an `int64` position — the byte offset of that
+  triple's record in the on-disk file (`-1` until the writer assigns it). The
+  full `(key, value1, value2)` IDs are read back from disk on query, cached in a
+  bounded LRU (`triplecache.go`) so hot triples avoid a re-read.
+- **memory-only mode** stores the resident `Triple` itself, so queries never
+  touch disk. There is no cache and no disk file.
+
+Both indexes hold the same value; the reverse index is a pure in-memory
+acceleration structure, never persisted separately — it is rebuilt from the file
+on load. `resolveTriple` turns either representation back into a `Triple`
+uniformly for the query path.
 
 `insertAssociation` (`collection.go`) builds the forward node always, and the
 reverse node only when `shouldBuildReverse` allows it (see below).
@@ -114,6 +123,23 @@ association indexes dominate, and historically each triple paid for *two* rbt
 nodes — one forward, one reverse — even when nothing ever queried that relation
 in reverse.
 
+### Two modes: memory-only vs disk-backed
+
+`NewDB(writeToDisk)` selects the mode for every collection it creates:
+
+- **disk-backed** (`writeToDisk=true`): association subtrees hold only an
+  `int64` position (8 B); the `Triple` is read from disk on query and served
+  from a bounded LRU cache thereafter. Lowest resident memory. Adds are durable
+  and `Sync()` waits for the writer to flush them.
+- **memory-only** (`writeToDisk=false`): association subtrees hold the resident
+  `Triple`; queries never touch disk and there is no cache or file. `Add` inserts
+  directly and `Sync()` is a no-op. Fastest, higher memory, non-durable.
+
+The two paths meet at `resolveTriple`, so `Get`/`Sort` are mode-agnostic. A
+query walks the subtree in memory in both modes — there is no per-query
+serialization; concurrent reads each use their own reply channel when a disk
+read is needed.
+
 ### Opt-in reverse associations
 
 Most relations are never queried in reverse. In this codebase reverse lookup is
@@ -147,9 +173,14 @@ never set an allowlist keep full reverse generality.
 - The reverse index is derived state — it can always be rebuilt from the file,
   which is what makes the two-pass load and the opt-in filter safe.
 - Boxing: rbt keys/values are stored as `interface{}`, so each
-  `UniqueAssociation` key and each `int64` position is heap-boxed. Reducing this
-  (e.g. typed trees or value-packed keys) is the next lever if association
-  memory is still the bottleneck after the opt-in reverse win.
+  `UniqueAssociation` key and each subtree value (an `int64` position in disk
+  mode, a `Triple` in memory mode) is heap-boxed. Reducing this (e.g. typed
+  trees or value-packed keys) is the next lever if association memory is still
+  the bottleneck after the opt-in reverse win.
+- Record layout: highwayhash keys are stored as 64-char hex → 3 trie chunks per
+  hash; raw 32-byte hashes would be 2. Changing `SIZE_VALUE` or storing raw
+  bytes is a breaking `.tie` format change (migrate via `tie dump` → `tie
+  restore`), deliberately deferred.
 - A lazy reverse index (build a value's reverse subtree on first reverse query
   and cache it) was considered as an alternative that keeps full generality at
   the cost of an O(n) first query; the opt-in approach was chosen because this

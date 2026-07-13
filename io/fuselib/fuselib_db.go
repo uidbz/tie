@@ -2,7 +2,6 @@ package fuselib
 
 import (
 	"context"
-	"sort"
 	"syscall"
 
 	"git.sr.ht/~uid/tie/client"
@@ -67,11 +66,10 @@ var (
 )
 
 func (b *byTagRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	tags, err := b.state.tie.ListTags()
+	tags, _, err := b.state.tie.ListTags(0, 0)
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	sort.Strings(tags)
 	entries := make([]fuse.DirEntry, 0, len(tags))
 	for _, tag := range tags {
 		entries = append(entries, fuse.DirEntry{Name: tag, Mode: fuse.S_IFDIR})
@@ -97,7 +95,7 @@ var (
 )
 
 func (d *tagDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	files, err := d.state.tie.FilesWithTag(d.tag)
+	files, _, err := d.state.tie.FilesWithTag(d.tag, 0, 0)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -117,7 +115,7 @@ func (d *tagDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (d *tagDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	files, err := d.state.tie.FilesWithTag(d.tag)
+	files, _, err := d.state.tie.FilesWithTag(d.tag, 0, 0)
 	if err != nil {
 		return nil, syscall.EIO
 	}
