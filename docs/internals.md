@@ -27,7 +27,9 @@ values. A string of length N occupies `ceil(N/24)` levels; the last chunk's
 entry ID is the string's identity everywhere else.
 
 Two red-black trees per level implement the trie (`entryLevel` in
-`datastructures.go`):
+`datastructures.go`). All index trees are `lockedTree[K, V]` — a typed
+`github.com/emirpasic/gods/v2` red-black tree behind an `RWMutex`, so keys and
+values are stored unboxed (`lockedtree.go`):
 
 - `entries`: `entryID (uint64)` → `*UniqueValue{ParentId, [24]byte chunk}`
 - `uniqueValues`: `*UniqueValue{ParentId, chunk}` → `entryID` (the reverse map,
@@ -45,24 +47,39 @@ once. Long, unique values (paths, filenames) cost one entry per 24-byte chunk.
 A triple's association is stored keyed by entry IDs, not strings. Per level
 (`entryLevel`):
 
-- `associations`: `key (uint64)` → subtree of
-  `UniqueAssociation{AssociateTo: value2, Relation: value1}` → value
-- `reverseAssociations`: `value2 (uint64)` → subtree of
-  `UniqueAssociation{AssociateTo: key, Relation: value1}` → value
+- `associations`: `key (uint64)` → `*AssociationSet` keyed by
+  `UniqueAssociation{AssociateTo: value2, Relation: value1}` → `int64` position
+- `reverseAssociations`: `value2 (uint64)` → `*AssociationSet` keyed by
+  `UniqueAssociation{AssociateTo: key, Relation: value1}` → `int64` position
 
-The subtree *value* depends on the mode (`assocValue` in `collection.go`):
+The subtree (`AssociationSet` in `associationset.go`) is a typed gods v2 tree
+`Tree[UniqueAssociation, int64]`, so its key and value are stored unboxed. The
+`int64` value is a *position* in both modes:
 
-- **disk-backed mode** stores an `int64` position — the byte offset of that
-  triple's record in the on-disk file (`-1` until the writer assigns it). The
-  full `(key, value1, value2)` IDs are read back from disk on query, cached in a
-  bounded LRU (`triplecache.go`) so hot triples avoid a re-read.
-- **memory-only mode** stores the resident `Triple` itself, so queries never
-  touch disk. There is no cache and no disk file.
+- **disk-backed mode**: the byte offset of that triple's record in the on-disk
+  file (`-1` until the writer assigns it). The full `(key, value1, value2)` IDs
+  are read back from disk on query, cached in a bounded LRU (`triplecache.go`) so
+  hot triples avoid a re-read.
+- **memory-only mode**: an index into the collection's in-memory `arena
+  []Triple` (`collection.go`). Queries never touch disk; there is no cache or
+  file. Freed slots are recycled via `arenaFree`, mirroring the disk `freespace`
+  list.
 
-Both indexes hold the same value; the reverse index is a pure in-memory
+Keeping the value a uniform `int64` in both modes is deliberate: it lets the
+subtree stay a single `Tree[UniqueAssociation, int64]` instead of a union type
+sized to the larger `Triple`, which measured worse.
+
+Both indexes hold the same position; the reverse index is a pure in-memory
 acceleration structure, never persisted separately — it is rebuilt from the file
-on load. `resolveTriple` turns either representation back into a `Triple`
-uniformly for the query path.
+on load. `resolveTriple` turns a position back into a `Triple` uniformly (arena
+lookup in memory mode, cache/disk read in disk mode) for the query path.
+
+`AssociationSet` is also *lazy*: a subtree holding a single association keeps it
+inline in the struct and never allocates a backing tree — the common case for a
+forward index keyed by unique content-address hashes. It promotes to a real tree
+only on the second distinct key. Set algebra (`intersect`/`exclude`, used by
+`QueryTags`) stays internal to `tiedb`; no gods type parameter crosses into the
+`api` package.
 
 `insertAssociation` (`collection.go`) builds the forward node always, and the
 reverse node only when `shouldBuildReverse` allows it (see below).
@@ -123,17 +140,24 @@ association indexes dominate, and historically each triple paid for *two* rbt
 nodes — one forward, one reverse — even when nothing ever queried that relation
 in reverse.
 
+Three levers cut this ~45% at 1M triples (862 → 473 MiB, disk/reverse=all):
+lazy single-entry association subtrees, opt-in reverse indexing (below), and
+moving every tree from `interface{}`-boxed gods v1 to typed gods v2 generics
+(`lockedTree` for the outer trees, `AssociationSet` for the subtrees). After the
+v2 migration the remaining heap is genuine node structs and payload, not boxing.
+
 ### Two modes: memory-only vs disk-backed
 
 `NewDB(writeToDisk)` selects the mode for every collection it creates:
 
-- **disk-backed** (`writeToDisk=true`): association subtrees hold only an
-  `int64` position (8 B); the `Triple` is read from disk on query and served
-  from a bounded LRU cache thereafter. Lowest resident memory. Adds are durable
-  and `Sync()` waits for the writer to flush them.
-- **memory-only** (`writeToDisk=false`): association subtrees hold the resident
-  `Triple`; queries never touch disk and there is no cache or file. `Add` inserts
-  directly and `Sync()` is a no-op. Fastest, higher memory, non-durable.
+- **disk-backed** (`writeToDisk=true`): the `int64` position is a byte offset;
+  the `Triple` is read from disk on query and served from a bounded LRU cache
+  thereafter. Lowest resident memory. Adds are durable and `Sync()` waits for the
+  writer to flush them.
+- **memory-only** (`writeToDisk=false`): the `int64` position indexes the
+  in-memory `arena []Triple`; queries never touch disk and there is no cache or
+  file. `Add` inserts directly and `Sync()` is a no-op. Fastest, higher memory,
+  non-durable.
 
 The two paths meet at `resolveTriple`, so `Get`/`Sort` are mode-agnostic. A
 query walks the subtree in memory in both modes — there is no per-query
@@ -164,19 +188,21 @@ in reverse, reverse-index nodes drop toward 1/K of the full set — e.g. 4
 relations per file with a `tag`-only allowlist cut reverse nodes to ~25% of the
 full index in a synthetic test.
 
-Trade-off: on `tie-daemon`, generic reverse queries (`tie get -r <x>`, reverse
-intersect/exclude) resolve only for whitelisted relations. Collections that
-never set an allowlist keep full reverse generality.
+Trade-off: on `tie-daemon`, generic reverse queries (`tie get -r <x>`, and the
+include/exclude tag algebra in `QueryTags`) resolve only for whitelisted
+relations. Collections that never set an allowlist keep full reverse generality.
 
 ### Notes for future work
 
 - The reverse index is derived state — it can always be rebuilt from the file,
   which is what makes the two-pass load and the opt-in filter safe.
-- Boxing: rbt keys/values are stored as `interface{}`, so each
-  `UniqueAssociation` key and each subtree value (an `int64` position in disk
-  mode, a `Triple` in memory mode) is heap-boxed. Reducing this (e.g. typed
-  trees or value-packed keys) is the next lever if association memory is still
-  the bottleneck after the opt-in reverse win.
+- Boxing (done): rbt keys/values used to be `interface{}` and heap-boxed. All
+  trees now use gods v2 generics (`lockedTree[K,V]`, `AssociationSet`), so keys
+  and the `int64` positions are stored unboxed. pprof after the migration shows
+  no remaining boxing; the heap is node structs plus payload. Forking gods for a
+  tighter node layout (dropping some of the child/parent/color pointer overhead)
+  was considered and declined — the remaining per-node cost is small next to what
+  boxing removal already banked.
 - Record layout: highwayhash keys are stored as 64-char hex → 3 trie chunks per
   hash; raw 32-byte hashes would be 2. Changing `SIZE_VALUE` or storing raw
   bytes is a breaking `.tie` format change (migrate via `tie dump` → `tie
