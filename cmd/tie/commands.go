@@ -77,20 +77,20 @@ func cmdGet() *cli.Command {
 			} else {
 				reverse = ctx.Bool("reverse")
 			}
-			intersecting := make([]api.Transform, 0)
-			excluding := make([]api.Transform, 0)
+			including := make([]string, 0)
+			excluding := make([]string, 0)
 			for i := 1; i < len(ctx.Args().Slice()); i++ {
 				if strings.HasPrefix(args[i], "-") {
-					excluding = append(excluding, api.Transform{Key: strings.TrimPrefix(args[i], "-"), Reverse: true})
+					excluding = append(excluding, strings.TrimPrefix(args[i], "-"))
 				} else {
-					intersecting = append(intersecting, api.Transform{Key: args[i], Reverse: true})
+					including = append(including, args[i])
 				}
 			}
 			o := api.GetOptions{
-				Reverse:   reverse,
-				Intersect: intersecting,
-				Exclude:   excluding,
-				Filter:    ctx.String("filter"),
+				Reverse: reverse,
+				Include: including,
+				Exclude: excluding,
+				Filter:  ctx.String("filter"),
 				Sort: tiedb.SortOptions{
 					Offset: ctx.Int("offset"),
 					Limit:  ctx.Int("limit"),

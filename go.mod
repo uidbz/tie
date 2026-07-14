@@ -1,12 +1,13 @@
 module git.sr.ht/~uid/tie
 
-go 1.20.0
+go 1.21
 
 require (
 	git.sr.ht/~uid/conf v1.1.5
 	github.com/caddyserver/certmagic v0.20.0
 	github.com/dhowden/tag v0.0.0-20230630033851-978a0926ee25
 	github.com/emirpasic/gods v1.18.1
+	github.com/emirpasic/gods/v2 v2.0.0-alpha.0.20250312000129-1d83d5ae39fb
 	github.com/go-resty/resty/v2 v2.12.0
 	github.com/h2non/filetype v1.1.3
 	github.com/hanwen/go-fuse/v2 v2.7.2

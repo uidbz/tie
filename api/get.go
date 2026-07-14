@@ -32,18 +32,16 @@ type GetRequest struct {
 // Reverse: Get reverse associations
 
 type GetOptions struct {
-	Intersect       []Transform
-	Exclude         []Transform
+	// Include lists additional tags the result must ALL be associated with
+	// (AND, by reverse association), on top of the seed Key. Exclude lists tags
+	// the result must NOT be associated with.
+	Include         []string
+	Exclude         []string
 	Filter          string
 	Reverse         bool
 	GetNextLevel    bool
 	NextLevelFilter string
 	Sort            tiedb.SortOptions
-}
-
-type Transform struct {
-	Key     string
-	Reverse bool
 }
 
 type GetReply struct {
@@ -80,55 +78,32 @@ func (gr GetReply) OneKey() (tiedb.Value1, bool) {
 	return nil, false
 }
 
-func transform(dest *tiedb.TieTree, col *tiedb.Collection, list []Transform, exclude bool) *tiedb.TieTree {
-	if len(list) != 0 {
-		for _, x := range list {
-			var t *tiedb.TieTree
-			var found bool
-			if x.Reverse {
-				t, found = col.GetReverseAssociations(x.Key)
-			} else {
-				t, found = col.GetAssociations(x.Key)
-			}
-			if found {
-				if exclude {
-					dest = dest.Exclude(t)
-				} else {
-					dest = dest.Intersect(t)
-				}
-			}
-		}
-	}
-	return dest
-}
-
 func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := GetReply{}
 	reply.OrigKey = request.Key
 
 	col := env.Collection(request.Namespace, request.CollectionId)
-	if request.Options.Reverse {
-		if reverse, found := col.GetReverseAssociations(request.Key); found {
-			reverse = transform(reverse, col, request.Options.Intersect, false)
-			reverse = transform(reverse, col, request.Options.Exclude, true)
-			reply.Result, reply.SortedResult, reply.TotalCount = col.GetPage(reverse, request.Options.Filter, request.Options.Sort)
-			if request.Options.GetNextLevel {
-				reply.NextLevelResult = make(tiedb.TripleSet, 0)
+
+	q := tiedb.TagQuery{
+		Include: append([]string{request.Key}, request.Options.Include...),
+		Exclude: request.Options.Exclude,
+		Reverse: request.Options.Reverse,
+		Filter:  request.Options.Filter,
+		Sort:    request.Options.Sort,
+	}
+	result, sorted, total, found := col.QueryTags(q)
+	if found {
+		reply.Result, reply.SortedResult, reply.TotalCount = result, sorted, total
+		if request.Options.GetNextLevel {
+			reply.NextLevelResult = make(tiedb.TripleSet, 0)
+			if request.Options.Reverse {
 				for key := range reply.Result {
 					if t, ok := col.GetAssociations(key); ok {
 						set, _ := col.GetTripleSet(t, request.Options.NextLevelFilter, request.Options.Sort)
 						reply.NextLevelResult[key] = set[key]
 					}
 				}
-			}
-		}
-	} else {
-		if direct, found := col.GetAssociations(request.Key); found {
-			direct = transform(direct, col, request.Options.Intersect, false)
-			direct = transform(direct, col, request.Options.Exclude, true)
-			reply.Result, reply.SortedResult, reply.TotalCount = col.GetPage(direct, request.Options.Filter, request.Options.Sort)
-			if request.Options.GetNextLevel {
-				reply.NextLevelResult = make(tiedb.TripleSet, 0)
+			} else {
 				trees := make(map[string]bool)
 				reply.Result.ForEachValue2(func(_, _, val2 string) {
 					if _, ok := trees[val2]; !ok { // only lookup not previously looked up

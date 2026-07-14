@@ -78,9 +78,18 @@ type Collection struct {
 	// cache is non-nil only in disk-backed mode, where association trees keep
 	// just an int64 position resident and the decoded Triple is read from disk.
 	// It is a bounded LRU that spares that disk read for hot triples. In
-	// memory-only mode Triples are resident in the association trees and cache
-	// stays nil.
+	// memory-only mode Triples live in the arena and cache stays nil.
 	cache *tripleCache
+
+	// arena backs memory-only mode: association trees store an int64 position in
+	// both modes, and in memory mode that position indexes into arena. This keeps
+	// the association-tree value type uniform (int64) so nodes never box a Triple.
+	// arenaFree holds slots freed by Delete for reuse, mirroring disk freespace.
+	// arenaMutex guards both, since Add does not hold changeMutex for its whole
+	// duration and may run concurrently with other Adds.
+	arena     []Triple
+	arenaFree []int64
+	arenaMutex sync.Mutex
 
 	dBWriteQueue   chan FileMod
 	dBReadQueue    chan ReadRequest

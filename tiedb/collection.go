@@ -52,8 +52,12 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 	// Insert immediately so duplicate Adds queued before the disk writer runs
 	// are deduplicated. In disk mode the stored value is the position -1; the
 	// writer overwrites it with the real position (and signals finishedAdding).
-	// In memory mode the resident Triple is the final value.
-	ic.insertAssociation(keyLevel, &ass, -1)
+	// In memory mode we allocate the arena slot now so it is the final position.
+	pos := int64(-1)
+	if !ic.writeToDisk {
+		pos = ic.arenaStore(&ass)
+	}
+	ic.insertAssociation(keyLevel, &ass, pos)
 
 	if ic.writeToDisk {
 		ic.finishedAdding.Add(1)
@@ -311,17 +315,39 @@ func (ic *Collection) insertEntry(level int, id uint64, uv *UniqueValue) {
 	lvl.uniqueValues.Put(uv, id)
 }
 
-// assocValue is what an association subtree stores. In disk-backed mode we keep
-// only the on-disk position (lean); the decoded Triple is read from disk (via
-// the cache) on query. In memory-only mode we keep the Triple resident so
-// queries never touch disk. Both directions store the same forward Triple: the
-// position points at the single forward record and makeStringTriple reconstructs
-// (key, value1, value2) regardless of lookup direction.
-func (ic *Collection) assocValue(a *Triple, pos int64) interface{} {
-	if ic.writeToDisk {
+// arenaStore places a Triple in the memory-mode arena and returns its position,
+// reusing a freed slot when one is available.
+func (ic *Collection) arenaStore(a *Triple) int64 {
+	ic.arenaMutex.Lock()
+	defer ic.arenaMutex.Unlock()
+	if n := len(ic.arenaFree); n > 0 {
+		pos := ic.arenaFree[n-1]
+		ic.arenaFree = ic.arenaFree[:n-1]
+		ic.arena[pos] = *a
 		return pos
 	}
-	return *a
+	ic.arena = append(ic.arena, *a)
+	return int64(len(ic.arena) - 1)
+}
+
+// arenaLoad reads the Triple at a memory-mode arena position.
+func (ic *Collection) arenaLoad(pos int64) (Triple, bool) {
+	ic.arenaMutex.Lock()
+	defer ic.arenaMutex.Unlock()
+	if pos < 0 || pos >= int64(len(ic.arena)) {
+		return Triple{}, false
+	}
+	return ic.arena[pos], true
+}
+
+// arenaFreeSlot returns a memory-mode arena slot for reuse.
+func (ic *Collection) arenaFreeSlot(pos int64) {
+	if pos < 0 {
+		return
+	}
+	ic.arenaMutex.Lock()
+	defer ic.arenaMutex.Unlock()
+	ic.arenaFree = append(ic.arenaFree, pos)
 }
 
 func putAssoc(parent *TieTree, outerKey uint64, subKey UniqueAssociation, value interface{}) {
@@ -329,7 +355,7 @@ func putAssoc(parent *TieTree, outerKey uint64, subKey UniqueAssociation, value 
 		subTree.(*TieTree).Put(subKey, value)
 		return
 	}
-	subTree := NewTreeWith(UniqueAssociationComparator)
+	subTree := NewLazyTreeWith(UniqueAssociationComparator)
 	subTree.Put(subKey, value)
 	parent.Put(outerKey, subTree)
 }
@@ -341,11 +367,11 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 		ic.secureLevelInIndex(a.Value2Level)
 	}
 
-	value := ic.assocValue(a, pos)
-
+	// Association trees store the int64 position in both modes (disk offset, or
+	// arena index in memory mode), so nodes never box a Triple.
 	fwd, _ := ic.levelAt(level) // level exists after secureLevelInIndex
 	putAssoc(fwd.associations, a.Key,
-		UniqueAssociation{AssociateTo: a.Value2, Relation: a.Value1}, value)
+		UniqueAssociation{AssociateTo: a.Value2, Relation: a.Value1}, pos)
 
 	atomic.AddUint64(&ic.totalAssociations, 1)
 
@@ -355,7 +381,7 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	}
 	rev, _ := ic.levelAt(a.Value2Level) // level exists after secureLevelInIndex
 	putAssoc(rev.reverseAssociations, a.Value2,
-		UniqueAssociation{AssociateTo: a.Key, Relation: a.Value1}, value)
+		UniqueAssociation{AssociateTo: a.Key, Relation: a.Value1}, pos)
 }
 
 func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
@@ -419,6 +445,8 @@ func (ic *Collection) deleteAssociation(tree *TieTree, key UniqueAssociation, tr
 			Position: triplePos,
 		}
 		ic.dBWriteQueue <- m
+	} else {
+		ic.arenaFreeSlot(triplePos)
 	}
 }
 
@@ -434,25 +462,22 @@ func (ic *Collection) uniqueAssociationExists(keyLevel int, key uint64, value1 u
 	return found
 }
 
-// assocPos returns the on-disk position stored for an association, or -1 when
-// the value is a resident Triple (memory-only mode).
+// assocPos returns the position stored for an association (disk offset, or arena
+// index in memory mode). The value is always an int64.
 func assocPos(value interface{}) int64 {
-	if pos, ok := value.(int64); ok {
-		return pos
-	}
-	return -1
+	return value.(int64)
 }
 
-// resolveTriple turns an association subtree value into a Triple. In memory-only
-// mode the value already is a Triple. In disk-backed mode it is an int64
-// position; we serve it from the cache, falling back to a disk read.
+// resolveTriple turns an association subtree value (an int64 position) into a
+// Triple. In memory-only mode the position indexes into the arena. In disk-backed
+// mode it is an on-disk offset served from the cache, falling back to a disk read.
 func (ic *Collection) resolveTriple(value interface{}) (Triple, bool) {
-	if t, ok := value.(Triple); ok {
-		return t, true
-	}
 	pos := value.(int64)
 	if pos < 0 {
 		return Triple{}, false
+	}
+	if !ic.writeToDisk {
+		return ic.arenaLoad(pos)
 	}
 	if ic.cache != nil {
 		if t, ok := ic.cache.Get(pos); ok {
@@ -480,12 +505,11 @@ func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
 // in-memory traversal: memory-only mode reads resident Triples, disk mode
 // resolves positions through the cache/disk. No collection-wide serialization.
 func (ic *Collection) loadTriples(tree *TieTree, tripleChan chan Triple) {
-	it := tree.Iterator()
-	for it.Next() {
-		if t, ok := ic.resolveTriple(it.Value()); ok {
+	tree.ForEach(func(_, value interface{}) {
+		if t, ok := ic.resolveTriple(value); ok {
 			tripleChan <- t
 		}
-	}
+	})
 	close(tripleChan)
 }
 
@@ -589,6 +613,57 @@ func (ic *Collection) GetPage(s *TieTree, value1Filter string, o SortOptions) (r
 	}
 
 	return result, sorted, totalCount
+}
+
+// TagQuery selects entries by association membership: a match must be associated
+// with the seed (Include[0]) and with every other Include value, and with none of
+// the Exclude values. It expresses "things tagged with all of these but none of
+// those" directly, so callers no longer compose raw set operations. Include and
+// Exclude terms are matched by reverse association; Reverse also selects the seed
+// via reverse associations (the tag-query case) rather than forward.
+type TagQuery struct {
+	Include []string    // AND across all; Include[0] is the seed set
+	Exclude []string    // NOT any of these
+	Reverse bool        // seed via reverse associations (tag query) vs forward
+	Filter  string      // filter-in on value1 (relation)
+	Sort    SortOptions // pagination (Offset/Limit/SortBy)
+}
+
+// QueryTags resolves the include/exclude set algebra internally and returns a
+// paginated result: the unordered TripleSet, the ordered+paged slice, and the
+// pre-pagination total, plus whether the seed existed. The intermediate
+// association trees never leave tiedb.
+func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTriple, total int, found bool) {
+	if len(q.Include) == 0 {
+		return make(TripleSet), nil, 0, false
+	}
+
+	var set *TieTree
+	if q.Reverse {
+		set, found = ic.GetReverseAssociations(q.Include[0])
+	} else {
+		set, found = ic.GetAssociations(q.Include[0])
+	}
+	if !found {
+		return make(TripleSet), nil, 0, false
+	}
+
+	for _, tag := range q.Include[1:] {
+		other, ok := ic.GetReverseAssociations(tag)
+		if !ok {
+			return make(TripleSet), nil, 0, true // an unmet AND term yields no matches
+		}
+		set = set.intersect(other)
+	}
+
+	for _, tag := range q.Exclude {
+		if other, ok := ic.GetReverseAssociations(tag); ok {
+			set = set.exclude(other)
+		}
+	}
+
+	result, sorted, total = ic.GetPage(set, q.Filter, q.Sort)
+	return result, sorted, total, true
 }
 
 // ForEachTriple calls do for every forward triple in the collection. It walks
