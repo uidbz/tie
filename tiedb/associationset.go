@@ -33,8 +33,7 @@ func newAssociationSet() *AssociationSet {
 	return &AssociationSet{}
 }
 
-// assocCompare orders UniqueAssociation by AssociateTo then Relation. It matches
-// UniqueAssociationComparator but is typed for the v2 tree.
+// assocCompare orders UniqueAssociation by AssociateTo then Relation.
 func assocCompare(a, b UniqueAssociation) int {
 	switch {
 	case a.AssociateTo > b.AssociateTo:

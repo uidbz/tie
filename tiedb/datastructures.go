@@ -49,10 +49,10 @@ type RawDataEntry struct {
 }
 
 type entryLevel struct {
-	entries             *TieTree
-	uniqueValues        *TieTree
-	associations        *TieTree
-	reverseAssociations *TieTree
+	entries             *lockedTree[uint64, *UniqueValue]
+	uniqueValues        *lockedTree[*UniqueValue, uint64]
+	associations        *lockedTree[uint64, *AssociationSet]
+	reverseAssociations *lockedTree[uint64, *AssociationSet]
 }
 
 type Collection struct {

@@ -196,10 +196,10 @@ func (ic *Collection) secureLevelInIndex(level int) {
 
 	for i := ic.levelCount; i <= level; i++ {
 		ic.levels = append(ic.levels, entryLevel{
-			entries:             NewTreeWith(UInt64Comparator),
-			uniqueValues:        NewTreeWith(UniqueValueComparator),
-			associations:        NewTreeWith(UInt64Comparator),
-			reverseAssociations: NewTreeWith(UInt64Comparator),
+			entries:             newLockedTree[uint64, *UniqueValue](uint64Compare),
+			uniqueValues:        newLockedTree[*UniqueValue, uint64](uniqueValueCompare),
+			associations:        newLockedTree[uint64, *AssociationSet](uint64Compare),
+			reverseAssociations: newLockedTree[uint64, *AssociationSet](uint64Compare),
 		})
 		ic.levelCount++
 	}
@@ -225,7 +225,7 @@ func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]
 		return 0, false
 	}
 	if entryID, found := lvl.uniqueValues.Get(&UniqueValue{parentId, value}); found {
-		return entryID.(uint64), true
+		return entryID, true
 	} else {
 		return 0, false
 	}
@@ -350,9 +350,9 @@ func (ic *Collection) arenaFreeSlot(pos int64) {
 	ic.arenaFree = append(ic.arenaFree, pos)
 }
 
-func putAssoc(parent *TieTree, outerKey uint64, subKey UniqueAssociation, pos int64) {
+func putAssoc(parent *lockedTree[uint64, *AssociationSet], outerKey uint64, subKey UniqueAssociation, pos int64) {
 	if subTree, found := parent.Get(outerKey); found {
-		subTree.(*AssociationSet).Put(subKey, pos)
+		subTree.Put(subKey, pos)
 		return
 	}
 	subTree := newAssociationSet()
@@ -387,7 +387,7 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 	if lvl, ok := ic.levelAt(level); ok {
 		if entry, found := lvl.entries.Get(id); found {
-			return entry.(*UniqueValue)
+			return entry
 		}
 	}
 	return nil
@@ -396,7 +396,7 @@ func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 func (ic *Collection) getAssociations(level int, entryID uint64) *AssociationSet {
 	if lvl, ok := ic.levelAt(level); ok {
 		if set, found := lvl.associations.Get(entryID); found {
-			return set.(*AssociationSet)
+			return set
 		}
 	}
 	return newAssociationSet()
@@ -405,7 +405,7 @@ func (ic *Collection) getAssociations(level int, entryID uint64) *AssociationSet
 func (ic *Collection) getReverseAssociations(level int, entryID uint64) *AssociationSet {
 	if lvl, ok := ic.levelAt(level); ok {
 		if set, found := lvl.reverseAssociations.Get(entryID); found {
-			return set.(*AssociationSet)
+			return set
 		}
 	}
 	return newAssociationSet()
@@ -672,8 +672,7 @@ func (ic *Collection) ForEachTriple(do func(StringTriple)) {
 		if !ok {
 			continue
 		}
-		lvl.associations.ForEach(func(key, _ interface{}) {
-			entryID := key.(uint64)
+		lvl.associations.ForEach(func(entryID uint64, _ *AssociationSet) {
 			subtree := ic.getAssociations(level, entryID)
 			triples, _ := ic.Sort(subtree, "", SortOptions{Limit: -1})
 			for _, t := range triples {

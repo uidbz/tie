@@ -5,6 +5,7 @@ import (
 	"runtime"
 	"testing"
 
+	rbt1 "github.com/emirpasic/gods/trees/redblacktree"
 	rbt2 "github.com/emirpasic/gods/v2/trees/redblacktree"
 )
 
@@ -41,9 +42,20 @@ func TestBoxingComparison(t *testing.T) {
 		runtime.KeepAlive(tr)
 	}
 
-	// v1: interface{} key + interface{} value (current production representation).
+	// v1: interface{} key + interface{} value (the pre-migration representation).
 	measure("v1 interface{} (disk pos)", func() any {
-		tr := NewTreeWith(UniqueAssociationComparator)
+		tr := rbt1.NewWith(func(a, b interface{}) int {
+			return assocCompare(a.(UniqueAssociation), b.(UniqueAssociation))
+		})
+		for i := 0; i < n; i++ {
+			tr.Put(UniqueAssociation{AssociateTo: uint64(i), Relation: uint64(i % 3)}, int64(i))
+		}
+		return tr
+	})
+
+	// production: the typed AssociationSet used by the live index.
+	measure("AssociationSet[UA,int64]", func() any {
+		tr := newAssociationSet()
 		for i := 0; i < n; i++ {
 			tr.Put(UniqueAssociation{AssociateTo: uint64(i), Relation: uint64(i % 3)}, int64(i))
 		}

@@ -32,16 +32,14 @@ func hexKey(i int) string {
 
 // countAssocNodes walks the outer entry tree and sums the sizes of the inner
 // association sub-trees, returning (outer entries, total inner nodes).
-func countAssocNodes(t *TieTree) (outer, inner int) {
-	if t == nil || t.Tree == nil {
+func countAssocNodes(t *lockedTree[uint64, *AssociationSet]) (outer, inner int) {
+	if t == nil {
 		return 0, 0
 	}
-	for _, v := range t.Tree.Values() {
+	t.ForEach(func(_ uint64, sub *AssociationSet) {
 		outer++
-		if sub, ok := v.(*TieTree); ok {
-			inner += sub.Size() // inline-aware: counts un-promoted lazy trees too
-		}
-	}
+		inner += sub.Size() // inline-aware: counts un-promoted lazy trees too
+	})
 	return outer, inner
 }
 

@@ -5,28 +5,16 @@ import (
 	"log"
 	"os"
 	"sync"
-
-	rbt "github.com/emirpasic/gods/trees/redblacktree"
-	"github.com/emirpasic/gods/utils"
 )
 
+// TieTree is the top-level database handle: a typed, concurrency-safe map from
+// CollectionKey to *Collection, plus the settings applied to collections it
+// creates. The per-level entry and association indexes are separate lockedTree
+// instances held on each Collection.
 type TieTree struct {
-	*rbt.Tree
+	collections *lockedTree[CollectionKey, *Collection]
 	writeToDisk bool
 	colMutex    sync.Mutex
-	changeLock  sync.RWMutex
-
-	// comparator is retained so a lazy tree can build its rbt.Tree on promotion.
-	comparator utils.Comparator
-
-	// A lazy tree defers allocating the embedded rbt.Tree (and its first node)
-	// until it holds a second, distinct key. While it holds 0 or 1 entries the
-	// Tree is nil and the single entry lives inline. This spares one rbt.Tree +
-	// one node per outer key whose sub-tree only ever holds one association — the
-	// common case for a forward index keyed by unique content-address hashes.
-	inlineKey interface{}
-	inlineVal interface{}
-	hasInline bool
 
 	// defaultReverseRelations is applied to every Collection this DB creates.
 	// nil means "index all relations in reverse"; see Collection.reverseRelations.
@@ -41,113 +29,9 @@ func (tree *TieTree) SetDefaultReverseRelations(relations []string) {
 }
 
 func NewDB(writeToDisk bool) *TieTree {
-	tree := &TieTree{
-		Tree:        rbt.NewWith(KeyComparator),
+	return &TieTree{
+		collections: newLockedTree[CollectionKey, *Collection](collectionKeyCompare),
 		writeToDisk: writeToDisk,
-	}
-
-	return tree
-}
-
-func NewTreeWith(comparator utils.Comparator) *TieTree {
-	tree := &TieTree{
-		Tree:        rbt.NewWith(comparator),
-		comparator:  comparator,
-		writeToDisk: false,
-	}
-	return tree
-}
-
-// promote allocates the backing rbt.Tree and migrates the inline entry into it.
-// Caller must hold changeLock.
-func (tree *TieTree) promote() {
-	tree.Tree = rbt.NewWith(tree.comparator)
-	if tree.hasInline {
-		tree.Tree.Put(tree.inlineKey, tree.inlineVal)
-		tree.inlineKey = nil
-		tree.inlineVal = nil
-		tree.hasInline = false
-	}
-}
-
-func (tree *TieTree) Get(key interface{}) (value interface{}, found bool) {
-	tree.changeLock.RLock()
-	defer tree.changeLock.RUnlock()
-
-	if tree.Tree == nil {
-		if tree.hasInline && tree.comparator(tree.inlineKey, key) == 0 {
-			return tree.inlineVal, true
-		}
-		return nil, false
-	}
-	return tree.Tree.Get(key)
-}
-
-func (tree *TieTree) Delete(key interface{}) {
-	tree.changeLock.Lock()
-	defer tree.changeLock.Unlock()
-
-	if tree.Tree == nil {
-		if tree.hasInline && tree.comparator(tree.inlineKey, key) == 0 {
-			tree.inlineKey = nil
-			tree.inlineVal = nil
-			tree.hasInline = false
-		}
-		return
-	}
-	tree.Tree.Remove(key)
-}
-
-func (tree *TieTree) Put(key interface{}, value interface{}) {
-	tree.changeLock.Lock()
-	defer tree.changeLock.Unlock()
-
-	if tree.Tree == nil {
-		if !tree.hasInline {
-			tree.inlineKey = key
-			tree.inlineVal = value
-			tree.hasInline = true
-			return
-		}
-		if tree.comparator(tree.inlineKey, key) == 0 {
-			tree.inlineVal = value // in-place update (e.g. disk-mode position rewrite)
-			return
-		}
-		tree.promote() // second distinct key: grow into a real tree
-	}
-	tree.Tree.Put(key, value)
-}
-
-// Size reports the entry count, accounting for the inline (un-promoted) form.
-func (tree *TieTree) Size() int {
-	tree.changeLock.RLock()
-	defer tree.changeLock.RUnlock()
-
-	if tree.Tree == nil {
-		if tree.hasInline {
-			return 1
-		}
-		return 0
-	}
-	return tree.Tree.Size()
-}
-
-// ForEach visits every (key, value) in order under a read lock. It is the
-// inline-aware replacement for ranging over Iterator(), which is a promoted
-// rbt.Tree method that would nil-panic on an un-promoted lazy tree.
-func (tree *TieTree) ForEach(fn func(key, value interface{})) {
-	tree.changeLock.RLock()
-	defer tree.changeLock.RUnlock()
-
-	if tree.Tree == nil {
-		if tree.hasInline {
-			fn(tree.inlineKey, tree.inlineVal)
-		}
-		return
-	}
-	it := tree.Tree.Iterator()
-	for it.Next() {
-		fn(it.Key(), it.Value())
 	}
 }
 
@@ -155,13 +39,13 @@ func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 	db.colMutex.Lock()
 	defer db.colMutex.Unlock()
 
-	col, found := db.Get(key)
+	col, found := db.collections.Get(key)
 	if !found {
 		col = db.initialize(key.Database, key.Collection, false)
-		db.Put(key, col)
+		db.collections.Put(key, col)
 	}
 
-	return col.(*Collection)
+	return col
 }
 
 func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) *Collection {
