@@ -293,8 +293,8 @@ func (ic *Collection) dBWriter() {
 					}
 					switch file_mod.EntryType {
 					case TYPE_ASSOCIATION:
-						ic.insertAssociation(file_mod.Level, file_mod.Association, pos)
-						n, err = db.WriteAt(file_mod.Association.toBytes(), pos)
+						ic.insertAssociation(file_mod.Level, file_mod.Triple, pos)
+						n, err = db.WriteAt(file_mod.Triple.toBytes(), pos)
 						ic.finishedAdding.Done()
 					case TYPE_ENTRY:
 						n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)

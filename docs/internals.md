@@ -19,6 +19,24 @@ A query fetches all triples for a key (`Get`), and — when asked — also the
 triples where the key appears as `value2` (the reverse direction). Reverse
 lookup is what turns `sometag` back into the set of hashes tagged with it.
 
+### "Triple" vs. "association" — two terms, two meanings
+
+The code uses both words deliberately; they are not synonyms:
+
+- A **triple** is the stored data record — the `Triple` struct
+  `(key, value1, value2)`. It is what gets serialized (`toBytes`), held in the
+  arena/cache, and returned from queries (`TripleSet`, `StringTriple`).
+- An **association** is an *index* over triples — the structures that link entry
+  IDs so a triple can be found from one of its members. `associations` /
+  `reverseAssociations`, `AssociationSet`, and `insertAssociation` are all index
+  concepts. The subtree key `UniqueAssociation{AssociateTo, Relation}` is a
+  triple with the pivot entry factored out (the other two IDs).
+
+Rule of thumb: if it holds or moves the full record, it's a *triple*; if it
+links or looks records up, it's an *association*. So `FileMod.Triple` carries a
+`*Triple` to the writer, while `insertAssociation` inserts that triple into the
+association index.
+
 ## Strings become IDs: the trie of unique values
 
 Strings are never stored inline in the index. Each string is chopped into

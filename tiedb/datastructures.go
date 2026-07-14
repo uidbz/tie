@@ -220,7 +220,7 @@ type FileMod struct {
 	Level       int
 	EntryType   int
 	Position    int64
-	Association *Triple
+	Triple      *Triple
 	EntryID     uint64
 	UniqueValue *UniqueValue
 }

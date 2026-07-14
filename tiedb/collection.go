@@ -62,10 +62,10 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 	if ic.writeToDisk {
 		ic.finishedAdding.Add(1)
 		ic.dBWriteQueue <- FileMod{
-			EntryType:   TYPE_ASSOCIATION,
-			Level:       keyLevel,
-			Mode:        FILE_ADD,
-			Association: &ass,
+			EntryType: TYPE_ASSOCIATION,
+			Level:     keyLevel,
+			Mode:      FILE_ADD,
+			Triple:    &ass,
 		}
 	}
 }
