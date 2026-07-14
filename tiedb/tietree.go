@@ -58,15 +58,6 @@ func NewTreeWith(comparator utils.Comparator) *TieTree {
 	return tree
 }
 
-// NewLazyTreeWith returns a tree that defers allocating its rbt.Tree until it
-// holds a second distinct key. Until then a single entry is kept inline.
-func NewLazyTreeWith(comparator utils.Comparator) *TieTree {
-	return &TieTree{
-		comparator:  comparator,
-		writeToDisk: false,
-	}
-}
-
 // promote allocates the backing rbt.Tree and migrates the inline entry into it.
 // Caller must hold changeLock.
 func (tree *TieTree) promote() {
@@ -158,29 +149,6 @@ func (tree *TieTree) ForEach(fn func(key, value interface{})) {
 	for it.Next() {
 		fn(it.Key(), it.Value())
 	}
-}
-
-// intersect returns a new tree of the entries present in both t and tree.
-// Internal to tiedb: association set algebra is exposed only via QueryTags.
-func (t *TieTree) intersect(tree *TieTree) (out *TieTree) {
-	out = NewTreeWith(AssociationComparator)
-	t.ForEach(func(key, value interface{}) {
-		if _, found := tree.Get(key); found {
-			out.Put(key, value)
-		}
-	})
-	return out
-}
-
-// exclude returns a new tree of the entries in t that are absent from tree.
-func (t *TieTree) exclude(tree *TieTree) (out *TieTree) {
-	out = NewTreeWith(AssociationComparator)
-	t.ForEach(func(key, value interface{}) {
-		if _, found := tree.Get(key); !found {
-			out.Put(key, value)
-		}
-	})
-	return out
 }
 
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {

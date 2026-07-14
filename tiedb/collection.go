@@ -89,17 +89,17 @@ func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 	}
 }
 
-func (ic *Collection) GetAssociations(value string) (*TieTree, bool) {
+func (ic *Collection) GetAssociations(value string) (*AssociationSet, bool) {
 	if entryID, level, found := ic.getEntryFromString(value); !found {
-		return &TieTree{}, false
+		return newAssociationSet(), false
 	} else {
 		return ic.getAssociations(level, entryID), true
 	}
 }
 
-func (ic *Collection) GetReverseAssociations(value string) (*TieTree, bool) {
+func (ic *Collection) GetReverseAssociations(value string) (*AssociationSet, bool) {
 	if entryID, level, found := ic.getEntryFromString(value); !found {
-		return &TieTree{}, false
+		return newAssociationSet(), false
 	} else {
 		return ic.getReverseAssociations(level, entryID), true
 	}
@@ -124,8 +124,8 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (string, 
 				Relation:    v1,
 			}
 
-			if a, found := asses.Get(assKey); found {
-				ic.deleteAssociation(asses, assKey, assocPos(a))
+			if pos, found := asses.Get(assKey); found {
+				ic.deleteAssociation(asses, assKey, pos)
 				ic.getReverseAssociations(l2, v2).Delete(reverseAssKey)
 				return "", true
 			}
@@ -350,13 +350,13 @@ func (ic *Collection) arenaFreeSlot(pos int64) {
 	ic.arenaFree = append(ic.arenaFree, pos)
 }
 
-func putAssoc(parent *TieTree, outerKey uint64, subKey UniqueAssociation, value interface{}) {
+func putAssoc(parent *TieTree, outerKey uint64, subKey UniqueAssociation, pos int64) {
 	if subTree, found := parent.Get(outerKey); found {
-		subTree.(*TieTree).Put(subKey, value)
+		subTree.(*AssociationSet).Put(subKey, pos)
 		return
 	}
-	subTree := NewLazyTreeWith(UniqueAssociationComparator)
-	subTree.Put(subKey, value)
+	subTree := newAssociationSet()
+	subTree.Put(subKey, pos)
 	parent.Put(outerKey, subTree)
 }
 
@@ -393,22 +393,22 @@ func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 	return nil
 }
 
-func (ic *Collection) getAssociations(level int, entryID uint64) *TieTree {
+func (ic *Collection) getAssociations(level int, entryID uint64) *AssociationSet {
 	if lvl, ok := ic.levelAt(level); ok {
 		if set, found := lvl.associations.Get(entryID); found {
-			return set.(*TieTree)
+			return set.(*AssociationSet)
 		}
 	}
-	return NewTreeWith(UInt64Comparator)
+	return newAssociationSet()
 }
 
-func (ic *Collection) getReverseAssociations(level int, entryID uint64) *TieTree {
+func (ic *Collection) getReverseAssociations(level int, entryID uint64) *AssociationSet {
 	if lvl, ok := ic.levelAt(level); ok {
 		if set, found := lvl.reverseAssociations.Get(entryID); found {
-			return set.(*TieTree)
+			return set.(*AssociationSet)
 		}
 	}
-	return NewTreeWith(UInt64Comparator)
+	return newAssociationSet()
 }
 
 // Returns a copy of a full value
@@ -433,7 +433,7 @@ func (ic *Collection) getValueString(level int, entryID uint64) string {
 	return string(value)
 }
 
-func (ic *Collection) deleteAssociation(tree *TieTree, key UniqueAssociation, triplePos int64) {
+func (ic *Collection) deleteAssociation(tree *AssociationSet, key UniqueAssociation, triplePos int64) {
 	tree.Delete(key)
 
 	if ic.writeToDisk {
@@ -462,17 +462,10 @@ func (ic *Collection) uniqueAssociationExists(keyLevel int, key uint64, value1 u
 	return found
 }
 
-// assocPos returns the position stored for an association (disk offset, or arena
-// index in memory mode). The value is always an int64.
-func assocPos(value interface{}) int64 {
-	return value.(int64)
-}
-
-// resolveTriple turns an association subtree value (an int64 position) into a
-// Triple. In memory-only mode the position indexes into the arena. In disk-backed
-// mode it is an on-disk offset served from the cache, falling back to a disk read.
-func (ic *Collection) resolveTriple(value interface{}) (Triple, bool) {
-	pos := value.(int64)
+// resolveTriple turns an association position into a Triple. In memory-only mode
+// the position indexes into the arena. In disk-backed mode it is an on-disk
+// offset served from the cache, falling back to a disk read.
+func (ic *Collection) resolveTriple(pos int64) (Triple, bool) {
 	if pos < 0 {
 		return Triple{}, false
 	}
@@ -504,9 +497,9 @@ func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
 // loadTriples walks an association subtree and emits each Triple. It is a pure
 // in-memory traversal: memory-only mode reads resident Triples, disk mode
 // resolves positions through the cache/disk. No collection-wide serialization.
-func (ic *Collection) loadTriples(tree *TieTree, tripleChan chan Triple) {
-	tree.ForEach(func(_, value interface{}) {
-		if t, ok := ic.resolveTriple(value); ok {
+func (ic *Collection) loadTriples(tree *AssociationSet, tripleChan chan Triple) {
+	tree.ForEach(func(_ UniqueAssociation, pos int64) {
+		if t, ok := ic.resolveTriple(pos); ok {
 			tripleChan <- t
 		}
 	})
@@ -528,7 +521,7 @@ type SortOptions struct {
 	SortBy string // Value1 to sort by
 }
 
-func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (sorted []StringTriple, totalCount int) {
+func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOptions) (sorted []StringTriple, totalCount int) {
 	if o.Limit == 0 {
 		o.Limit = 1000
 	}
@@ -585,7 +578,7 @@ func (ic *Collection) Sort(tree *TieTree, value1Filter string, o SortOptions) (s
 	return sorted[o.Offset : o.Offset+o.Limit], count
 }
 
-func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
+func (ic *Collection) GetTripleSet(s *AssociationSet, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
 	result, _, totalCount = ic.GetPage(s, value1Filter, o)
 	return result, totalCount
 }
@@ -595,7 +588,7 @@ func (ic *Collection) GetTripleSet(s *TieTree, value1Filter string, o SortOption
 // the ordered, paginated slice (for clients that need a stable sequence),
 // together with the pre-pagination total. Building both from a single Sort
 // avoids sorting twice.
-func (ic *Collection) GetPage(s *TieTree, value1Filter string, o SortOptions) (result TripleSet, sorted []StringTriple, totalCount int) {
+func (ic *Collection) GetPage(s *AssociationSet, value1Filter string, o SortOptions) (result TripleSet, sorted []StringTriple, totalCount int) {
 	result = make(TripleSet)
 
 	sorted, totalCount = ic.Sort(s, value1Filter, o)
@@ -638,7 +631,7 @@ func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTr
 		return make(TripleSet), nil, 0, false
 	}
 
-	var set *TieTree
+	var set *AssociationSet
 	if q.Reverse {
 		set, found = ic.GetReverseAssociations(q.Include[0])
 	} else {
@@ -679,15 +672,14 @@ func (ic *Collection) ForEachTriple(do func(StringTriple)) {
 		if !ok {
 			continue
 		}
-		it := lvl.associations.Iterator()
-		for it.Next() {
-			entryID := it.Key().(uint64)
+		lvl.associations.ForEach(func(key, _ interface{}) {
+			entryID := key.(uint64)
 			subtree := ic.getAssociations(level, entryID)
 			triples, _ := ic.Sort(subtree, "", SortOptions{Limit: -1})
 			for _, t := range triples {
 				do(t)
 			}
-		}
+		})
 	}
 }
 

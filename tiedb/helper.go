@@ -107,23 +107,6 @@ func UniqueAssociationComparator(o1, o2 interface{}) int {
 	}
 }
 
-func AssociationComparator(o1, o2 interface{}) int {
-	k1 := o1.(UniqueAssociation)
-	k2 := o2.(UniqueAssociation)
-	switch {
-	case k1.AssociateTo > k2.AssociateTo:
-		return 1
-	case k1.AssociateTo < k2.AssociateTo:
-		return -1
-	// case k1.Relation > k2.Relation:
-	// 	return 1
-	// case k1.Relation < k2.Relation:
-	// 	return -1
-	default:
-		return 0
-	}
-}
-
 func PointerValueComparator(o1, o2 interface{}) int {
 	k1 := o1.(*[]byte)
 	k2 := o2.(*[]byte)
