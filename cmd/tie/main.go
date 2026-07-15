@@ -36,6 +36,8 @@ func main() {
 			cmdConf(),
 			cmdImport(),
 			cmdMount(),
+			cmdUpload(),
+			cmdDownload(),
 			cmdDump(),
 			cmdRestore(),
 		},

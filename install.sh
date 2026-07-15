@@ -11,15 +11,6 @@ install_cmd() {
     cd $root/cmd/tie-daemon
     go install
 
-    cd $root/cmd/tie-download
-    go install
-
-    cd $root/cmd/tie-upload
-    go install
-
-    cd $root/cmd/tie-upload
-    go install
-    
     cd $root/cmd/tie-handle
     go install
 

@@ -29,7 +29,7 @@ echo "second photo caption"          > "$TIE_SAMPLES/holiday-pics/pic2.txt"
 
 # upload_file <path> -> prints hash
 upload_file() {
-	"$TIE_BIN/tie-upload" "$1" -server "$TIE_FILEHOST_HOST" -insecure | awk 'NR==1{print $1}'
+	"$TIE_BIN/tie" upload "$1" --server "$TIE_FILEHOST_URL" | awk 'NR==1{print $1}'
 }
 
 # tag_common <hash> <filename> <size>
@@ -64,7 +64,7 @@ echo "  receipt.txt    -> $RECEIPT_HASH  [finance]"
 
 echo "== Uploading + tagging a directory (as an immutable tiedir blob) =="
 # Uploading a directory returns one hash per entry plus the dir blob hash last.
-DIR_HASH=$("$TIE_BIN/tie-upload" "$TIE_SAMPLES/holiday-pics" -server "$TIE_FILEHOST_HOST" -insecure | awk 'END{print $1}')
+DIR_HASH=$("$TIE_BIN/tie" upload "$TIE_SAMPLES/holiday-pics" --server "$TIE_FILEHOST_URL" | awk 'END{print $1}')
 tag_common "$DIR_HASH" holiday-pics 0
 tie_cli add "$DIR_HASH" tie-type directory >/dev/null
 add_tag "$DIR_HASH" vacation

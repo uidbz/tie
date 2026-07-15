@@ -9,8 +9,6 @@ cd "$TIE_SRC"
 go build -o "$TIE_BIN/tie"          ./cmd/tie
 go build -o "$TIE_BIN/tie-daemon"   ./cmd/tie-daemon
 go build -o "$TIE_BIN/tie-filehost" ./cmd/tie-filehost
-go build -o "$TIE_BIN/tie-upload"   ./cmd/tie-upload
-go build -o "$TIE_BIN/tie-download" ./cmd/tie-download
 
 echo "Built:"
 ls -1 "$TIE_BIN"

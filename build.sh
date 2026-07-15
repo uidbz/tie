@@ -14,15 +14,6 @@ build_cmd() {
     cd $root/cmd/tie-daemon
     go build  -o $output_dir
 
-    cd $root/cmd/tie-download
-    go build  -o $output_dir
-
-    cd $root/cmd/tie-upload
-    go build  -o $output_dir
-
-    cd $root/cmd/tie-upload
-    go build  -o $output_dir
-    
     cd $root/cmd/tie-handle
     go build  -o $output_dir
 

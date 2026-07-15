@@ -37,7 +37,7 @@ tear it all down at the end.
 
 | Script          | What it does |
 |-----------------|--------------|
-| `build.sh`      | Build `tie`, `tie-daemon`, `tie-filehost`, `tie-upload`, `tie-download` into `bin/`. |
+| `build.sh`      | Build `tie`, `tie-daemon`, `tie-filehost` into `bin/`. |
 | `start.sh`      | Start the daemon and filehost in the background (insecure HTTP), wait until both accept connections. |
 | `stop.sh`       | Unmount `mnt/` if mounted, then stop both services. |
 | `seed.sh`       | Create sample files, upload their bytes to the filehost, and write the tag triples the DB mount reads. |

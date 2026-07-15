@@ -14,10 +14,8 @@ a virtual filesystem.
 | Program        | What it does |
 |----------------|--------------|
 | `tie-daemon`   | Web service exposing a tie triple store over HTTP. |
-| `tie`          | CLI client for a `tie-daemon`: add/get/delete triples, import & tag files, dump/restore, and mount. |
+| `tie`          | CLI client for a `tie-daemon`: add/get/delete triples, import & tag files, upload/download, dump/restore, and mount. |
 | `tie-filehost` | Content-addressed file server. Stores file bytes and immutable directory (`tiedir`) blobs, addressed by highwayhash. |
-| `tie-upload`   | Upload files or directories to a `tie-filehost`. |
-| `tie-download` | Download files or directories from a `tie-filehost`. |
 | `tie-handle`   | Pipe content-addressed files through an external program (batch processing). |
 
 ## Packages

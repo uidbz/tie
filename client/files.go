@@ -46,6 +46,12 @@ func (tc *TieClient) Upload(hostName, file string) (*UploadResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	return UploadTo(host, file)
+}
+
+// UploadTo stores file (or directory) on an explicit filehost, bypassing config
+// lookup. Useful for one-off targets (e.g. a raw --server address).
+func UploadTo(host FileHost, file string) (*UploadResult, error) {
 	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: httpClientFor(host)})
 	result := &UploadResult{ErrorMsg: status.ErrorMsg}
 	for _, item := range status.UploadedItems {
@@ -67,5 +73,11 @@ func (tc *TieClient) Download(hostName, sourceHash, dest string) error {
 	if err != nil {
 		return err
 	}
+	return DownloadFrom(host, sourceHash, dest)
+}
+
+// DownloadFrom fetches sourceHash from an explicit filehost into dest,
+// bypassing config lookup.
+func DownloadFrom(host FileHost, sourceHash, dest string) error {
 	return getlib.DownloadFile(httpClientFor(host), host.URL, sourceHash, dest)
 }
