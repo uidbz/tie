@@ -33,9 +33,9 @@ const maxDepth = 128
 // it was requested under, i.e. the server returned the wrong or tampered bytes.
 var ErrChecksum = errors.New("getlib: downloaded content does not match its hash")
 
-type TieFunc interface {
-	Run(file io.Reader, relPath string) (err error)
-}
+// tieFunc consumes one regular file's verified content and its path relative to
+// the download root. execForEach invokes it for every file in the tree.
+type tieFunc func(file io.Reader, relPath string) error
 
 // get issues an HTTP GET using the provided client, falling back to
 // http.DefaultClient when nil. Pass a custom client to control TLS behavior
@@ -90,9 +90,24 @@ func readBlob(client *http.Client, url, sourceHash string) ([]byte, error) {
 }
 
 func DownloadFile(client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
-	d := Download{destination: destination}
+	writeFile := func(file io.Reader, relPath string) error {
+		fullpath := filepath.Join(destination, relPath)
+		dir := filepath.Dir(fullpath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return errors.New("Error making directories: " + err.Error())
+		}
+		dest, err := os.Create(fullpath)
+		if err != nil {
+			return err
+		}
+		defer dest.Close()
+		if _, err := io.Copy(dest, file); err != nil {
+			return err
+		}
+		return nil
+	}
 
-	return execForEach(client, url, sourceHash, &d, "", progress, 0)
+	return execForEach(client, url, sourceHash, writeFile, "", progress, 0)
 }
 
 // TotalSize returns the number of file bytes a download of sourceHash would
@@ -248,29 +263,6 @@ func writeFileAtomic(dir, dest string, data []byte) error {
 	return nil
 }
 
-type Download struct {
-	destination string
-}
-
-func (d *Download) Run(file io.Reader, relPath string) (err error) {
-	fullpath := filepath.Join(d.destination, relPath)
-	dir := filepath.Dir(fullpath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return errors.New("Error making directories: " + err.Error())
-	}
-	dest, err := os.Create(fullpath)
-	if err != nil {
-		return err
-	}
-	defer dest.Close()
-	_, err2 := io.Copy(dest, file)
-	if err2 != nil {
-		return err2
-	}
-
-	return nil
-}
-
 func IsDir(client *http.Client, url string, sourceHash string) (isDir bool, err error) {
 	resp, err := fetch(client, url, sourceHash)
 	if err != nil {
@@ -308,11 +300,11 @@ func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Rea
 	return bytes.NewReader(data), nil
 }
 
-// execForEach walks the tree rooted at sourceHash, invoking funcToExec.Run for
-// every regular file with its content and path relative to relPath. File bodies
-// are verified against their content address before Run sees them; a mismatch,
-// truncation, or over-deep tree aborts with an error.
-func execForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer, depth int) error {
+// execForEach walks the tree rooted at sourceHash, invoking fn for every regular
+// file with its content and path relative to relPath. File bodies are verified
+// against their content address before fn sees them; a mismatch, truncation, or
+// over-deep tree aborts with an error.
+func execForEach(client *http.Client, url string, sourceHash string, fn tieFunc, relPath string, progress io.Writer, depth int) error {
 	if depth > maxDepth {
 		return fmt.Errorf("getlib: directory nesting exceeds %d levels (possible malicious manifest)", maxDepth)
 	}
@@ -345,7 +337,7 @@ func execForEach(client *http.Client, url string, sourceHash string, funcToExec 
 		if progress != nil {
 			consumer = io.TeeReader(vr, progress)
 		}
-		if err := funcToExec.Run(consumer, relPath); err != nil {
+		if err := fn(consumer, relPath); err != nil {
 			return err
 		}
 		return vr.checkComplete()
@@ -362,7 +354,7 @@ func execForEach(client *http.Client, url string, sourceHash string, funcToExec 
 		if !ok {
 			continue
 		}
-		if err := execForEach(client, url, entry.Hash, funcToExec, filepath.Join(relPath, entry.Filename), progress, depth+1); err != nil {
+		if err := execForEach(client, url, entry.Hash, fn, filepath.Join(relPath, entry.Filename), progress, depth+1); err != nil {
 			return err
 		}
 	}
