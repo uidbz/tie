@@ -293,7 +293,7 @@ func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec 
 		scanner := bufio.NewScanner(&buf)
 		for scanner.Scan() {
 			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
-				ExecForEach(client, url, entry.Hash, funcToExec, entry.Filename, progress)
+				ExecForEach(client, url, entry.Hash, funcToExec, filepath.Join(relPath, entry.Filename), progress)
 			}
 		}
 		if err := scanner.Err(); err != nil {

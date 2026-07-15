@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"syscall"
@@ -293,7 +292,7 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
 				child := &node{
 					Hash:  entry.Hash,
-					Name:  filepath.Base(entry.Filename),
+					Name:  entry.Filename,
 					Size:  entry.Size,
 					State: state,
 				}

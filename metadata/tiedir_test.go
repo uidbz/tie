@@ -34,10 +34,19 @@ func TestDirEntryRoundTrip(t *testing.T) {
 }
 
 func TestParseDirLineRejectsMalformed(t *testing.T) {
+	head := EncodeHead([]byte("x"))
 	cases := []string{
 		"only\ttwo",
-		"a\tb\tnotanumber\t" + EncodeHead([]byte("x")),
+		"a\tb\tnotanumber\t" + head,
 		"a\tb\t5\t!!!not-base64!!!",
+		// Filename must be a single component: reject traversal attempts.
+		"a\t..\t5\t" + head,
+		"a\t.\t5\t" + head,
+		"a\t\t5\t" + head,
+		"a\t../etc/passwd\t5\t" + head,
+		"a\tsub/child\t5\t" + head,
+		"a\t/abs\t5\t" + head,
+		"a\tsub\\child\t5\t" + head,
 	}
 	for _, c := range cases {
 		if _, ok := ParseDirLine(c); ok {

@@ -276,11 +276,14 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 		var hashes string = metadata.DirHeader
 		for _, x := range entries {
 			abs := filepath.Join(file, x.Name())
-			abs = strings.ReplaceAll(abs, "\\", "/") // Replace Windows folder separator with slash
 			status.upload(url, abs, config)
+			// Store only the child's own name; the tree's location is supplied
+			// by the caller at checkout. This keeps a directory's hash a pure
+			// function of its contents, so identical trees dedupe regardless of
+			// where they were uploaded from.
 			hashes += metadata.DirEntry{
 				Hash:     status.LastItem.Hash,
-				Filename: status.LastItem.Filename,
+				Filename: x.Name(),
 				Size:     status.LastItem.Size,
 				Head:     status.LastItem.Head,
 			}.Line()

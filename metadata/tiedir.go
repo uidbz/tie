@@ -35,9 +35,15 @@ func (e DirEntry) Line() string {
 }
 
 // ParseDirLine parses one tiedir-v2 line. It returns false for malformed lines.
+// The filename must be a single path component: entries store a child's own
+// name, never a path, so a crafted manifest cannot escape the checkout root via
+// "..", an absolute path, or a nested separator.
 func ParseDirLine(line string) (DirEntry, bool) {
 	parts := strings.Split(line, "\t")
 	if len(parts) != 4 {
+		return DirEntry{}, false
+	}
+	if !isValidEntryName(parts[1]) {
 		return DirEntry{}, false
 	}
 	size, err := strconv.Atoi(parts[2])
@@ -49,6 +55,15 @@ func ParseDirLine(line string) (DirEntry, bool) {
 		return DirEntry{}, false
 	}
 	return DirEntry{Hash: parts[0], Filename: parts[1], Size: size, Head: head}, true
+}
+
+// isValidEntryName reports whether name is a safe single path component: no
+// separators, not empty, and not the "." / ".." traversal names.
+func isValidEntryName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, "/\\")
 }
 
 func EncodeHead(head []byte) string {
