@@ -28,6 +28,14 @@ const (
 	TYPE_DELETE      = 10
 	TYPE_ENTRY       = 11
 	TYPE_ASSOCIATION = 12
+	TYPE_HASH        = 13
+
+	// HASH_LEVEL is a sentinel level marking an entry ID that lives in the
+	// whole-value hash store rather than in any trie level. A value routed
+	// through BlobPolicy is stored as one 32-byte record and its Triple level
+	// fields carry HASH_LEVEL, so getValue resolves it from hashEntries instead
+	// of walking ParentId links.
+	HASH_LEVEL = -1
 
 	// ASSOCIATED = "associated"
 )
@@ -69,6 +77,29 @@ type Collection struct {
 	levels     []entryLevel
 	levelCount int
 
+	// blobPolicy, when non-nil, diverts matching values (e.g. content-address
+	// hashes) out of the chunk trie and into the whole-value hash store below.
+	// Copied from TieTree at initialize time; nil keeps the original trie-only
+	// behavior. See [[BlobPolicy]].
+	blobPolicy *BlobPolicy
+
+	// hashEntries/hashValues back the whole-value hash store used when blobPolicy
+	// matches. hashEntries maps an entry ID to its raw bytes; hashValues is the
+	// reverse map used to dedup a value to its existing ID. Both are nil unless
+	// blobPolicy is set. Entries here carry the HASH_LEVEL sentinel, not a real
+	// trie level.
+	hashEntries *lockedTree[uint64, [32]byte]
+	hashValues  *lockedTree[[32]byte, uint64]
+
+	// hashAssociations/hashReverseAssociations hold the association subtrees for
+	// triples whose key (resp. value2) is a hash entry. Hash entries carry
+	// HASH_LEVEL rather than a real trie level, so their associations cannot live
+	// in the per-level entryLevel trees; these dedicated trees are their home.
+	// Entry IDs are collection-global, so keying by ID here never collides with a
+	// per-level tree. Both nil unless blobPolicy is set.
+	hashAssociations        *lockedTree[uint64, *AssociationSet]
+	hashReverseAssociations *lockedTree[uint64, *AssociationSet]
+
 	// reverseRelations, when non-nil, restricts which relations (value1) get a
 	// reverse-association index. A nil set means index every relation in reverse
 	// (the original behavior). Limiting this near-halves association memory on
@@ -104,6 +135,17 @@ type Collection struct {
 type UniqueValue struct {
 	ParentId uint64
 	Value    [SIZE_VALUE]byte
+}
+
+// BlobPolicy, when non-nil on a Collection, routes matching values to a
+// whole-value hash entry instead of the 24-byte-chunk trie. Encode maps a value
+// string to its raw bytes, returning ok=false for values that should use the
+// trie; Decode is the inverse, reconstructing the string from stored bytes. Both
+// must be deterministic on the value alone so a value's identity is stable across
+// Adds (the same hash is the Key of many triples).
+type BlobPolicy struct {
+	Encode func(value string) (raw []byte, ok bool)
+	Decode func(raw []byte) string
 }
 
 type UniqueAssociation struct {
@@ -223,6 +265,7 @@ type FileMod struct {
 	Triple      *Triple
 	EntryID     uint64
 	UniqueValue *UniqueValue
+	HashValue   [32]byte
 }
 
 type ReadRequest struct {
@@ -247,6 +290,27 @@ func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
 	out = append(out, id[:]...)
 	out = append(out, parentId[:]...)
 	out = append(out, uv.Value[:]...)
+
+	return out
+}
+
+// HashToBytes serializes a whole-value hash entry into the same 50-byte frame as
+// the other record types: datatype(2) | level(8) | entryID(8) | raw hash(32).
+// The 32-byte hash occupies the contiguous parentId+value region of the frame,
+// so ENTRY_SIZE is unchanged. The level field is always HASH_LEVEL.
+func HashToBytes(entryID uint64, raw [32]byte) []byte {
+	datatype := make([]byte, SIZE_DATATYPE)
+	levelBytes := make([]byte, SIZE_LEVEL)
+	id := make([]byte, SIZE_ID)
+
+	level := int64(HASH_LEVEL)
+	binary.LittleEndian.PutUint16(datatype, TYPE_HASH)
+	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
+	binary.LittleEndian.PutUint64(id, entryID)
+
+	out := append(datatype[:], levelBytes[:]...)
+	out = append(out, id[:]...)
+	out = append(out, raw[:]...)
 
 	return out
 }

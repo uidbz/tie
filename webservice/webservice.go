@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
 	"github.com/caddyserver/certmagic"
 	"github.com/julienschmidt/httprouter"
@@ -88,6 +89,7 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	ws.requests = requests
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
+	ws.db.SetBlobPolicy(metadata.HexHashBlobPolicy())
 	ws.validationCodes = make(map[string]string)
 	ws.validationTimers = make(map[string]*time.Timer)
 	rand.Seed(time.Now().UnixNano())

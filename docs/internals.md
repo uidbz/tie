@@ -60,6 +60,32 @@ walks back up `ParentId` links to reassemble the full string from an ID+level.
 Consequence: a value shared by many triples (a media type, a tag name) is stored
 once. Long, unique values (paths, filenames) cost one entry per 24-byte chunk.
 
+### Whole-value hash entries (blob policy)
+
+High-entropy values are the trie's worst case: a 64-char hex content hash shares
+no prefixes with any other, so it mints 3 fresh chunk entries (6 rbt nodes) and
+the trie's dedup buys nothing. A `Collection` may carry a `BlobPolicy`
+(`datastructures.go`) that diverts such values out of the chunk trie into a
+whole-value hash store — one `id ↔ [32]byte` entry instead of three chunks.
+
+- `BlobPolicy.Encode(value) (raw []byte, ok bool)` decides, deterministically on
+  the value alone, whether a value is an opaque fixed-size blob and returns its
+  raw bytes; `Decode` is the inverse. Determinism matters: the same hash is the
+  `Key` of many triples, so inconsistent routing would mint two IDs for one value.
+- Only encodings of exactly 32 bytes take the hash path; anything else falls back
+  to the trie, so the fixed 50-byte frame is never violated.
+- `tiedb` stays domain-agnostic — it only knows "some values are 32-byte blobs."
+  `metadata.HexHashBlobPolicy` supplies the content-hash implementation (reusing
+  `IsHexHash` + `hex`), wired via `TieTree.SetBlobPolicy` at DB construction.
+  `nil` (the default) keeps the trie-only behavior, so existing collections and
+  generic `tiedb` users are unaffected.
+
+Hash entries carry the `HASH_LEVEL` sentinel instead of a real trie level, so
+their associations live in dedicated `hashAssociations`/`hashReverseAssociations`
+trees rather than a per-level `entryLevel`. Entry IDs are collection-global, so
+keying those trees by ID never collides. `getValueString` reconstructs the string
+via `BlobPolicy.Decode` when the level is `HASH_LEVEL`.
+
 ## Associations: forward and reverse indexes
 
 A triple's association is stored keyed by entry IDs, not strings. Per level
@@ -124,6 +150,11 @@ Record types (`datastructures.go`):
   entry_id(key) | value2_level | value2 | value1_level | value1`. Written by
   `Triple.toBytes`, parsed by `bufToAssociation`. Note value2 precedes value1 on
   disk.
+- `TYPE_HASH` (13) — one whole-value hash entry (see the blob policy above).
+  Layout: `datatype | level | entryID | raw hash[32]`. The 32 raw bytes occupy
+  the frame's contiguous `parentID(8) + value(24)` region, so `ENTRY_SIZE` is
+  unchanged; the level field is always `HASH_LEVEL`. Written by `HashToBytes`,
+  parsed by `bufToHash`, loaded in pass 1 (it is an entry, not an association).
 - `TYPE_DELETE` (10) — a tombstone. `deleteAssociation` overwrites a record's
   first 2 bytes with `TYPE_DELETE`; the slot's offset is pushed onto the
   `freespace` channel for reuse by the next add.
@@ -221,10 +252,13 @@ relations. Collections that never set an allowlist keep full reverse generality.
   tighter node layout (dropping some of the child/parent/color pointer overhead)
   was considered and declined — the remaining per-node cost is small next to what
   boxing removal already banked.
-- Record layout: highwayhash keys are stored as 64-char hex → 3 trie chunks per
-  hash; raw 32-byte hashes would be 2. Changing `SIZE_VALUE` or storing raw
-  bytes is a breaking `.tie` format change (migrate via `tie dump` → `tie
-  restore`), deliberately deferred.
+- Record layout: highwayhash keys used to be stored as 64-char hex → 3 trie
+  chunks per hash. The `TYPE_HASH` record + blob policy (above) now stores them
+  as one raw 32-byte entry, reusing the existing 50-byte frame (no `SIZE_VALUE`
+  change). This is opt-in via `SetBlobPolicy`; a store written without the policy
+  keeps hashes as trie chunks, and the two forms can coexist in one file since
+  the record type gates interpretation. Migrate an old store to the compact form
+  via `tie dump` → restore into a policy-enabled DB.
 - A lazy reverse index (build a value's reverse subtree on first reverse query
   and cache it) was considered as an alternative that keeps full generality at
   the cost of an O(n) first query; the opt-in approach was chosen because this

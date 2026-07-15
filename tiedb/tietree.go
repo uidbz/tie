@@ -19,6 +19,19 @@ type TieTree struct {
 	// defaultReverseRelations is applied to every Collection this DB creates.
 	// nil means "index all relations in reverse"; see Collection.reverseRelations.
 	defaultReverseRelations []string
+
+	// blobPolicy is applied to every Collection this DB creates. nil keeps the
+	// trie-only behavior; see Collection.blobPolicy and [[BlobPolicy]].
+	blobPolicy *BlobPolicy
+}
+
+// SetBlobPolicy sets a whole-value blob policy applied to newly created
+// collections: matching values (e.g. content-address hashes) are stored as a
+// single hash entry instead of being chunked into the trie. Pass nil for the
+// default trie-only behavior. Call before collections are created; existing
+// collections are unaffected.
+func (tree *TieTree) SetBlobPolicy(p *BlobPolicy) {
+	tree.blobPolicy = p
 }
 
 // SetDefaultReverseRelations restricts which relations (value1) newly created
@@ -56,6 +69,7 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.dBName = dbname
 	ic.dBFullPath = path + "/" + dbname + ".tie"
 	ic.SetReverseRelations(db.defaultReverseRelations)
+	ic.SetBlobPolicy(db.blobPolicy)
 
 	if db.writeToDisk {
 		fmt.Fprintln(os.Stderr, "Initializing", ic.dBFullPath)

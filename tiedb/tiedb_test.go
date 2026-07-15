@@ -1,6 +1,8 @@
 package tiedb
 
 import (
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -319,4 +321,172 @@ func padded(i int) string {
 		s = "0" + s
 	}
 	return s
+}
+
+// hexHashPolicy is a test blob policy matching 64-char lowercase hex strings and
+// storing them as their raw 32 bytes. It mirrors metadata.HexHashBlobPolicy
+// without importing that package (which would create a cycle back into tiedb).
+func hexHashPolicy() *BlobPolicy {
+	isHex := func(s string) bool {
+		if len(s) != 64 {
+			return false
+		}
+		for i := 0; i < len(s); i++ {
+			c := s[i]
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				return false
+			}
+		}
+		return true
+	}
+	return &BlobPolicy{
+		Encode: func(v string) ([]byte, bool) {
+			if !isHex(v) {
+				return nil, false
+			}
+			raw, err := hex.DecodeString(v)
+			if err != nil {
+				return nil, false
+			}
+			return raw, true
+		},
+		Decode: func(raw []byte) string { return hex.EncodeToString(raw) },
+	}
+}
+
+// hashN returns a distinct well-formed 64-char hex hash for index n.
+func hashN(n int) string {
+	return fmt.Sprintf("%064x", n)
+}
+
+// TestBlobPolicyHashRoundTrip: a hash used as key round-trips through Add/Get,
+// coexisting with trie-based relation and value2. It is stored at HASH_LEVEL, so
+// this exercises the sentinel path end to end in memory mode.
+func TestBlobPolicyHashRoundTrip(t *testing.T) {
+	db := NewDB(false)
+	db.SetBlobPolicy(hexHashPolicy())
+	col := db.GetCollection(CollectionKey{"mem", "hash"})
+
+	h := hashN(1)
+	col.Add(h, "tag", "sometag")
+	col.Add(h, "filename", "myfile.ext")
+	col.Sync()
+
+	// The hash entry is at the sentinel level, not a real trie level.
+	if _, level, found := col.getEntryFromString(h); !found || level != HASH_LEVEL {
+		t.Fatalf("getEntryFromString(hash) = level %d found %v, want level %d found true", level, found, HASH_LEVEL)
+	}
+	if got := getVal2s(t, col, h, "tag"); !got["sometag"] {
+		t.Errorf("tag lookup on hash = %v, want sometag", got)
+	}
+	if got := getVal2s(t, col, h, "filename"); !got["myfile.ext"] {
+		t.Errorf("filename lookup on hash = %v, want myfile.ext", got)
+	}
+}
+
+// TestBlobPolicyDedup: adding the same hash twice must intern to a single entry
+// ID (the trie's worst case collapses to one entry here).
+func TestBlobPolicyDedup(t *testing.T) {
+	db := NewDB(false)
+	db.SetBlobPolicy(hexHashPolicy())
+	col := db.GetCollection(CollectionKey{"mem", "dedup"})
+
+	h := hashN(7)
+	col.Add(h, "tag", "a")
+	col.Add(h, "tag", "b")
+	col.Sync()
+
+	if got := col.hashEntries.Size(); got != 1 {
+		t.Errorf("hashEntries size = %d, want 1 (same hash must dedup)", got)
+	}
+	if got := getVal2s(t, col, h, "tag"); !got["a"] || !got["b"] {
+		t.Errorf("tag lookup on hash = %v, want both a and b", got)
+	}
+}
+
+// TestBlobPolicyReverseOnHashValue2: a hash used as value2 gets a reverse index
+// in the dedicated hash reverse tree, and reverse lookup resolves it back.
+func TestBlobPolicyReverseOnHashValue2(t *testing.T) {
+	db := NewDB(false)
+	db.SetBlobPolicy(hexHashPolicy())
+	col := db.GetCollection(CollectionKey{"mem", "revhash"})
+
+	h := hashN(3)
+	col.Add("parentdir", "child", h) // hash is value2 here
+	col.Sync()
+
+	if got := reverseKeys(t, col, h); !got["parentdir"] {
+		t.Errorf("reverse lookup on hash value2 = %v, want parentdir", got)
+	}
+}
+
+// TestBlobPolicySurvivesReload: hash entries and their associations persist
+// across a disk close/reopen via the TYPE_HASH loader path.
+func TestBlobPolicySurvivesReload(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "hashreload")
+
+	db := NewDB(true)
+	db.SetBlobPolicy(hexHashPolicy())
+	col := db.GetCollection(CollectionKey{dbPath, "col"})
+	h := hashN(42)
+	col.Add(h, "tag", "sometag")
+	col.Add("parentdir", "child", h)
+	col.Sync()
+	col.closeDB()
+
+	db = NewDB(true)
+	db.SetBlobPolicy(hexHashPolicy())
+	col = db.GetCollection(CollectionKey{dbPath, "col"})
+
+	if got := getVal2s(t, col, h, "tag"); !got["sometag"] {
+		t.Errorf("after reload, tag lookup on hash = %v, want sometag", got)
+	}
+	if got := reverseKeys(t, col, h); !got["parentdir"] {
+		t.Errorf("after reload, reverse lookup on hash = %v, want parentdir", got)
+	}
+}
+
+// TestBlobPolicyExportRoundTrip: ForEachTriple must emit triples keyed by a hash
+// (which live outside the per-level trees) so full-collection export is complete.
+func TestBlobPolicyExportRoundTrip(t *testing.T) {
+	db := NewDB(false)
+	db.SetBlobPolicy(hexHashPolicy())
+	col := db.GetCollection(CollectionKey{"mem", "export"})
+
+	h := hashN(9)
+	col.Add(h, "tag", "sometag")
+	col.Sync()
+
+	var seen bool
+	col.ForEachTriple(func(tr StringTriple) {
+		if tr.Key == h && tr.Value1 == "tag" && tr.Value2 == "sometag" {
+			seen = true
+		}
+	})
+	if !seen {
+		t.Error("ForEachTriple did not emit the hash-keyed triple")
+	}
+}
+
+// TestNilBlobPolicyParity: with no policy, a 64-hex string is stored via the trie
+// exactly as before (never at HASH_LEVEL), so existing DBs are unaffected.
+func TestNilBlobPolicyParity(t *testing.T) {
+	db := NewDB(false)
+	col := db.GetCollection(CollectionKey{"mem", "nopolicy"})
+
+	h := hashN(5)
+	col.Add(h, "tag", "sometag")
+	col.Sync()
+
+	_, level, found := col.getEntryFromString(h)
+	if !found {
+		t.Fatal("hash string not found without policy")
+	}
+	if level == HASH_LEVEL {
+		t.Errorf("without a policy the hash must use the trie, got HASH_LEVEL")
+	}
+	if got := getVal2s(t, col, h, "tag"); !got["sometag"] {
+		t.Errorf("tag lookup = %v, want sometag", got)
+	}
 }

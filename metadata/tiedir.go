@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"git.sr.ht/~uid/tie/tiedb"
 	"github.com/h2non/filetype"
 	"github.com/minio/highwayhash"
 )
@@ -52,6 +53,29 @@ func HashReader(r io.Reader) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// HexHashBlobPolicy returns the tiedb blob policy that stores content-address
+// hashes as raw 32-byte entries instead of chunking their 64-char hex form into
+// the trie. A hash is the worst case for the chunk trie (no shared prefixes, 3
+// entries per hash); this collapses it to one. Encode matches only well-formed
+// hex hashes; Decode re-hex-encodes the raw bytes back to the stored string.
+func HexHashBlobPolicy() *tiedb.BlobPolicy {
+	return &tiedb.BlobPolicy{
+		Encode: func(value string) ([]byte, bool) {
+			if !IsHexHash(value) {
+				return nil, false
+			}
+			raw, err := hex.DecodeString(value)
+			if err != nil {
+				return nil, false
+			}
+			return raw, true
+		},
+		Decode: func(raw []byte) string {
+			return hex.EncodeToString(raw)
+		},
+	}
 }
 
 // IsHexHash reports whether s is a well-formed content address: exactly 64

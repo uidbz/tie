@@ -1,6 +1,8 @@
 package tiedb
 
 import (
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"runtime"
@@ -19,6 +21,10 @@ func memStats() runtime.MemStats {
 }
 
 // hexKey fabricates a 64-char hex content-address-like key for index i.
+// NOTE: this is sequential zero-padded hex, so consecutive keys share long
+// prefixes and the chunk trie dedups them heavily — it does NOT reflect the
+// prefix-disjoint shape of real content hashes. Use hexKeySpread (TIE_PROF_RAND)
+// to measure the blob-policy win against realistic random hashes.
 func hexKey(i int) string {
 	const hexdigits = "0123456789abcdef"
 	b := make([]byte, 64)
@@ -28,6 +34,24 @@ func hexKey(i int) string {
 		v >>= 4
 	}
 	return string(b)
+}
+
+// hexKeySpread returns a deterministic, prefix-disjoint 64-char hex key for
+// index i by hashing i across all 32 bytes with splitmix64. Distinct i values
+// differ from the first chunk, mimicking real content hashes (the trie's worst
+// case) so the whole-value hash entry's 3->1 collapse is actually exercised.
+func hexKeySpread(i int) string {
+	var raw [32]byte
+	x := uint64(i) + 0x9e3779b97f4a7c15
+	for k := 0; k < 4; k++ {
+		z := x
+		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+		z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+		z = z ^ (z >> 31)
+		binary.LittleEndian.PutUint64(raw[k*8:], z)
+		x += 0x9e3779b97f4a7c15
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 // countAssocNodes walks the outer entry tree and sums the sizes of the inner
@@ -94,6 +118,13 @@ func TestAssociationMemoryProfile(t *testing.T) {
 	default:
 		db.SetDefaultReverseRelations([]string{reverse})
 	}
+	// TIE_PROF_BLOB=1 stores the hex keys as whole 32-byte hash entries (1 entry
+	// each) instead of chunking them into the trie (3 entries each), to measure
+	// the entry-store saving.
+	blob := os.Getenv("TIE_PROF_BLOB") != ""
+	if blob {
+		db.SetBlobPolicy(hexHashPolicy())
+	}
 
 	dbDir := "mem"
 	if writeToDisk {
@@ -101,10 +132,18 @@ func TestAssociationMemoryProfile(t *testing.T) {
 	}
 	col := db.GetCollection(CollectionKey{dbDir, "profile"})
 
+	// TIE_PROF_RAND=1 uses prefix-disjoint keys (realistic content hashes); the
+	// default sequential keys share prefixes and understate the blob-policy win.
+	spread := os.Getenv("TIE_PROF_RAND") != ""
+	keyFn := hexKey
+	if spread {
+		keyFn = hexKeySpread
+	}
+
 	before := memStats()
 
 	for i := 0; i < n; i++ {
-		key := hexKey(i)
+		key := keyFn(i)
 		rel := relNames[i%rels]
 		col.Add(key, rel, "value"+strconv.Itoa(i))
 	}
@@ -125,8 +164,18 @@ func TestAssociationMemoryProfile(t *testing.T) {
 	heapDelta := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	objDelta := int64(after.HeapObjects) - int64(before.HeapObjects)
 
+	var trieEntries int
+	for i := range col.levels {
+		trieEntries += col.levels[i].entries.Size()
+	}
+	hashEntries := 0
+	if col.hashEntries != nil {
+		hashEntries = col.hashEntries.Size()
+	}
+
 	t.Logf("=== association memory profile ===")
-	t.Logf("mode=%s reverse=%s N=%d relations=%d", mode, reverse, n, rels)
+	t.Logf("mode=%s reverse=%s N=%d relations=%d blob=%v", mode, reverse, n, rels, blob)
+	t.Logf("entries: trie chunk entries=%d  whole-value hash entries=%d", trieEntries, hashEntries)
 	t.Logf("forward index:  outer entries=%d  inner assoc nodes=%d", outer, inner)
 	t.Logf("reverse index:  outer entries=%d  inner assoc nodes=%d", rOuter, rInner)
 	t.Logf("HeapAlloc:   %s -> %s  (delta %s)",

@@ -70,6 +70,11 @@ func uint64Compare(a, b uint64) int {
 	}
 }
 
+// hashCompare orders whole-value hash keys by raw bytes.
+func hashCompare(a, b [32]byte) int {
+	return bytes.Compare(a[:], b[:])
+}
+
 // uniqueValueCompare orders UniqueValue by ParentId then raw value bytes.
 func uniqueValueCompare(a, b *UniqueValue) int {
 	switch {

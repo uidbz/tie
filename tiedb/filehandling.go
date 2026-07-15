@@ -36,6 +36,17 @@ func (ic *Collection) bufToEntry(buf [ENTRY_SIZE]byte) (level int, entryID uint6
 	return level, entryID, uv
 }
 
+// bufToHash decodes a TYPE_HASH record: the entry ID followed by the 32 raw
+// hash bytes that occupy the frame's parentId+value region. The level field is
+// always HASH_LEVEL and is not read back.
+func (ic *Collection) bufToHash(buf [ENTRY_SIZE]byte) (entryID uint64, raw [32]byte) {
+	last := SIZE_DATATYPE + SIZE_LEVEL
+	next := last + SIZE_ID
+	entryID = binary.LittleEndian.Uint64(buf[last:next])
+	raw = [32]byte(buf[next : next+32])
+	return entryID, raw
+}
+
 func (ic *Collection) bufToAssociation(buf [ENTRY_SIZE]byte) (Triple, error) {
 	var a Triple
 	if dt := binary.LittleEndian.Uint16(buf[:SIZE_DATATYPE]); dt != TYPE_ASSOCIATION {
@@ -86,6 +97,10 @@ func (ic *Collection) loadEntries(rawDataToLoad chan RawDataEntry, wg *sync.Wait
 			}
 			ic.totalEntriesMutex.Unlock()
 			ic.insertEntry(level, entryID, uv)
+
+		case TYPE_HASH:
+			entryID, raw := ic.bufToHash(entry.Data)
+			ic.loadHash(entryID, raw)
 
 		case TYPE_DELETE:
 			if len(ic.freespace) < MaxFreespace {
@@ -298,6 +313,8 @@ func (ic *Collection) dBWriter() {
 						ic.finishedAdding.Done()
 					case TYPE_ENTRY:
 						n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)
+					case TYPE_HASH:
+						n, err = db.WriteAt(HashToBytes(file_mod.EntryID, file_mod.HashValue), pos)
 					default:
 						panic("Wrong EntryType provided for DB writer.")
 					}

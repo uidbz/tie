@@ -22,6 +22,93 @@ func (ic *Collection) SetReverseRelations(relations []string) {
 	ic.reverseRelations = set
 }
 
+// SetBlobPolicy installs a whole-value blob policy on this collection and
+// allocates the backing hash store. Pass nil to keep the trie-only behavior. See
+// [[BlobPolicy]]. Call before values are inserted.
+func (ic *Collection) SetBlobPolicy(p *BlobPolicy) {
+	ic.blobPolicy = p
+	if p == nil {
+		ic.hashEntries = nil
+		ic.hashValues = nil
+		return
+	}
+	ic.hashEntries = newLockedTree[uint64, [32]byte](uint64Compare)
+	ic.hashValues = newLockedTree[[32]byte, uint64](hashCompare)
+	ic.hashAssociations = newLockedTree[uint64, *AssociationSet](uint64Compare)
+	ic.hashReverseAssociations = newLockedTree[uint64, *AssociationSet](uint64Compare)
+}
+
+// associationsTree returns the forward-association tree housing associations
+// keyed by an entry at level: the per-level tree, or the dedicated hash tree for
+// HASH_LEVEL entries. The bool is false when no such tree exists.
+func (ic *Collection) associationsTree(level int) (*lockedTree[uint64, *AssociationSet], bool) {
+	if level == HASH_LEVEL {
+		return ic.hashAssociations, ic.hashAssociations != nil
+	}
+	if lvl, ok := ic.levelAt(level); ok {
+		return lvl.associations, true
+	}
+	return nil, false
+}
+
+// reverseAssociationsTree is the reverse-index counterpart of associationsTree.
+func (ic *Collection) reverseAssociationsTree(level int) (*lockedTree[uint64, *AssociationSet], bool) {
+	if level == HASH_LEVEL {
+		return ic.hashReverseAssociations, ic.hashReverseAssociations != nil
+	}
+	if lvl, ok := ic.levelAt(level); ok {
+		return lvl.reverseAssociations, true
+	}
+	return nil, false
+}
+
+// insertHash stores raw under a fresh ID (or returns the existing ID when the
+// value is already interned) and queues its TYPE_HASH record in disk mode. The
+// caller holds changeMutex.
+func (ic *Collection) insertHash(raw [32]byte) uint64 {
+	if id, found := ic.hashValues.Get(raw); found {
+		return id
+	}
+	id := ic.nextID()
+	ic.hashEntries.Put(id, raw)
+	ic.hashValues.Put(raw, id)
+	if ic.writeToDisk {
+		ic.dBWriteQueue <- FileMod{
+			EntryType: TYPE_HASH,
+			Mode:      FILE_ADD,
+			EntryID:   id,
+			HashValue: raw,
+		}
+	}
+	return id
+}
+
+// loadHash reinserts a hash entry read from disk, keeping totalEntries in step
+// with the highest seen ID (mirrors the TYPE_ENTRY load path).
+func (ic *Collection) loadHash(entryID uint64, raw [32]byte) {
+	ic.totalEntriesMutex.Lock()
+	if entryID > ic.totalEntries {
+		ic.totalEntries = entryID
+	}
+	ic.totalEntriesMutex.Unlock()
+	ic.hashEntries.Put(entryID, raw)
+	ic.hashValues.Put(raw, entryID)
+}
+
+// asBlob returns the raw bytes for value when the blob policy matches it and the
+// bytes fit the fixed 32-byte hash slot. A policy match whose encoding is not 32
+// bytes falls through to the trie rather than corrupting the fixed frame.
+func (ic *Collection) asBlob(value string) ([32]byte, bool) {
+	if ic.blobPolicy == nil {
+		return [32]byte{}, false
+	}
+	raw, ok := ic.blobPolicy.Encode(value)
+	if !ok || len(raw) != 32 {
+		return [32]byte{}, false
+	}
+	return [32]byte(raw), true
+}
+
 // shouldBuildReverse reports whether a triple's relation (value1) should get a
 // reverse-association node. A nil reverseRelations set means index everything.
 func (ic *Collection) shouldBuildReverse(a *Triple) bool {
@@ -235,6 +322,10 @@ func (ic *Collection) insert(value string) (entryID uint64, level int) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
 
+	if raw, ok := ic.asBlob(value); ok {
+		return ic.insertHash(raw), HASH_LEVEL
+	}
+
 	var lastParentID uint64
 	bytes := []byte(value)
 	checkExistance := true
@@ -264,6 +355,13 @@ func (ic *Collection) insert(value string) (entryID uint64, level int) {
 }
 
 func (ic *Collection) getEntryFromString(value string) (entryID uint64, level int, found bool) {
+	if raw, ok := ic.asBlob(value); ok {
+		if id, exists := ic.hashValues.Get(raw); exists {
+			return id, HASH_LEVEL, true
+		}
+		return 0, 0, false
+	}
+
 	bytes := []byte(value)
 
 	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
@@ -361,16 +459,19 @@ func putAssoc(parent *lockedTree[uint64, *AssociationSet], outerKey uint64, subK
 }
 
 func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
-	if level > a.Value2Level {
+	// HASH_LEVEL entries live in the dedicated hash association trees, which
+	// always exist when blobPolicy is set; only real levels need growing.
+	if level != HASH_LEVEL {
 		ic.secureLevelInIndex(level)
-	} else {
+	}
+	if a.Value2Level != HASH_LEVEL {
 		ic.secureLevelInIndex(a.Value2Level)
 	}
 
 	// Association trees store the int64 position in both modes (disk offset, or
 	// arena index in memory mode), so nodes never box a Triple.
-	fwd, _ := ic.levelAt(level) // level exists after secureLevelInIndex
-	putAssoc(fwd.associations, a.Key,
+	fwd, _ := ic.associationsTree(level) // exists after secureLevelInIndex / hash store
+	putAssoc(fwd, a.Key,
 		UniqueAssociation{AssociateTo: a.Value2, Relation: a.Value1}, pos)
 
 	atomic.AddUint64(&ic.totalAssociations, 1)
@@ -379,8 +480,8 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 	if !ic.shouldBuildReverse(a) {
 		return
 	}
-	rev, _ := ic.levelAt(a.Value2Level) // level exists after secureLevelInIndex
-	putAssoc(rev.reverseAssociations, a.Value2,
+	rev, _ := ic.reverseAssociationsTree(a.Value2Level) // exists after secureLevelInIndex / hash store
+	putAssoc(rev, a.Value2,
 		UniqueAssociation{AssociateTo: a.Key, Relation: a.Value1}, pos)
 }
 
@@ -394,8 +495,8 @@ func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 }
 
 func (ic *Collection) getAssociations(level int, entryID uint64) *AssociationSet {
-	if lvl, ok := ic.levelAt(level); ok {
-		if set, found := lvl.associations.Get(entryID); found {
+	if tree, ok := ic.associationsTree(level); ok {
+		if set, found := tree.Get(entryID); found {
 			return set
 		}
 	}
@@ -403,8 +504,8 @@ func (ic *Collection) getAssociations(level int, entryID uint64) *AssociationSet
 }
 
 func (ic *Collection) getReverseAssociations(level int, entryID uint64) *AssociationSet {
-	if lvl, ok := ic.levelAt(level); ok {
-		if set, found := lvl.reverseAssociations.Get(entryID); found {
+	if tree, ok := ic.reverseAssociationsTree(level); ok {
+		if set, found := tree.Get(entryID); found {
 			return set
 		}
 	}
@@ -427,6 +528,13 @@ func (ic *Collection) getValue(level int, id uint64) []byte {
 }
 
 func (ic *Collection) getValueString(level int, entryID uint64) string {
+	if level == HASH_LEVEL {
+		if raw, found := ic.hashEntries.Get(entryID); found {
+			return ic.blobPolicy.Decode(raw[:])
+		}
+		return ""
+	}
+
 	value := ic.getValue(level, entryID)
 	value = bytes.Trim(value, "\x00")
 
@@ -664,6 +772,16 @@ func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTr
 // association subtree through the same Sort path used by Get, so the emitted
 // triples match query results exactly. Intended for full-collection export.
 func (ic *Collection) ForEachTriple(do func(StringTriple)) {
+	emit := func(level int, tree *lockedTree[uint64, *AssociationSet]) {
+		tree.ForEach(func(entryID uint64, _ *AssociationSet) {
+			subtree := ic.getAssociations(level, entryID)
+			triples, _ := ic.Sort(subtree, "", SortOptions{Limit: -1})
+			for _, t := range triples {
+				do(t)
+			}
+		})
+	}
+
 	ic.secureLevel.RLock()
 	levelCount := ic.levelCount
 	ic.secureLevel.RUnlock()
@@ -672,13 +790,11 @@ func (ic *Collection) ForEachTriple(do func(StringTriple)) {
 		if !ok {
 			continue
 		}
-		lvl.associations.ForEach(func(entryID uint64, _ *AssociationSet) {
-			subtree := ic.getAssociations(level, entryID)
-			triples, _ := ic.Sort(subtree, "", SortOptions{Limit: -1})
-			for _, t := range triples {
-				do(t)
-			}
-		})
+		emit(level, lvl.associations)
+	}
+	// Triples keyed by a hash live outside the per-level trees.
+	if ic.hashAssociations != nil {
+		emit(HASH_LEVEL, ic.hashAssociations)
 	}
 }
 

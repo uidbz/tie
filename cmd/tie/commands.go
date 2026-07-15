@@ -13,6 +13,7 @@ import (
 
 	"github.com/schollz/progressbar/v3"
 
+	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
 
 	"git.sr.ht/~uid/conf"
@@ -280,6 +281,7 @@ func dumpLocalFile(path string) ([]tiedb.StringTriple, error) {
 	dir := filepath.Dir(path)
 	name := strings.TrimSuffix(filepath.Base(path), ".tie")
 	db := tiedb.NewDB(true)
+	db.SetBlobPolicy(metadata.HexHashBlobPolicy())
 	col := db.GetCollection(tiedb.CollectionKey{Database: dir, Collection: name})
 	var triples []tiedb.StringTriple
 	col.ForEachTriple(func(t tiedb.StringTriple) {
