@@ -232,22 +232,60 @@ func cmdDump() *cli.Command {
 	return &cli.Command{
 		Name:  "dump",
 		Usage: "Dump every triple in the current collection as TSV (key<TAB>value1<TAB>value2) to stdout",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "file",
+				Aliases: []string{"f"},
+				Usage:   "Read triples directly from a local .tie file instead of the server (offline export; do not use against a file a running daemon has open)",
+			},
+		},
 		Action: func(ctx *cli.Context) error {
-			if tie == nil {
-				return errors.New("Error: Config not loaded")
-			}
-			reply, err := tie.Dump()
-			if err != nil {
-				return errors.New("Dump Error: " + err.Error())
+			var triples []tiedb.StringTriple
+			if path := ctx.String("file"); path != "" {
+				var err error
+				triples, err = dumpLocalFile(path)
+				if err != nil {
+					return errors.New("Dump Error: " + err.Error())
+				}
+			} else {
+				if tie == nil {
+					return errors.New("Error: Config not loaded")
+				}
+				reply, err := tie.Dump()
+				if err != nil {
+					return errors.New("Dump Error: " + err.Error())
+				}
+				triples = reply.Triples
 			}
 			w := bufio.NewWriter(os.Stdout)
 			defer w.Flush()
-			for _, t := range reply.Triples {
+			for _, t := range triples {
 				fmt.Fprintln(w, t.Key+"\t"+t.Value1+"\t"+t.Value2)
 			}
 			return nil
 		},
 	}
+}
+
+// dumpLocalFile reads every forward triple straight from an on-disk .tie file,
+// bypassing the server. It reflects flushed on-disk state only, so it is meant
+// for offline export when no daemon holds the file open.
+func dumpLocalFile(path string) ([]tiedb.StringTriple, error) {
+	if !strings.HasSuffix(path, ".tie") {
+		return nil, fmt.Errorf("not a .tie file: %q", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(path)
+	name := strings.TrimSuffix(filepath.Base(path), ".tie")
+	db := tiedb.NewDB(true)
+	col := db.GetCollection(tiedb.CollectionKey{Database: dir, Collection: name})
+	var triples []tiedb.StringTriple
+	col.ForEachTriple(func(t tiedb.StringTriple) {
+		triples = append(triples, t)
+	})
+	return triples, nil
 }
 
 func cmdRestore() *cli.Command {

@@ -5,6 +5,7 @@ import (
 
 	"fmt"
 	"math/rand"
+	"os"
 	"time"
 )
 
@@ -13,13 +14,13 @@ var __VERBOSE bool = true
 
 func Debug(value string) {
 	if __DEBUG {
-		fmt.Println(value)
+		fmt.Fprintln(os.Stderr, value)
 	}
 }
 
 func Info(value string) {
 	if __VERBOSE || __DEBUG {
-		fmt.Println(value)
+		fmt.Fprintln(os.Stderr, value)
 	}
 }
 

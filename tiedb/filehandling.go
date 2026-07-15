@@ -118,7 +118,7 @@ func (t *Collection) loadDB(filename string) error {
 		return err
 	}
 	dbname := "(" + fi.Name() + ") "
-	fmt.Println(dbname+"DB size:", (fi.Size() / 1024), "KiB")
+	fmt.Fprintln(os.Stderr, dbname+"DB size:", (fi.Size() / 1024), "KiB")
 
 	db, err := os.Open(filename)
 	if err != nil {

@@ -58,7 +58,7 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.SetReverseRelations(db.defaultReverseRelations)
 
 	if db.writeToDisk {
-		fmt.Println("Initializing", ic.dBFullPath)
+		fmt.Fprintln(os.Stderr, "Initializing", ic.dBFullPath)
 		if err := os.MkdirAll(path, 0777); err != nil {
 			log.Fatal("Error creating DB directory ", path, ": ", err, "\nExiting")
 		}

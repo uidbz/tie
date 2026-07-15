@@ -148,7 +148,7 @@ tie del <key> <value1> <value2>      delete triples
 tie import ... [--collection name]   upload and tag files into a collection
 tie upload <file>                    upload a file/dir to a filehost
 tie download <hash> <dest>           download a file/dir from a filehost
-tie dump                             export the collection as TSV
+tie dump [--file <path.tie>]         export the collection as TSV (--file reads a local .tie directly)
 tie restore                          import TSV (additive)
 tie mount <hash> <mountpoint>        mount an immutable content-addressed tree
 tie mount --db <mountpoint>          mount the live tag-derived filesystem
@@ -199,6 +199,17 @@ tie restore < backup.tsv     # additive, idempotent merge
 Restore re-adds triples via a batch; adding an existing triple is a no-op, so it
 merges rather than replaces. Point `-c` at a config with a different collection
 to copy data between collections.
+
+`tie dump --file <path.tie>` exports directly from an on-disk `.tie` file
+without a running daemon, for offline backup:
+
+```sh
+tie dump --file /var/lib/tie/myns/mycol.tie > backup.tsv
+```
+
+It reflects flushed on-disk state only, so do not run it against a `.tie` file
+that a live `tie-daemon` currently has open — the daemon may hold unflushed
+writes, and no locking coordinates the two readers.
 
 ## Building
 
