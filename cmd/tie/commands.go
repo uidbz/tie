@@ -329,7 +329,11 @@ func cmdMount() *cli.Command {
 				hash := ctx.Args().Get(0)
 				mountpoint = ctx.Args().Get(1)
 				state := fuselib.NewTieFuse(filehost.URL, filehost.Insecure, ctx.Int("cache"))
-				server, what = state.Mount(hash, mountpoint), hash
+				s, err := state.Mount(hash, mountpoint)
+				if err != nil {
+					return err
+				}
+				server, what = s, hash
 			}
 
 			sig := make(chan os.Signal, 1)

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -47,8 +46,11 @@ type config struct {
 }
 
 type cache struct {
-	filehost    string
-	client      *http.Client
+	filehost string
+	client   *http.Client
+	// mu guards CurrentSize and Entries: go-fuse dispatches Read concurrently
+	// across goroutines, so every cache mutation must be serialized.
+	mu          sync.Mutex
 	CurrentSize int
 	MaxSize     int
 	Entries     []*cacheEntry
@@ -58,6 +60,8 @@ func (c *cache) set(key string, data []byte) error {
 	if len(data) > c.MaxSize {
 		return errors.New("File bigger than cache")
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	entry := &cacheEntry{key, data}
 	c.Entries = append(c.Entries, entry)
 	c.CurrentSize += len(entry.Data)
@@ -70,6 +74,8 @@ func (c *cache) set(key string, data []byte) error {
 }
 
 func (c *cache) get(key string) ([]byte, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, x := range c.Entries {
 		if x.Key == key {
 			return x.Data, true
@@ -195,6 +201,9 @@ type bytesFileHandle struct {
 }
 
 func (c *cache) download(hash string) ([]byte, error) {
+	if !metadata.IsHexHash(hash) {
+		return nil, fmt.Errorf("fuselib: invalid content hash %q", hash)
+	}
 	resp, err := c.client.Get(c.filehost + "/" + hash)
 	if err != nil {
 		return nil, err
@@ -208,8 +217,16 @@ func (c *cache) download(hash string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = c.set(hash, b)
+	// Verify the filehost returned the bytes this hash addresses before caching
+	// or serving them; the filehost is untrusted.
+	got, err := metadata.HashReader(bytes.NewReader(b))
 	if err != nil {
+		return nil, err
+	}
+	if got != hash {
+		return nil, errors.New("fuselib: downloaded content does not match its hash")
+	}
+	if err := c.set(hash, b); err != nil {
 		return nil, err
 	}
 
@@ -262,6 +279,9 @@ func (n *node) AddChild(child *node) {
 const dirHeader = metadata.DirHeader
 
 func (state *TieFuse) listContent(sourceHash string) (*node, error) {
+	if !metadata.IsHexHash(sourceHash) {
+		return nil, fmt.Errorf("fuselib: invalid content hash %q", sourceHash)
+	}
 	resp, err := state.config.client.Get(state.config.filehost + "/" + sourceHash)
 	if err != nil {
 		return nil, err
@@ -272,12 +292,17 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		return nil, fmt.Errorf("bad status: %s", resp.Status)
 	}
 
-	var buf bytes.Buffer
-	io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
-	mode := string(buf.Bytes())
-	_, err = io.Copy(&buf, resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
+	}
+	// Verify the blob before trusting its bytes; the filehost is untrusted.
+	got, err := metadata.HashReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if got != sourceHash {
+		return nil, errors.New("fuselib: content does not match its hash")
 	}
 
 	n := &node{
@@ -285,27 +310,30 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		State: state,
 	}
 
-	if mode == dirHeader {
+	isDir := len(body) >= len(dirHeader) && string(body[:len(dirHeader)]) == dirHeader
+	if isDir {
 		n.Mode = fuse.S_IFDIR
-		scanner := bufio.NewScanner(&buf)
+		scanner := bufio.NewScanner(bytes.NewReader(body))
 		for scanner.Scan() {
-			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
-				child := &node{
-					Hash:  entry.Hash,
-					Name:  entry.Filename,
-					Size:  entry.Size,
-					State: state,
-				}
-				if metadata.IsDirHead(entry.Head) {
-					child.Mode = fuse.S_IFDIR
-				} else {
-					child.Mode = fuse.S_IFREG
-				}
-				n.AddChild(child)
+			entry, ok := metadata.ParseDirLine(scanner.Text())
+			if !ok {
+				continue
 			}
+			child := &node{
+				Hash:  entry.Hash,
+				Name:  entry.Filename,
+				Size:  entry.Size,
+				State: state,
+			}
+			if metadata.IsDirHead(entry.Head) {
+				child.Mode = fuse.S_IFDIR
+			} else {
+				child.Mode = fuse.S_IFREG
+			}
+			n.AddChild(child)
 		}
 		if err := scanner.Err(); err != nil {
-			log.Fatal(err)
+			return nil, err
 		}
 	} else {
 		n.Mode = fuse.S_IFREG
@@ -314,10 +342,10 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 	return n, nil
 }
 
-func (state *TieFuse) Mount(hash, mountpoint string) *fuse.Server {
+func (state *TieFuse) Mount(hash, mountpoint string) (*fuse.Server, error) {
 	root, err := state.listContent(hash)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	server, err := fs.Mount(mountpoint, root, &fs.Options{
@@ -327,8 +355,8 @@ func (state *TieFuse) Mount(hash, mountpoint string) *fuse.Server {
 		},
 	})
 	if err != nil {
-		log.Panic(err)
+		return nil, err
 	}
 
-	return server
+	return server, nil
 }

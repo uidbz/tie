@@ -109,6 +109,36 @@ whenever its contents change, directories are versioned like git trees. The
 `metadata` package defines this format and can recover a file's media type from
 the stored head bytes.
 
+Directory entries store only a child's **basename**, never a path. A directory's
+hash is therefore a pure function of its contents, so the same tree dedupes
+regardless of where it was uploaded from, and checkout rebuilds the layout
+relative to the destination the caller chooses. The tree's location lives in the
+parent entry (or in the checkout `dest` for the root), the same way git trees
+work.
+
+### Transfer integrity and the untrusted filehost
+
+The download path treats the filehost as **untrusted**: it may be compromised,
+buggy, or reached over a tampered connection. `metadata` is the single source of
+the highwayhash content-address algorithm (`metadata.NewHash` / `HashReader`),
+so upload hashing and download verification cannot drift apart.
+
+- **Content is verified on receipt.** `io/getlib` and `io/fuselib` recompute the
+  hash of every downloaded blob and reject it (`getlib.ErrChecksum`) if it does
+  not match the address it was requested under. A tampered or truncated transfer
+  never reaches disk, the cache, or a FUSE reader as if it were genuine. Large
+  files stream through the hasher rather than being buffered whole, and cache
+  writes are atomic (temp file + rename) so a failed transfer leaves no corrupt
+  entry.
+- **Manifests cannot smuggle traversal or SSRF payloads.** `metadata.ParseDirLine`
+  accepts an entry only if its filename is a single safe path component (no
+  separators, not `.`/`..`) and its hash is exactly 64 lowercase hex characters.
+  A crafted manifest therefore cannot escape the checkout root or redirect a
+  fetch to an arbitrary endpoint.
+- **Traversal is bounded.** Content addressing makes honest cycles impossible,
+  and a malicious self-referential manifest fails verification; as a further
+  backstop, eager directory recursion in `getlib` is capped at a fixed depth.
+
 ## The `tie` CLI
 
 ```
@@ -176,5 +206,5 @@ to copy data between collections.
 go build ./...
 ```
 
-Requires Go 1.20+. Mounting additionally requires FUSE (`/dev/fuse`,
+Requires Go 1.25+. Mounting additionally requires FUSE (`/dev/fuse`,
 `fusermount`).

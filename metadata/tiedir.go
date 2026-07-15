@@ -2,10 +2,14 @@ package metadata
 
 import (
 	"encoding/base64"
+	"encoding/hex"
+	"hash"
+	"io"
 	"strconv"
 	"strings"
 
 	"github.com/h2non/filetype"
+	"github.com/minio/highwayhash"
 )
 
 // MagicNumber is how many leading bytes of a file are needed to sniff its
@@ -15,6 +19,56 @@ const MagicNumber = 261
 // DirHeader prefixes every tie directory blob. A directory's hash changes
 // whenever its contents change, which gives git-like versioning for free.
 const DirHeader = "tiedir-v2\n---\n"
+
+// tieKey is the fixed highwayhash key that defines tie's content address space.
+// Upload and download must agree on it, so it lives here rather than in putlib.
+const tieKey = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
+
+// hashKey is tieKey decoded once. It is nil only if the constant is malformed,
+// which is a build-time programming error rather than a runtime condition.
+var hashKey []byte
+
+func init() {
+	k, err := hex.DecodeString(tieKey)
+	if err != nil {
+		panic("metadata: invalid tieKey constant: " + err.Error())
+	}
+	hashKey = k
+}
+
+// NewHash returns a fresh keyed highwayhash. All content addresses in tie are
+// computed with it, so upload hashing and download verification stay identical.
+func NewHash() (hash.Hash, error) {
+	return highwayhash.New(hashKey)
+}
+
+// HashReader returns the tie content address of everything read from r.
+func HashReader(r io.Reader) (string, error) {
+	h, err := NewHash()
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(h, r); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// IsHexHash reports whether s is a well-formed content address: exactly 64
+// lowercase hex characters. Enforced on parse so an untrusted manifest cannot
+// smuggle a traversal or SSRF payload through the hash column.
+func IsHexHash(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
 
 // DirEntry is one line of a tiedir blob. The head column stores the file's
 // first bytes (rather than a derived media type) so classification stays
@@ -41,6 +95,9 @@ func (e DirEntry) Line() string {
 func ParseDirLine(line string) (DirEntry, bool) {
 	parts := strings.Split(line, "\t")
 	if len(parts) != 4 {
+		return DirEntry{}, false
+	}
+	if !IsHexHash(parts[0]) {
 		return DirEntry{}, false
 	}
 	if !isValidEntryName(parts[1]) {

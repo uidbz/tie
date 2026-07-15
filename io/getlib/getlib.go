@@ -3,10 +3,11 @@ package getlib
 import (
 	"bufio"
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,6 +23,16 @@ const (
 )
 const dirHeader = metadata.DirHeader
 
+// maxDepth bounds directory-tree recursion. The filehost is untrusted: content
+// addressing makes cycles impossible for an honest server, but a malicious one
+// can serve a "directory" whose entries point back at an ancestor, which would
+// otherwise recurse forever. 128 is far deeper than any real tree.
+const maxDepth = 128
+
+// ErrChecksum is returned when downloaded content does not hash to the address
+// it was requested under, i.e. the server returned the wrong or tampered bytes.
+var ErrChecksum = errors.New("getlib: downloaded content does not match its hash")
+
 type TieFunc interface {
 	Run(file io.Reader, relPath string) (err error)
 }
@@ -36,10 +47,52 @@ func get(client *http.Client, url string) (*http.Response, error) {
 	return client.Get(url)
 }
 
+// fetch GETs sourceHash and returns the response only on 200 OK; the caller
+// must close the body. sourceHash is validated as a content address so a
+// crafted value cannot escape the intended endpoint.
+func fetch(client *http.Client, url, sourceHash string) (*http.Response, error) {
+	if !metadata.IsHexHash(sourceHash) {
+		return nil, fmt.Errorf("getlib: invalid content hash %q", sourceHash)
+	}
+	resp, err := get(client, url+"/"+sourceHash)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("bad status: %s", resp.Status)
+	}
+	return resp, nil
+}
+
+// readBlob fully reads a blob body, verifying it hashes to sourceHash. It is
+// used for directory manifests and small reads where buffering is acceptable;
+// large file downloads stream instead (see downloadVerified).
+func readBlob(client *http.Client, url, sourceHash string) ([]byte, error) {
+	resp, err := fetch(client, url, sourceHash)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	got, err := metadata.HashReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if got != sourceHash {
+		return nil, ErrChecksum
+	}
+	return data, nil
+}
+
 func DownloadFile(client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
 	d := Download{destination: destination}
 
-	return ExecForEach(client, url, sourceHash, &d, "", progress)
+	return execForEach(client, url, sourceHash, &d, "", progress, 0)
 }
 
 // TotalSize returns the number of file bytes a download of sourceHash would
@@ -47,20 +100,27 @@ func DownloadFile(client *http.Client, url string, sourceHash string, destinatio
 // bar before the transfer. For a single file it costs one HTTP request; for a
 // directory it fetches each manifest (which are small) but no file bodies.
 func TotalSize(client *http.Client, url string, sourceHash string) (int64, error) {
-	resp, err := get(client, url+"/"+sourceHash)
+	return totalSize(client, url, sourceHash, 0)
+}
+
+func totalSize(client *http.Client, url string, sourceHash string, depth int) (int64, error) {
+	if depth > maxDepth {
+		return 0, fmt.Errorf("getlib: directory nesting exceeds %d levels (possible malicious manifest)", maxDepth)
+	}
+
+	resp, err := fetch(client, url, sourceHash)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("bad status: %s", resp.Status)
-	}
-
 	var head bytes.Buffer
 	if _, err := io.CopyN(&head, resp.Body, int64(len(dirHeader))); err != nil {
-		// File shorter than the header prefix: its size is just what we read.
-		return int64(head.Len()), nil
+		if err == io.EOF {
+			// File shorter than the header prefix: its size is what we read.
+			return int64(head.Len()), nil
+		}
+		return 0, err
 	}
 
 	if head.String() != dirHeader {
@@ -86,7 +146,7 @@ func TotalSize(client *http.Client, url string, sourceHash string) (int64, error
 			continue
 		}
 		if metadata.IsDirHead(entry.Head) {
-			sub, err := TotalSize(client, url, entry.Hash)
+			sub, err := totalSize(client, url, entry.Hash, depth+1)
 			if err != nil {
 				return 0, err
 			}
@@ -134,30 +194,58 @@ func InitCache(customLocation string) Cache {
 }
 
 func (c *Cache) ReadFile(client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
-	var dest string = c.CacheDir
+	if !metadata.IsHexHash(sourceHash) {
+		return nil, fmt.Errorf("getlib: invalid content hash %q", sourceHash)
+	}
 
+	var dest string = c.CacheDir
 	for i := 0; i < shardLevels*dirWidth; i += dirWidth {
 		dest = filepath.Join(dest, sourceHash[i:i+dirWidth])
 	}
 	dir := dest
 	dest = filepath.Join(dest, sourceHash)
-	if _, exist := os.Stat(dest); os.IsNotExist(exist) {
-		fmt.Println("getlib (not exist):", dest)
-		os.MkdirAll(dir, 0755)
-		out, err := os.Create(dest)
-		if err != nil {
-			return nil, err
-		}
-		f, err2 := ReadFile(client, url, sourceHash)
-		if err2 != nil {
-			os.Remove(dest)
-			return nil, err2
-		}
-		r := io.TeeReader(f, out)
-		return r, nil
-	} else {
+
+	if _, err := os.Stat(dest); err == nil {
 		return os.Open(dest)
 	}
+
+	// Cache miss: download and verify the whole blob before persisting, so a
+	// truncated or tampered transfer never leaves a corrupt cache entry.
+	data, err := readBlob(client, url, sourceHash)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	if err := writeFileAtomic(dir, dest, data); err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(data), nil
+}
+
+// writeFileAtomic writes data to a temp file in dir and renames it over dest,
+// so a concurrent reader never observes a half-written cache entry.
+func writeFileAtomic(dir, dest string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 type Download struct {
@@ -184,124 +272,139 @@ func (d *Download) Run(file io.Reader, relPath string) (err error) {
 }
 
 func IsDir(client *http.Client, url string, sourceHash string) (isDir bool, err error) {
-	// Get the data
-	resp, err := get(client, url+"/"+sourceHash)
+	resp, err := fetch(client, url, sourceHash)
 	if err != nil {
 		return false, err
 	}
 	defer resp.Body.Close()
 
-	// Check server response
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("bad status: %s", resp.Status)
-	}
-
 	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
-	mode := string(buf.Bytes())
-
-	if err != nil {
+	if _, err := io.CopyN(&buf, resp.Body, int64(len(dirHeader))); err != nil && err != io.EOF {
 		return false, err
 	}
-
-	if mode == dirHeader {
-		return true, nil
-	} else {
-		return false, nil
-	}
+	return buf.String() == dirHeader, nil
 }
 
+// ReadFile returns the verified contents of sourceHash, erroring if it is a
+// directory. The whole blob is buffered; use DownloadFile for large files.
 func ReadFile(client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
-	// Get the data
-	resp, err := get(client, url+"/"+sourceHash)
+	b, err := ReadBytes(client, url, sourceHash)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	// Check server response
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
-	}
-
-	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
-	mode := string(buf.Bytes())
-	_, err = io.Copy(&buf, resp.Body)
-
-	if mode == dirHeader {
-		return nil, errors.New("Source is a directory; expected file.")
-	} else {
-		return &buf, nil
-	}
+	return b, nil
 }
 
+// ReadBytes returns the verified contents of sourceHash as a seekable reader,
+// erroring if it is a directory.
 func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Reader, err error) {
-	// Get the data
-	resp, err := get(client, url+"/"+sourceHash)
+	data, err := readBlob(client, url, sourceHash)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	// Check server response
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
-	}
-	var buf bytes.Buffer
-	_, err = io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
-	mode := string(buf.Bytes())
-	_, err = io.Copy(&buf, resp.Body)
-
-	if mode == dirHeader {
+	if len(data) >= len(dirHeader) && string(data[:len(dirHeader)]) == dirHeader {
 		return nil, errors.New("Source is a directory; expected file.")
-	} else {
-		return bytes.NewReader(buf.Bytes()), nil
 	}
+	return bytes.NewReader(data), nil
 }
 
-func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer) (err error) {
-	resp, err := get(client, url+"/"+sourceHash)
+// ExecForEach walks the tree rooted at sourceHash, invoking funcToExec.Run for
+// every regular file with its content and path relative to relPath. File bodies
+// are verified against their content address before Run sees them; a mismatch,
+// truncation, or over-deep tree aborts with an error.
+func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer) error {
+	return execForEach(client, url, sourceHash, funcToExec, relPath, progress, 0)
+}
+
+func execForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer, depth int) error {
+	if depth > maxDepth {
+		return fmt.Errorf("getlib: directory nesting exceeds %d levels (possible malicious manifest)", maxDepth)
+	}
+
+	resp, err := fetch(client, url, sourceHash)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status: %s", resp.Status)
+	// Peek the header prefix to classify file vs directory.
+	var header bytes.Buffer
+	if _, err := io.CopyN(&header, resp.Body, int64(len(dirHeader))); err != nil && err != io.EOF {
+		return err
+	}
+	isDir := header.String() == dirHeader
+
+	if !isDir {
+		// Regular file: stream body -> hasher -> Run, so a multi-GB blob is
+		// never fully buffered. verifyReader hashes every byte the consumer
+		// reads; content is verified before it is trusted.
+		hasher, err := metadata.NewHash()
+		if err != nil {
+			return err
+		}
+		full := io.MultiReader(bytes.NewReader(header.Bytes()), resp.Body)
+		vr := &verifyReader{r: full, hasher: hasher, want: sourceHash}
+
+		var consumer io.Reader = vr
+		if progress != nil {
+			consumer = io.TeeReader(vr, progress)
+		}
+		if err := funcToExec.Run(consumer, relPath); err != nil {
+			return err
+		}
+		return vr.checkComplete()
 	}
 
-	var buf bytes.Buffer
-	io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
-	mode := string(buf.Bytes())
-
-	// Only report progress for regular files; directory manifests are small and
-	// recursion downloads their entries as individual files.
-	src := io.Reader(resp.Body)
-	if progress != nil && mode != dirHeader {
-		// Count the header bytes already consumed above, then tee the rest, so
-		// the reported total matches the file's full Content-Length.
-		progress.Write(buf.Bytes())
-		src = io.TeeReader(resp.Body, progress)
-	}
-	_, err = io.Copy(&buf, src)
+	// Directory manifest: buffer (small) and verify the whole blob.
+	manifest, err := readBlob(client, url, sourceHash)
 	if err != nil {
 		return err
 	}
-
-	if mode == dirHeader {
-		scanner := bufio.NewScanner(&buf)
-		for scanner.Scan() {
-			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
-				ExecForEach(client, url, entry.Hash, funcToExec, filepath.Join(relPath, entry.Filename), progress)
-			}
+	scanner := bufio.NewScanner(bytes.NewReader(manifest))
+	for scanner.Scan() {
+		entry, ok := metadata.ParseDirLine(scanner.Text())
+		if !ok {
+			continue
 		}
-		if err := scanner.Err(); err != nil {
-			log.Fatal(err)
+		if err := execForEach(client, url, entry.Hash, funcToExec, filepath.Join(relPath, entry.Filename), progress, depth+1); err != nil {
+			return err
 		}
-	} else {
-		return funcToExec.Run(&buf, relPath)
 	}
+	return scanner.Err()
+}
 
+// verifyReader wraps a blob reader, hashing bytes as they flow to the consumer.
+// After EOF, checkComplete confirms the accumulated hash matches the requested
+// address. hashed guards against a consumer that stops reading early.
+type verifyReader struct {
+	r      io.Reader
+	hasher hash.Hash
+	want   string
+	eof    bool
+}
+
+func (v *verifyReader) Read(p []byte) (int, error) {
+	n, err := v.r.Read(p)
+	if n > 0 {
+		v.hasher.Write(p[:n])
+	}
+	if err == io.EOF {
+		v.eof = true
+	}
+	return n, err
+}
+
+// checkComplete reports a checksum error unless the whole blob was read and its
+// hash matches. It re-reads any tail the consumer skipped so partial reads
+// cannot bypass verification.
+func (v *verifyReader) checkComplete() error {
+	if !v.eof {
+		if _, err := io.Copy(io.Discard, v.r); err != nil {
+			return err
+		}
+	}
+	if hex.EncodeToString(v.hasher.Sum(nil)) != v.want {
+		return ErrChecksum
+	}
 	return nil
 }
