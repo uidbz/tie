@@ -57,10 +57,9 @@ type Config struct {
 	// connection (accept self-signed certificates).
 	WebserviceInsecure bool
 	DefaultFileHosts   []string
-	Import           ImportConfig
-	FileHosts        map[string]FileHost
-	key              []byte
-	verbose          bool
+	FileHosts          map[string]FileHost
+	key                []byte
+	verbose            bool
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
@@ -80,14 +79,6 @@ func httpClientFor(host FileHost) *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
 	}
-}
-
-type ImportConfig struct {
-	ImageCollection    string
-	VideoCollection    string
-	AudioCollection    string
-	DocumentCollection string
-	GeneralCollection  string
 }
 
 type TagOptions struct {
@@ -120,8 +111,23 @@ func (tc *TieClient) NewBatch() *api.Batch {
 	}
 }
 
+// NewBatchIn makes a Batch targeting a specific collection. An empty collection
+// falls back to the configured default.
+func (tc *TieClient) NewBatchIn(collection string) *api.Batch {
+	return &api.Batch{
+		Collection: tc.collectionInfo(collection),
+	}
+}
+
 func (tc *TieClient) CollectionInfo() api.CollectionInfo {
-	return api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	return tc.collectionInfo("")
+}
+
+func (tc *TieClient) collectionInfo(collection string) api.CollectionInfo {
+	if collection == "" {
+		collection = tc.Config.Collection
+	}
+	return api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: collection}
 }
 
 // run sends a request and returns the typed reply. err is non-nil on transport

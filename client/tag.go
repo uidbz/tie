@@ -94,23 +94,6 @@ func SliceToTieType(types []string) (t []TieType) {
 	return t
 }
 
-func collection(tie *TieClient, tt TieType) string {
-	var col string
-
-	switch tt {
-	case TieImageFile:
-		col = tie.Config.Import.ImageCollection
-	case TieVideoFile:
-		col = tie.Config.Import.VideoCollection
-	case TieDocumentFile:
-		col = tie.Config.Import.DocumentCollection
-	default:
-		col = tie.Config.Import.GeneralCollection
-	}
-
-	return col
-}
-
 type TagInfo struct {
 	Hash      string
 	File      string
@@ -122,7 +105,7 @@ type TagInfo struct {
 	IsDir     bool
 }
 
-func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, directory DirUID) error {
+func (tie *TieClient) ImportFile(file string, host FileHost, collection string, tags []string, directory DirUID) error {
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
@@ -146,7 +129,7 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 			IsDir:     stat.IsDir(),
 		}
 		// info := TagInfo {x.Hash, file, x.MediaType, directory, fileType, dirType, tags)
-		Tag(tie, info)
+		Tag(tie, info, collection)
 	} else {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
 	}
@@ -154,7 +137,7 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 }
 
 // TODO: FIX this
-func (tie *TieClient) ImportDir(dir string, host FileHost, parentDir DirUID, dirType TieType, tags []string) error {
+func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, parentDir DirUID, dirType TieType, tags []string) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: httpClientFor(host)})
 	for _, x := range status.UploadedItems {
 		if x.ErrorMsg == "" {
@@ -166,7 +149,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, parentDir DirUID, dir
 				TieType:   dirType,
 				Tags:      tags,
 			}
-			Tag(tie, info)
+			Tag(tie, info, collection)
 		} else {
 			return fmt.Errorf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
 		}
@@ -174,14 +157,9 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, parentDir DirUID, dir
 	return nil
 }
 
-func Tag(tie *TieClient, info TagInfo) error {
+func Tag(tie *TieClient, info TagInfo, collection string) error {
 	fmt.Println("tagging", info.Hash)
-	origCollection := tie.Config.Collection
-	defer func() {
-		tie.Config.Collection = origCollection
-	}()
-	tie.Config.Collection = collection(tie, info.TieType)
-	batch := tie.NewBatch()
+	batch := tie.NewBatchIn(collection)
 	filename := filepath.Base(info.File)
 	hash := info.Hash
 	name := strings.TrimRight(filename, filepath.Ext(filename)) // Remove extension

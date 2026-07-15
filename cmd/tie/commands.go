@@ -338,6 +338,7 @@ func ImportImage() *cli.Command {
 		Usage:   "Upload and tag an image",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "gallery", Aliases: []string{"g"}, Usage: "Tag with gallery name (default parent dir)", Value: "$DIR"},
+			&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
 			&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
 			&cli.StringSliceFlag{Name: "host"},
 		},
@@ -369,12 +370,12 @@ func ImportImage() *cli.Command {
 					for _, h := range hosts {
 						if fi, err := os.Stat(file); err == nil {
 							if fi.IsDir() {
-								err := tie.ImportDir(file, tie.Config.FileHosts[h], "", client.TieImageDir, ctx.StringSlice("tags")) // TODO: Figure out how dirID should work
+								err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), "", client.TieImageDir, ctx.StringSlice("tags")) // TODO: Figure out how dirID should work
 								if err != nil {
 									fmt.Println(err)
 								}
 							} else {
-								err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.StringSlice("tags"), "") // TODO: Figure out how dirID should work
+								err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), "") // TODO: Figure out how dirID should work
 								if err != nil {
 									fmt.Println(err)
 								}

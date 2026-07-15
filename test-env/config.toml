@@ -5,13 +5,6 @@ Collection = 'Main'
 Webservice = 'http://localhost:1161'
 DefaultFileHosts = ['default']
 
-[Import]
-ImageCollection = ''
-VideoCollection = ''
-AudioCollection = ''
-DocumentCollection = ''
-GeneralCollection = ''
-
 [FileHosts.default]
 URL = 'http://localhost:1162'
 Insecure = false
