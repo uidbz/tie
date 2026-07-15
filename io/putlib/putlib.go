@@ -30,7 +30,11 @@ type PutConfig struct {
 	JsonOutput    bool
 	// Client is the HTTP client used for uploads. When nil, http.DefaultClient
 	// is used. Set it to control TLS behavior (e.g. InsecureSkipVerify).
-	Client     *http.Client
+	Client *http.Client
+	// Progress, when non-nil, receives a Write for every chunk of the request
+	// body sent, so callers can render an upload progress bar. The total byte
+	// count equals the file/manifest length.
+	Progress   io.Writer
 	currentKey []byte
 }
 
@@ -122,7 +126,12 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 	if pc.JsonOutput {
 		url += "/json"
 	}
-	req, err := http.NewRequest(http.MethodPut, url, bufferedFileReader)
+
+	var reqBody io.Reader = bufferedFileReader
+	if pc.Progress != nil {
+		reqBody = io.TeeReader(bufferedFileReader, pc.Progress)
+	}
+	req, err := http.NewRequest(http.MethodPut, url, reqBody)
 	check(err)
 
 	contentType := "application/octet-stream"

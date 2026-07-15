@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/schollz/progressbar/v3"
 
 	"git.sr.ht/~uid/tie/tiedb"
 
@@ -124,6 +127,19 @@ func resolveFileHost(ctx *cli.Context) (client.FileHost, error) {
 	return tie.ResolveHost(ctx.String("host"))
 }
 
+// dirTreeSize totals the bytes of path, recursing into directories. It returns
+// 0 when path cannot be stat-ed, letting the progress bar fall back gracefully.
+func dirTreeSize(path string) int64 {
+	var total int64
+	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
 func cmdUpload() *cli.Command {
 	return &cli.Command{
 		Name:  "upload",
@@ -142,7 +158,17 @@ func cmdUpload() *cli.Command {
 			if err != nil {
 				return err
 			}
-			result, err := client.UploadTo(host, ctx.Args().First())
+			path := ctx.Args().First()
+			bar := progressbar.NewOptions64(
+				dirTreeSize(path),
+				progressbar.OptionSetDescription("Uploading"),
+				progressbar.OptionSetWriter(os.Stderr),
+				progressbar.OptionShowBytes(true),
+				progressbar.OptionShowCount(),
+				progressbar.OptionClearOnFinish(),
+			)
+			result, err := client.UploadToWithProgress(host, path, bar)
+			bar.Finish()
 			if err != nil {
 				return err
 			}
@@ -182,7 +208,22 @@ func cmdDownload() *cli.Command {
 			if err != nil {
 				return err
 			}
-			return client.DownloadFrom(host, ctx.Args().Get(0), ctx.Args().Get(1))
+			sourceHash := ctx.Args().Get(0)
+			total, err := client.DownloadSize(host, sourceHash)
+			if err != nil {
+				return err
+			}
+			bar := progressbar.NewOptions64(
+				total,
+				progressbar.OptionSetDescription("Downloading"),
+				progressbar.OptionSetWriter(os.Stderr),
+				progressbar.OptionShowBytes(true),
+				progressbar.OptionShowCount(),
+				progressbar.OptionClearOnFinish(),
+			)
+			err = client.DownloadFromWithProgress(host, sourceHash, ctx.Args().Get(1), bar)
+			bar.Finish()
+			return err
 		},
 	}
 }

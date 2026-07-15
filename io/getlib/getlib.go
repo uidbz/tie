@@ -36,10 +36,69 @@ func get(client *http.Client, url string) (*http.Response, error) {
 	return client.Get(url)
 }
 
-func DownloadFile(client *http.Client, url string, sourceHash string, destination string) (err error) {
+func DownloadFile(client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
 	d := Download{destination: destination}
 
-	return ExecForEach(client, url, sourceHash, &d, "")
+	return ExecForEach(client, url, sourceHash, &d, "", progress)
+}
+
+// TotalSize returns the number of file bytes a download of sourceHash would
+// transfer, recursing into directory manifests. It lets callers size a progress
+// bar before the transfer. For a single file it costs one HTTP request; for a
+// directory it fetches each manifest (which are small) but no file bodies.
+func TotalSize(client *http.Client, url string, sourceHash string) (int64, error) {
+	resp, err := get(client, url+"/"+sourceHash)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("bad status: %s", resp.Status)
+	}
+
+	var head bytes.Buffer
+	if _, err := io.CopyN(&head, resp.Body, int64(len(dirHeader))); err != nil {
+		// File shorter than the header prefix: its size is just what we read.
+		return int64(head.Len()), nil
+	}
+
+	if head.String() != dirHeader {
+		// Regular file: trust Content-Length when the server provides it,
+		// otherwise fall back to draining the body.
+		if resp.ContentLength >= 0 {
+			return resp.ContentLength, nil
+		}
+		n, err := io.Copy(io.Discard, resp.Body)
+		return int64(head.Len()) + n, err
+	}
+
+	// Directory: sum entry sizes, recursing into sub-directories.
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, resp.Body); err != nil {
+		return 0, err
+	}
+	var total int64
+	scanner := bufio.NewScanner(&buf)
+	for scanner.Scan() {
+		entry, ok := metadata.ParseDirLine(scanner.Text())
+		if !ok {
+			continue
+		}
+		if metadata.IsDirHead(entry.Head) {
+			sub, err := TotalSize(client, url, entry.Hash)
+			if err != nil {
+				return 0, err
+			}
+			total += sub
+		} else {
+			total += int64(entry.Size)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 type Cache struct {
@@ -201,7 +260,7 @@ func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Rea
 	}
 }
 
-func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string) (err error) {
+func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer) (err error) {
 	resp, err := get(client, url+"/"+sourceHash)
 	if err != nil {
 		return err
@@ -215,7 +274,17 @@ func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec 
 	var buf bytes.Buffer
 	io.CopyN(&buf, resp.Body, int64(len(dirHeader)))
 	mode := string(buf.Bytes())
-	_, err = io.Copy(&buf, resp.Body)
+
+	// Only report progress for regular files; directory manifests are small and
+	// recursion downloads their entries as individual files.
+	src := io.Reader(resp.Body)
+	if progress != nil && mode != dirHeader {
+		// Count the header bytes already consumed above, then tee the rest, so
+		// the reported total matches the file's full Content-Length.
+		progress.Write(buf.Bytes())
+		src = io.TeeReader(resp.Body, progress)
+	}
+	_, err = io.Copy(&buf, src)
 	if err != nil {
 		return err
 	}
@@ -224,7 +293,7 @@ func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec 
 		scanner := bufio.NewScanner(&buf)
 		for scanner.Scan() {
 			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
-				ExecForEach(client, url, entry.Hash, funcToExec, entry.Filename)
+				ExecForEach(client, url, entry.Hash, funcToExec, entry.Filename, progress)
 			}
 		}
 		if err := scanner.Err(); err != nil {
