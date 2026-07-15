@@ -115,7 +115,9 @@ the stored head bytes.
 tie add <key> <value1> <value2>      add a triple
 tie get [-r] [-f value1] <key>       query triples (reverse, filtered)
 tie del <key> <value1> <value2>      delete triples
-tie import ...                       upload and tag files
+tie import ... [--collection name]   upload and tag files into a collection
+tie upload <file>                    upload a file/dir to a filehost
+tie download <hash> <dest>           download a file/dir from a filehost
 tie dump                             export the collection as TSV
 tie restore                          import TSV (additive)
 tie mount <hash> <mountpoint>        mount an immutable content-addressed tree
@@ -125,6 +127,27 @@ tie conf create [name]               write a default config file
 
 `tie -c <config>` selects a config file (searched in the working directory
 first). Run `tie conf create` to generate one.
+
+### Filehosts and config
+
+`tie` connects to a `tie-daemon` (the `Webservice`) and one or more
+`tie-filehost` servers. Filehosts are named in config:
+
+```toml
+Webservice = 'https://localhost:1161'
+DefaultFileHosts = ['default']
+
+[FileHosts.default]
+URL = 'https://localhost:1162'
+Insecure = false   # true skips TLS certificate verification (self-signed certs)
+```
+
+`upload`, `download`, `import`, and `mount` select a filehost with `--host
+<name>` (defaulting to the first `DefaultFileHosts` entry). `upload`/`download`
+also accept `--server <url>` to target a raw filehost URL without config, plus
+`--insecure` to skip TLS verification for that address. The scheme lives in the
+URL — `Insecure` only controls certificate checking, it does not switch
+`http`/`https`.
 
 ### Mounting
 
