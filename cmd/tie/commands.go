@@ -186,16 +186,9 @@ func cmdMount() *cli.Command {
 				return errors.New("Error: Config not loaded")
 			}
 
-			hostName := ctx.String("host")
-			if hostName == "" {
-				if len(tie.Config.DefaultFileHosts) == 0 {
-					return errors.New("No filehost configured: set DefaultFileHosts or pass --host")
-				}
-				hostName = tie.Config.DefaultFileHosts[0]
-			}
-			filehost, ok := tie.Config.FileHosts[hostName]
-			if !ok {
-				return errors.New("Unknown filehost '" + hostName + "'")
+			filehost, err := tie.ResolveHost(ctx.String("host"))
+			if err != nil {
+				return err
 			}
 
 			var server *fuse.Server
@@ -205,7 +198,7 @@ func cmdMount() *cli.Command {
 					return errors.New("Need 1 arg: mountpoint")
 				}
 				mountpoint = ctx.Args().Get(0)
-				state := fuselib.NewTieDBFuse(tie, filehost, ctx.Int("cache"))
+				state := fuselib.NewTieDBFuse(tie, filehost.URL, filehost.Insecure, ctx.Int("cache"))
 				s, err := state.MountDB(mountpoint)
 				if err != nil {
 					return err
@@ -217,7 +210,7 @@ func cmdMount() *cli.Command {
 				}
 				hash := ctx.Args().Get(0)
 				mountpoint = ctx.Args().Get(1)
-				state := fuselib.NewTieFuse(filehost, ctx.Int("cache"))
+				state := fuselib.NewTieFuse(filehost.URL, filehost.Insecure, ctx.Int("cache"))
 				server, what = state.Mount(hash, mountpoint), hash
 			}
 

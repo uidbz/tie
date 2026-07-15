@@ -38,7 +38,7 @@ func TestListContentClassifiesEntries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	state := NewTieFuse(srv.URL, 1)
+	state := NewTieFuse(srv.URL, false, 1)
 	n, err := state.listContent(rootHash)
 	if err != nil {
 		t.Fatal(err)

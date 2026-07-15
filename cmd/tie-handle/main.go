@@ -204,7 +204,7 @@ func main() {
 
 	if *settingsPtr != "" {
 		app.settings = filepath.Join(app.tmpDir, "tie-handle-settings.json")
-		err := getlib.DownloadFile(app.url, app.inputHash, app.settings)
+		err := getlib.DownloadFile(nil, app.url, app.inputHash, app.settings)
 		if err != nil {
 			app.LogOutput("Error downloading settings file: " + err.Error())
 			return
@@ -212,13 +212,13 @@ func main() {
 	}
 
 	if *processDirPtr {
-		err := getlib.DownloadFile(app.url, app.inputHash, app.tmpDir)
+		err := getlib.DownloadFile(nil, app.url, app.inputHash, app.tmpDir)
 		if err != nil {
 			app.LogOutput("Error downloading input: " + err.Error())
 		}
 		app.Process(app.tmpDir)
 	} else {
-		getlib.ExecForEach(app.url, app.inputHash, &app, "")
+		getlib.ExecForEach(nil, app.url, app.inputHash, &app, "")
 	}
 	status := putlib.Upload(app.url, app.output, putlib.PutConfig{PathToWorkdir: true})
 	if status.ErrorMsg != "" {

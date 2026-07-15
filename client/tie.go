@@ -1,7 +1,9 @@
 package client
 
 import (
+	"crypto/tls"
 	"errors"
+	"net/http"
 
 	"git.sr.ht/~uid/tie/api"
 	ws "git.sr.ht/~uid/tie/webservice"
@@ -20,7 +22,7 @@ var defaultConfig = Config{
 	Namespace:        "Collections",
 	Collection:       "Main",
 	DefaultFileHosts: []string{"default"},
-	FileHosts:        map[string]string{"default": "https://localhost:1162"},
+	FileHosts:        map[string]FileHost{"default": {URL: "https://localhost:1162"}},
 	key:              InitKey(),
 }
 
@@ -51,11 +53,33 @@ type Config struct {
 	Namespace        string
 	Collection       string
 	Webservice       string
-	DefaultFileHosts []string
+	// WebserviceInsecure enables TLS InsecureSkipVerify for the Webservice
+	// connection (accept self-signed certificates).
+	WebserviceInsecure bool
+	DefaultFileHosts   []string
 	Import           ImportConfig
-	FileHosts        map[string]string
+	FileHosts        map[string]FileHost
 	key              []byte
 	verbose          bool
+}
+
+// FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
+// (accept self-signed certificates); the scheme lives in URL.
+type FileHost struct {
+	URL      string
+	Insecure bool
+}
+
+// httpClientFor returns an *http.Client honoring the host's Insecure flag.
+// A secure host reuses http.DefaultClient; an insecure one gets a client that
+// skips TLS certificate verification.
+func httpClientFor(host FileHost) *http.Client {
+	if !host.Insecure {
+		return http.DefaultClient
+	}
+	return &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
 }
 
 type ImportConfig struct {
@@ -73,7 +97,7 @@ type TagOptions struct {
 func NewTieClient(config Config) (client *TieClient) {
 	client = &TieClient{
 		Config: config,
-		client: ws.NewClient(config.Webservice, config.Username, config.Password),
+		client: ws.NewClient(config.Webservice, config.Username, config.Password, config.WebserviceInsecure),
 	}
 
 	return client

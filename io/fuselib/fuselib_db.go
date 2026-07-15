@@ -23,10 +23,10 @@ type TieDBFuse struct {
 	fuseTree *TieFuse // reused for content-addressed file/dir bytes + cache
 }
 
-func NewTieDBFuse(tie *client.TieClient, filehost string, cacheSizeGB int) *TieDBFuse {
+func NewTieDBFuse(tie *client.TieClient, filehost string, insecure bool, cacheSizeGB int) *TieDBFuse {
 	return &TieDBFuse{
 		tie:      tie,
-		fuseTree: NewTieFuse(filehost, cacheSizeGB),
+		fuseTree: NewTieFuse(filehost, insecure, cacheSizeGB),
 	}
 }
 

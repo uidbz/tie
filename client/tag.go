@@ -122,7 +122,7 @@ type TagInfo struct {
 	IsDir     bool
 }
 
-func (tie *TieClient) ImportFile(file string, host string, tags []string, directory DirUID) error {
+func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, directory DirUID) error {
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
@@ -132,7 +132,7 @@ func (tie *TieClient) ImportFile(file string, host string, tags []string, direct
 	if err != nil {
 		return err
 	}
-	status := putlib.Upload(host, file, putlib.PutConfig{})
+	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: httpClientFor(host)})
 
 	if status.ErrorMsg == "" {
 		info := TagInfo{
@@ -154,8 +154,8 @@ func (tie *TieClient) ImportFile(file string, host string, tags []string, direct
 }
 
 // TODO: FIX this
-func (tie *TieClient) ImportDir(dir string, host string, parentDir DirUID, dirType TieType, tags []string) error {
-	status := putlib.Upload(host, dir, putlib.PutConfig{})
+func (tie *TieClient) ImportDir(dir string, host FileHost, parentDir DirUID, dirType TieType, tags []string) error {
+	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: httpClientFor(host)})
 	for _, x := range status.UploadedItems {
 		if x.ErrorMsg == "" {
 			info := TagInfo{

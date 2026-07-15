@@ -28,7 +28,10 @@ const (
 type PutConfig struct {
 	PathToWorkdir bool
 	JsonOutput    bool
-	currentKey    []byte
+	// Client is the HTTP client used for uploads. When nil, http.DefaultClient
+	// is used. Set it to control TLS behavior (e.g. InsecureSkipVerify).
+	Client     *http.Client
+	currentKey []byte
 }
 
 type Info struct {
@@ -131,7 +134,11 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 	req.Header.Add("Content-Type", contentType)
 	req.Header.Add("Content-Length", strconv.Itoa(length))
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := pc.Client
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
 	defer func() {
 		if resp != nil && resp.Body != nil {
 			resp.Body.Close()

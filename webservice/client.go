@@ -60,7 +60,7 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 	return &reply, err
 }
 
-func NewClient(server, username, password string) *Client {
+func NewClient(server, username, password string, insecure bool) *Client {
 	c := &Client{}
 	c.server = server
 	c.credentials = Credentials{username, password}
@@ -70,8 +70,7 @@ func NewClient(server, username, password string) *Client {
 	}
 
 	if strings.HasPrefix(c.server, "https") {
-		t := tls.Config{}
-		t.InsecureSkipVerify = true // Not so good. Temp hack for self-signed certificates.
+		t := tls.Config{InsecureSkipVerify: insecure}
 		c.r = resty.New().SetTLSClientConfig(&t)
 	} else {
 		c.r = resty.New()

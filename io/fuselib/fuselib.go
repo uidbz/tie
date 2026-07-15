@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -27,20 +28,28 @@ type TieFuse struct {
 	config      config
 }
 
-func NewTieFuse(filehost string, cacheSizeGB int) *TieFuse {
+func NewTieFuse(filehost string, insecure bool, cacheSizeGB int) *TieFuse {
+	httpClient := http.DefaultClient
+	if insecure {
+		httpClient = &http.Client{
+			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		}
+	}
 	return &TieFuse{
-		cache:       &cache{MaxSize: cacheSizeGB * 1024 * 1024 * 1024, filehost: filehost},
+		cache:       &cache{MaxSize: cacheSizeGB * 1024 * 1024 * 1024, filehost: filehost, client: httpClient},
 		hashToInode: make(map[string]uint64),
-		config:      config{filehost: filehost},
+		config:      config{filehost: filehost, client: httpClient},
 	}
 }
 
 type config struct {
 	filehost string
+	client   *http.Client
 }
 
 type cache struct {
 	filehost    string
+	client      *http.Client
 	CurrentSize int
 	MaxSize     int
 	Entries     []*cacheEntry
@@ -187,7 +196,7 @@ type bytesFileHandle struct {
 }
 
 func (c *cache) download(hash string) ([]byte, error) {
-	resp, err := http.Get(c.filehost + "/" + hash)
+	resp, err := c.client.Get(c.filehost + "/" + hash)
 	if err != nil {
 		return nil, err
 	}
@@ -254,7 +263,7 @@ func (n *node) AddChild(child *node) {
 const dirHeader = metadata.DirHeader
 
 func (state *TieFuse) listContent(sourceHash string) (*node, error) {
-	resp, err := http.Get(state.config.filehost + "/" + sourceHash)
+	resp, err := state.config.client.Get(state.config.filehost + "/" + sourceHash)
 	if err != nil {
 		return nil, err
 	}

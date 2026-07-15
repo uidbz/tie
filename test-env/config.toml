@@ -3,7 +3,6 @@ Password = 'defaultpassword'
 Namespace = 'Collections'
 Collection = 'Main'
 Webservice = 'http://localhost:1161'
-UIDService = ''
 DefaultFileHosts = ['default']
 
 [Import]
@@ -13,5 +12,6 @@ AudioCollection = ''
 DocumentCollection = ''
 GeneralCollection = ''
 
-[FileHosts]
-default = 'http://localhost:1162'
+[FileHosts.default]
+URL = 'http://localhost:1162'
+Insecure = false

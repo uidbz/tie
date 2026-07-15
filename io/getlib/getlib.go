@@ -26,10 +26,20 @@ type TieFunc interface {
 	Run(file io.Reader, relPath string) (err error)
 }
 
-func DownloadFile(url string, sourceHash string, destination string) (err error) {
+// get issues an HTTP GET using the provided client, falling back to
+// http.DefaultClient when nil. Pass a custom client to control TLS behavior
+// (e.g. InsecureSkipVerify for self-signed filehosts).
+func get(client *http.Client, url string) (*http.Response, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	return client.Get(url)
+}
+
+func DownloadFile(client *http.Client, url string, sourceHash string, destination string) (err error) {
 	d := Download{destination: destination}
 
-	return ExecForEach(url, sourceHash, &d, "")
+	return ExecForEach(client, url, sourceHash, &d, "")
 }
 
 type Cache struct {
@@ -64,7 +74,7 @@ func InitCache(customLocation string) Cache {
 	return c
 }
 
-func (c *Cache) ReadFile(url string, sourceHash string) (file io.Reader, err error) {
+func (c *Cache) ReadFile(client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
 	var dest string = c.CacheDir
 
 	for i := 0; i < shardLevels*dirWidth; i += dirWidth {
@@ -79,7 +89,7 @@ func (c *Cache) ReadFile(url string, sourceHash string) (file io.Reader, err err
 		if err != nil {
 			return nil, err
 		}
-		f, err2 := ReadFile(url, sourceHash)
+		f, err2 := ReadFile(client, url, sourceHash)
 		if err2 != nil {
 			os.Remove(dest)
 			return nil, err2
@@ -114,9 +124,9 @@ func (d *Download) Run(file io.Reader, relPath string) (err error) {
 	return nil
 }
 
-func IsDir(url string, sourceHash string) (isDir bool, err error) {
+func IsDir(client *http.Client, url string, sourceHash string) (isDir bool, err error) {
 	// Get the data
-	resp, err := http.Get(url + "/" + sourceHash)
+	resp, err := get(client, url+"/"+sourceHash)
 	if err != nil {
 		return false, err
 	}
@@ -142,9 +152,9 @@ func IsDir(url string, sourceHash string) (isDir bool, err error) {
 	}
 }
 
-func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
+func ReadFile(client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
 	// Get the data
-	resp, err := http.Get(url + "/" + sourceHash)
+	resp, err := get(client, url+"/"+sourceHash)
 	if err != nil {
 		return nil, err
 	}
@@ -167,9 +177,9 @@ func ReadFile(url string, sourceHash string) (file io.Reader, err error) {
 	}
 }
 
-func ReadBytes(url string, sourceHash string) (b *bytes.Reader, err error) {
+func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Reader, err error) {
 	// Get the data
-	resp, err := http.Get(url + "/" + sourceHash)
+	resp, err := get(client, url+"/"+sourceHash)
 	if err != nil {
 		return nil, err
 	}
@@ -191,8 +201,8 @@ func ReadBytes(url string, sourceHash string) (b *bytes.Reader, err error) {
 	}
 }
 
-func ExecForEach(url string, sourceHash string, funcToExec TieFunc, relPath string) (err error) {
-	resp, err := http.Get(url + "/" + sourceHash)
+func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string) (err error) {
+	resp, err := get(client, url+"/"+sourceHash)
 	if err != nil {
 		return err
 	}
@@ -214,7 +224,7 @@ func ExecForEach(url string, sourceHash string, funcToExec TieFunc, relPath stri
 		scanner := bufio.NewScanner(&buf)
 		for scanner.Scan() {
 			if entry, ok := metadata.ParseDirLine(scanner.Text()); ok {
-				ExecForEach(url, entry.Hash, funcToExec, entry.Filename)
+				ExecForEach(client, url, entry.Hash, funcToExec, entry.Filename)
 			}
 		}
 		if err := scanner.Err(); err != nil {

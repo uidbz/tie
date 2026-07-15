@@ -38,7 +38,7 @@ func main() {
 		} else {
 			url = protocol + "localhost:1162"
 		}
-		err := getlib.DownloadFile(url, source, dest)
+		err := getlib.DownloadFile(nil, url, source, dest)
 		if err != nil {
 			fmt.Println(err.Error())
 		}
