@@ -14,8 +14,7 @@
 // a crafted manifest from escaping the checkout root, redirecting a fetch, or
 // driving unbounded recursion.
 //
-// DownloadFile checks a whole tree out to a destination directory. ExecForEach
-// is the general driver: it invokes a TieFunc for every verified file in the
-// tree. TotalSize reports the byte total a download would transfer, for sizing
-// a progress bar before the transfer begins.
+// DownloadFile checks a whole tree out to a destination directory. TotalSize
+// reports the byte total a download would transfer, for sizing a progress bar
+// before the transfer begins.
 package getlib

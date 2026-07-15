@@ -308,14 +308,10 @@ func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Rea
 	return bytes.NewReader(data), nil
 }
 
-// ExecForEach walks the tree rooted at sourceHash, invoking funcToExec.Run for
+// execForEach walks the tree rooted at sourceHash, invoking funcToExec.Run for
 // every regular file with its content and path relative to relPath. File bodies
 // are verified against their content address before Run sees them; a mismatch,
 // truncation, or over-deep tree aborts with an error.
-func ExecForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer) error {
-	return execForEach(client, url, sourceHash, funcToExec, relPath, progress, 0)
-}
-
 func execForEach(client *http.Client, url string, sourceHash string, funcToExec TieFunc, relPath string, progress io.Writer, depth int) error {
 	if depth > maxDepth {
 		return fmt.Errorf("getlib: directory nesting exceeds %d levels (possible malicious manifest)", maxDepth)
