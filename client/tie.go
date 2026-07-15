@@ -25,7 +25,6 @@ var defaultConfig = Config{
 }
 
 const (
-	objectUid         = "Uid"
 	tieKey            = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
 	defaultConfigFile = "config"
 )
@@ -52,7 +51,6 @@ type Config struct {
 	Namespace        string
 	Collection       string
 	Webservice       string
-	UIDService       string
 	DefaultFileHosts []string
 	Import           ImportConfig
 	FileHosts        map[string]string

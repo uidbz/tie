@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +12,7 @@ import (
 
 	"git.sr.ht/~uid/tie/io/putlib"
 	"git.sr.ht/~uid/tie/tiedb"
-	"github.com/go-resty/resty/v2"
+	"github.com/google/uuid"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -257,11 +256,7 @@ func (tie *TieClient) CreateTieRootDir() error {
 		return errors.New("Root dir already exists, with UID: " + uid.String())
 	}
 
-	id, err := tie.newDirUID()
-	if err != nil {
-		return err
-	}
-	uid = DirUID(id)
+	uid = tie.newDirUID()
 
 	b := tie.NewBatch()
 	b.Add(str(uid), str(TieParent), str(uid))
@@ -481,11 +476,7 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 		parentPath = FileURIScheme + "/"
 	}
 
-	id, err := tie.newDirUID()
-	if err != nil {
-		return "", err
-	}
-	uid = DirUID(id)
+	uid = tie.newDirUID()
 
 	parentUID, err := tie.DirUIDFromPath(parentPath)
 	if err != nil {
@@ -508,21 +499,6 @@ func (tie *TieClient) SetDirType(uid DirUID, dirType TieType) error {
 	return err
 }
 
-type Uid struct {
-	Uid string
-}
-
-func (tie *TieClient) newDirUID() (uid DirUID, err error) {
-	var result Uid
-	url := tie.Config.UIDService + "/newjsonid"
-	resp, err := resty.New().R().Get(url)
-	if err != nil {
-		return DirUID(""), err
-	}
-	err = json.Unmarshal(resp.Body(), &result)
-	if err != nil {
-		return DirUID(""), err
-	}
-
-	return DirUID(result.Uid), nil
+func (tie *TieClient) newDirUID() DirUID {
+	return DirUID(uuid.Must(uuid.NewV7()).String())
 }
