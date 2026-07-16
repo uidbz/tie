@@ -229,6 +229,13 @@ moving every tree from `interface{}`-boxed gods v1 to typed gods v2 generics
 (`lockedTree` for the outer trees, `AssociationSet` for the subtrees). After the
 v2 migration the remaining heap is genuine node structs and payload, not boxing.
 
+The full optimization history — every lever, the real-`db1.tie` load/heap
+measurements, and two by-value inlining experiments that were built, measured,
+and reverted (both lost to Go map bucket slack) — is written up in
+[`memory-optimization.md`](memory-optimization.md). Read it before attempting
+another association-index memory change; the GiB-scale structural levers are
+exhausted at the current baseline.
+
 ### Two modes: memory-only vs disk-backed
 
 `NewDB(writeToDisk)` selects the mode for every collection it creates:
