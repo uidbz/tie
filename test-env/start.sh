@@ -16,6 +16,10 @@ is_running() { # $1 = pidfile
 	[[ -f "$1" ]] && kill -0 "$(cat "$1")" 2>/dev/null
 }
 
+# start_one runs a binary in the background from $TIE_ENV, so binaries that
+# resolve config paths relative to the working dir (tie-daemon reads its -config
+# as cwd/<name>) find their files. The working dir also holds the db/ and data/
+# subdirs the services write into.
 start_one() { # name binary pidfile logfile args...
 	local name="$1" bin="$2" pidfile="$3" logfile="$4"; shift 4
 	if is_running "$pidfile"; then
@@ -23,13 +27,27 @@ start_one() { # name binary pidfile logfile args...
 		return
 	fi
 	echo "Starting $name ..."
-	nohup "$bin" "$@" >"$logfile" 2>&1 &
-	echo $! >"$pidfile"
+	( cd "$TIE_ENV" && nohup "$bin" "$@" >"$logfile" 2>&1 & echo $! >"$pidfile" )
 	echo "  pid $(cat "$pidfile"), log $logfile"
 }
 
+# The daemon is configured by a TOML file (not flags). Generate it if missing so
+# a fresh checkout works out of the box; an existing file (e.g. with extra users)
+# is left untouched. DbPath is relative to $TIE_ENV, matching start_one's cwd.
+if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
+	cat >"$TIE_DAEMON_CONFIG" <<-EOF
+		ListenOn = ":1161"
+		Insecure = true
+		DbPath = "db"
+
+		[[Users]]
+		Username = "defaultuser"
+		Password = "defaultpassword"
+	EOF
+fi
+
 start_one "tie-daemon"   "$TIE_BIN/tie-daemon"   "$TIE_DAEMON_PID"   "$TIE_LOGS/daemon.log" \
-	--insecure --listen ":1161" --db-path "$TIE_DB_PATH"
+	-config "$(basename "$TIE_DAEMON_CONFIG")"
 
 start_one "tie-filehost" "$TIE_BIN/tie-filehost" "$TIE_FILEHOST_PID" "$TIE_LOGS/filehost.log" \
 	--insecure --listen ":1162" --path "$TIE_DATA_PATH"
