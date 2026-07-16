@@ -79,6 +79,39 @@ files sorted by a property that lives on the thing they associate to. Never
 implemented. Would need a defined contract for how next-level values map back to
 a stable ordering of the parent set.
 
+## TieOutput — tabular CLI rendering of a result set
+
+Removed: `client/output.go` (a lone `TODO` plus a large commented-out block; the
+`TieOutput` type it operated on no longer exists).
+
+Intent: render a query result as an aligned table for the CLI's `--table`/`-t`
+flag, instead of the current one-triple-per-line TSV. `TieOutput` was a
+`map[string]map[string]map[string]bool` (`key → value1 → set of value2`), the
+same shape as today's `TripleSet` but with a `bool` set instead of the current
+set type.
+
+The pieces:
+
+- `LoadTieOutput(key, value1, value2, &input, &columns)` accumulated triples into
+  the nested map while discovering the column set on the fly: the first column is
+  always `"keys"`, and each new `value1` seen (except `"associated"`) became a new
+  column. So columns emerged from the data rather than being declared up front.
+- `TieOutputToTable(input, columns)` projected the map down to just the requested
+  columns.
+- `Print(columns)` rendered it tab-separated, wrapping multi-valued cells in
+  `[a, b, c]`.
+- `ToSlices(columns)` produced column-major `[][]string` for a real table
+  renderer, and sorted rows by the second column via a `ByFileName` sort adapter
+  (note: `ByFileName.Len` returned `len(a[1])`, i.e. the row count of column 1 —
+  fragile, and it assumed at least two columns exist).
+
+Why removed: dead since the result model moved to `TripleSet`, never wired to a
+current code path, and the "columns discovered from `value1`" approach is
+awkward for wide/sparse result sets (every distinct relation becomes a column,
+most cells empty). If revived: build it on `TripleSet` directly, take an explicit
+column selector (and sort key) rather than inferring, and pick a table library
+instead of hand-aligning with tabs.
+
 ## Commented-out Tag() convenience method
 
 Removed: the commented `TieClient.Tag(path, tags, options, addHandler)` in
