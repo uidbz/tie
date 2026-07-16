@@ -9,6 +9,11 @@ The store itself stays general — it holds arbitrary `(key, value1, value2)`
 triples — but the tooling is oriented toward tagging files and browsing them as
 a virtual filesystem.
 
+For an end-to-end walkthrough of running tie as a personal media library —
+importing a filesystem, tagging albums/series/galleries, querying media by tag
+combinations, and linking media together — see
+[docs/media-database.md](docs/media-database.md).
+
 ## Programs (`cmd/`)
 
 | Program        | What it does |
