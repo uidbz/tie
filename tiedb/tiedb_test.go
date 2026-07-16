@@ -490,3 +490,49 @@ func TestNilBlobPolicyParity(t *testing.T) {
 		t.Errorf("tag lookup = %v, want sometag", got)
 	}
 }
+
+// queryKeys runs QueryTags and returns the matched keys as a set.
+func queryKeys(t *testing.T, col *Collection, q TagQuery) map[string]bool {
+	t.Helper()
+	q.Sort = SortOptions{Limit: -1}
+	result, _, _, _ := col.QueryTags(q)
+	keys := make(map[string]bool)
+	result.ForEachKey(func(k string) { keys[k] = true })
+	return keys
+}
+
+// TestQueryTagsScope verifies that Scope restricts a tag query to the associates
+// of a value carried under a different relation ("tie-type"), server-side. The
+// scope value shares no relation with the tag terms, so it cannot be an Include
+// term — it must match on associate (hash) identity alone.
+func TestQueryTagsScope(t *testing.T) {
+	db := NewDB(true)
+	db.SetDefaultReverseRelations([]string{"tag", "tie-type"})
+	col := db.GetCollection(CollectionKey{t.TempDir(), "scope"})
+
+	// hashA: audio + tagged rock; hashB: video + tagged rock; hashC: audio only.
+	col.Add("hashA", "tie-type", "audio")
+	col.Add("hashA", "tag", "rock")
+	col.Add("hashB", "tie-type", "video")
+	col.Add("hashB", "tag", "rock")
+	col.Add("hashC", "tie-type", "audio")
+	col.Sync()
+
+	// "rock" alone matches both hashA and hashB.
+	got := queryKeys(t, col, TagQuery{Include: []string{"rock"}, Reverse: true})
+	if !got["hashA"] || !got["hashB"] || got["hashC"] {
+		t.Errorf("unscoped rock query = %v, want hashA and hashB only", got)
+	}
+
+	// Scoped to audio, "rock" matches only hashA (hashB is video).
+	got = queryKeys(t, col, TagQuery{Include: []string{"rock"}, Scope: "audio", Reverse: true})
+	if !got["hashA"] || got["hashB"] || got["hashC"] {
+		t.Errorf("audio-scoped rock query = %v, want hashA only", got)
+	}
+
+	// A scope value nothing carries yields no matches.
+	got = queryKeys(t, col, TagQuery{Include: []string{"rock"}, Scope: "image", Reverse: true})
+	if len(got) != 0 {
+		t.Errorf("image-scoped rock query = %v, want empty", got)
+	}
+}

@@ -287,6 +287,27 @@ func (s *AssociationSet) intersect(other *AssociationSet) *AssociationSet {
 	return out
 }
 
+// intersectByAssociate returns a new set of the entries in s whose AssociateTo
+// (the associated entry id, e.g. a content hash) also appears in other, ignoring
+// the Relation. Plain intersect keys on the full {AssociateTo, Relation} pair, so
+// two reverse sets built under different relations — a tag and a media type, say —
+// never match even when they point at the same hashes. This variant scopes a
+// tag-query result to a media type entirely server-side by comparing hash
+// identity alone.
+func (s *AssociationSet) intersectByAssociate(other *AssociationSet) *AssociationSet {
+	associates := make(map[uint64]struct{}, other.Size())
+	other.ForEach(func(key UniqueAssociation, _ int64) {
+		associates[key.AssociateTo] = struct{}{}
+	})
+	out := newAssociationSet()
+	s.ForEach(func(key UniqueAssociation, pos int64) {
+		if _, found := associates[key.AssociateTo]; found {
+			out.Put(key, pos)
+		}
+	})
+	return out
+}
+
 // exclude returns a new set of the entries in s that are absent from other.
 func (s *AssociationSet) exclude(other *AssociationSet) *AssociationSet {
 	out := newAssociationSet()

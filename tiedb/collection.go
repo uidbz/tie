@@ -722,9 +722,17 @@ func (ic *Collection) GetPage(s *AssociationSet, value1Filter string, o SortOpti
 // those" directly, so callers no longer compose raw set operations. Include and
 // Exclude terms are matched by reverse association; Reverse also selects the seed
 // via reverse associations (the tag-query case) rather than forward.
+//
+// Scope, when set, restricts matches to the associates of that value under a
+// different relation than the Include/Exclude terms — e.g. scope a "tag" query to
+// a "tie-type" so only audio files are returned. Because Scope's relation differs
+// from the query terms' relation, it cannot be an Include term (intersect keys on
+// the full {associate, relation} pair); it is applied by matching on associate
+// identity alone. An empty Scope means no scoping.
 type TagQuery struct {
 	Include []string    // AND across all; Include[0] is the seed set
 	Exclude []string    // NOT any of these
+	Scope   string      // restrict to associates of this value, ignoring relation
 	Reverse bool        // seed via reverse associations (tag query) vs forward
 	Filter  string      // filter-in on value1 (relation)
 	Sort    SortOptions // pagination (Offset/Limit/SortBy)
@@ -761,6 +769,14 @@ func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTr
 		if other, ok := ic.GetReverseAssociations(tag); ok {
 			set = set.exclude(other)
 		}
+	}
+
+	if q.Scope != "" {
+		scope, ok := ic.GetReverseAssociations(q.Scope)
+		if !ok {
+			return make(TripleSet), nil, 0, true // nothing carries the scope value
+		}
+		set = set.intersectByAssociate(scope)
 	}
 
 	result, sorted, total = ic.GetPage(set, q.Filter, q.Sort)

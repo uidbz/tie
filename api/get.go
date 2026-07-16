@@ -37,6 +37,10 @@ type GetOptions struct {
 	// the result must NOT be associated with.
 	Include         []string
 	Exclude         []string
+	// Scope restricts matches to the associates of this value under a different
+	// relation than the Include/Exclude terms (e.g. a tie-type value scoping a
+	// tag query to one media type). Empty means no scoping.
+	Scope           string
 	Filter          string
 	Reverse         bool
 	GetNextLevel    bool
@@ -87,6 +91,7 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	q := tiedb.TagQuery{
 		Include: append([]string{request.Key}, request.Options.Include...),
 		Exclude: request.Options.Exclude,
+		Scope:   request.Options.Scope,
 		Reverse: request.Options.Reverse,
 		Filter:  request.Options.Filter,
 		Sort:    request.Options.Sort,

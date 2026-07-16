@@ -444,24 +444,16 @@ func (tie *TieClient) FilesWithTag(tag string, offset, limit int) ([]TaggedFile,
 // FilesWithTags returns the files that carry ALL of include and NONE of exclude,
 // scoped to a single media type (e.g. TieAudioFile for "find music with tag1,
 // tag2 but not tag4"). Tags share the "tag" relation so they AND/NOT together
-// inside one QueryTags call; tie-type lives under a different relation and cannot
-// be a query term (association-set intersection keys on the relation too), so the
-// media-type scoping is applied as a separate set intersected client-side. When
-// include is empty the whole media type is returned. offset/limit paginate after
-// filtering; limit <= 0 means no limit. The second return is the total number of
-// matching files before pagination.
+// inside one QueryTags call; the media-type scoping keys on a different relation
+// (tie-type), so it rides along as the query's Scope, which the server intersects
+// by hash identity — no client-side filtering. When include is empty the whole
+// media type is browsed directly. The server paginates via offset/limit; limit
+// <= 0 means no limit. The second return is the total number of matching files
+// before pagination.
 func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string, offset, limit int) ([]TaggedFile, int, error) {
-	typeSet, err := tie.hashesOfType(mediaType)
-	if err != nil {
-		return nil, 0, err
-	}
-	if len(typeSet) == 0 {
-		return nil, 0, nil
-	}
-
 	// With no tags, browse the whole media type directly.
 	if len(include) == 0 {
-		return tie.filesFromTypeSet(mediaType, typeSet, offset, limit)
+		return tie.filesOfType(mediaType, offset, limit)
 	}
 
 	o := GetOptions{
@@ -469,8 +461,10 @@ func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string
 		Filter:       str(TieTag),
 		Include:      include[1:],
 		Exclude:      exclude,
+		Scope:        str(mediaType),
 		GetNextLevel: true,
 	}
+	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
 	r, err := tie.Get(include[0], o)
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil
@@ -481,38 +475,17 @@ func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string
 
 	var files []TaggedFile
 	for _, t := range r.SortedResult {
-		hash := t.Key
-		if _, ok := typeSet[hash]; !ok {
-			continue
-		}
-		files = append(files, taggedFileFrom(hash, r.NextLevelResult[hash]))
+		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
 	}
-	total := len(files)
-	return paginate(files, offset, limit), total, nil
+	return files, r.TotalCount, nil
 }
 
-// hashesOfType returns the set of content hashes tagged with the given media
-// type, via the reverse index on the "tie-type" relation.
-func (tie *TieClient) hashesOfType(mediaType TieType) (map[string]struct{}, error) {
-	o := GetOptions{Reverse: true, Filter: str(TieTypeProperty)}
-	r, err := tie.Get(str(mediaType), o)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	set := make(map[string]struct{}, len(r.Result))
-	r.Result.ForEachKey(func(hash string) {
-		set[hash] = struct{}{}
-	})
-	return set, nil
-}
-
-// filesFromTypeSet builds TaggedFiles for every hash of a media type, pulling
-// per-hash metadata via a reverse GetNextLevel lookup on the tie-type value.
-func (tie *TieClient) filesFromTypeSet(mediaType TieType, typeSet map[string]struct{}, offset, limit int) ([]TaggedFile, int, error) {
+// filesOfType builds TaggedFiles for every hash of a media type, pulling per-hash
+// metadata via a reverse GetNextLevel lookup on the tie-type value. The server
+// paginates via offset/limit.
+func (tie *TieClient) filesOfType(mediaType TieType, offset, limit int) ([]TaggedFile, int, error) {
 	o := GetOptions{Reverse: true, Filter: str(TieTypeProperty), GetNextLevel: true}
+	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
 	r, err := tie.Get(str(mediaType), o)
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil
@@ -524,8 +497,7 @@ func (tie *TieClient) filesFromTypeSet(mediaType TieType, typeSet map[string]str
 	for _, t := range r.SortedResult {
 		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
 	}
-	total := len(files)
-	return paginate(files, offset, limit), total, nil
+	return files, r.TotalCount, nil
 }
 
 // taggedFileFrom builds a TaggedFile from a hash and its next-level metadata,
@@ -538,18 +510,6 @@ func taggedFileFrom(hash string, meta tiedb.Value1) TaggedFile {
 	size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
 	isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
 	return TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir}
-}
-
-// paginate applies offset/limit to files; limit <= 0 means no limit.
-func paginate(files []TaggedFile, offset, limit int) []TaggedFile {
-	if offset >= len(files) {
-		return nil
-	}
-	files = files[offset:]
-	if limit > 0 && limit < len(files) {
-		files = files[:limit]
-	}
-	return files
 }
 
 // MediaRelation is a named, directed association from one media item to another,

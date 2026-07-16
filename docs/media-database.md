@@ -206,11 +206,12 @@ tie get -r -f tag jazz mellow -live   # jazz AND mellow, NOT live (any media typ
 `FilesWithTags` adds the media-type scoping on top of that, which the CLI does not
 yet expose — for now media-typed queries are a Go-client feature.
 
-> Why the split: tags all share the `tag` relation, so the store can intersect
-> them in a single query. Media type lives under a different relation
-> (`tie-type`), and the store's set intersection keys on the relation, so the
-> media-type scope is applied as a second set intersected client-side. This is
-> why it is a client method rather than a single server query.
+> How it works: tags all share the `tag` relation, so the store intersects them
+> in a single query. Media type lives under a different relation (`tie-type`), and
+> the store's default set intersection keys on the relation, so it cannot be an
+> AND term. Instead the media type rides along as the query's `Scope`, which the
+> store intersects by associate (hash) identity alone — the whole query, scoping
+> included, resolves server-side in one call.
 
 ## Relating media to each other
 
