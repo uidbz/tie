@@ -100,7 +100,10 @@ tie import audio-dir ~/Music/Album --tags jazz
 ```
 
 This uploads the whole tree and **mirrors its on-disk hierarchy** as nested
-virtual directories under `file:/<dir-name>`. Concretely, for a tree like
+virtual directories rooted at the directory's **absolute path** under `file:`
+(the argument is resolved with `filepath.Abs`, so relative paths and `~` expand
+to a full path). Concretely, for `~/Music/Album` (say `/home/you/Music/Album`)
+containing
 
 ```
 Album/
@@ -112,13 +115,16 @@ Album/
 
 it creates:
 
-- Virtual directories `file:/Album` and `file:/Album/disc1`, each a `DirUID`
-  entity (a UUID) with `path`, `parent`, and `tie-type` triples. `file:/Album` is
-  additionally marked with the subcommand's dir-type (here `audio-dir`).
+- Virtual directories `file:/home/you/Music/Album` and
+  `file:/home/you/Music/Album/disc1`, each a `DirUID` entity (a UUID) with
+  `path`, `parent`, and `tie-type` triples. The root is additionally marked with
+  the subcommand's dir-type (here `audio-dir`). Rooting at the absolute path means
+  two directories that share a basename (e.g. `~/a/Album` and `~/b/Album`) never
+  collide.
 - One set of file triples per file (as in the single-file case), each with a
   `parent` pointing at the `DirUID` of its *real* containing directory. So
-  `cover.jpg`'s parent is `file:/Album` and the two `.flac` files' parent is
-  `file:/Album/disc1`.
+  `cover.jpg`'s parent is `file:/home/you/Music/Album` and the two `.flac` files'
+  parent is `file:/home/you/Music/Album/disc1`.
 - Each file's own media type is detected individually, so a `cover.jpg` inside an
   `audio-dir` is still tagged `image-file`.
 
@@ -139,6 +145,23 @@ future addition.
 Point `import` at a top-level directory to mirror an entire tree. Because content
 is addressed by hash, re-importing an unchanged tree re-uploads nothing new and
 re-tags idempotently, so imports are safe to repeat.
+
+> **Open question — absolute-path rooting is machine-specific (revisit).**
+> Directory roots are keyed on the importing machine's absolute path
+> (`file:/home/you/Music/Album`). This fixes basename collisions within one
+> machine, but it means:
+>
+> - The same logical tree imported from two machines (or after the user's home
+>   dir moves) lands under *different* virtual roots, so directory structure is
+>   not deduped across machines even though file *content* still is (hash-based).
+> - Stored paths leak the local filesystem layout (usernames, mount points).
+> - It is not backward-compatible with pre-change imports, which were rooted at
+>   `file:/<basename>`; those directory entities won't match new imports.
+>
+> If cross-machine dedup or portability matters later, consider a configurable
+> root label / import-root alias (e.g. map `~/Music` → `file:/music`) instead of
+> the raw absolute path, so the virtual tree is stable regardless of where the
+> bytes live on disk.
 
 ## Tagging after import
 
@@ -272,7 +295,7 @@ The mirrored hierarchy created at import is readable with `ReadTieDir`, which
 returns a directory's paths, parent(s), subdirectories, and files:
 
 ```go
-uid, _ := tie.DirUIDFromPath("file:/Album")
+uid, _ := tie.DirUIDFromPath("file:/home/you/Music/Album")
 dir, _ := client.ReadTieDir(tie, uid)
 // dir.SubDirs, dir.Files, dir.ParentUIDs, dir.Paths
 ```

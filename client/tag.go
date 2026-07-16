@@ -150,7 +150,14 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}
 
-	rootName := filepath.Base(dir)
+	// Root the virtual tree at the directory's absolute path so imports of
+	// different directories that happen to share a basename (e.g. ~/a/Album and
+	// ~/b/Album) don't collide under one file:/Album root.
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	rootPath := FileURIScheme + filepath.ToSlash(absDir)
 	dirCache := make(map[string]DirUID)
 	// dirUID resolves (creating on demand, with ancestors) the virtual DirUID for
 	// a directory given by its path relative to the import root ("." = the root).
@@ -158,7 +165,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if uid, ok := dirCache[relDir]; ok {
 			return uid, nil
 		}
-		vpath := FileURIScheme + "/" + rootName
+		vpath := rootPath
 		if relDir != "." {
 			vpath += "/" + filepath.ToSlash(relDir)
 		}
