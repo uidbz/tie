@@ -81,11 +81,14 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		UserNamespace: "userdata",
 		DbPath:        cfg.DbPath,
 		Users:         users,
-		// Only these relations are ever queried in reverse (tag lookups, path->UID,
-		// and UID children via parent). Restricting the reverse index to them keeps
-		// the bulk of file metadata (filename, size, media-type, ...) from doubling
-		// association memory.
-		ReverseRelations: []string{"tag", "path", "parent"},
+		// Only these relations are ever queried in reverse: tag lookups, path->UID,
+		// UID children via parent, and media-type set-scoping (all hashes of a
+		// tie-type, so media queries can intersect a type with tag results).
+		// Restricting the reverse index to them keeps the bulk of file metadata
+		// (filename, size, ...) from doubling association memory. The reverse index
+		// is rebuilt from forward triples on startup, so adding a relation here
+		// takes effect for existing data after one restart.
+		ReverseRelations: []string{"tag", "path", "parent", "tie-type"},
 	}
 
 	c := api.CollectionInfo{}

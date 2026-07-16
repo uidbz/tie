@@ -501,6 +501,7 @@ func ImportImage() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "gallery", Aliases: []string{"g"}, Usage: "Tag with gallery name (default parent dir)", Value: "$DIR"},
 			&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
+			&cli.StringFlag{Name: "dir-type", Usage: "Type for imported directories: image-dir|audio-dir|video-dir|document-dir", Value: "image-dir"},
 			&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
 			&cli.StringSliceFlag{Name: "host"},
 		},
@@ -518,42 +519,32 @@ func ImportImage() *cli.Command {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
+			dirType := client.StringToTieType(ctx.String("dir-type"))
 			for _, file := range ctx.Args().Slice() {
-				if IsImageFromPath(file) {
-					var hosts []string
-					fmt.Println("host '" + ctx.String("host") + "'")
-					if len(ctx.StringSlice("host")) == 0 {
-						hosts = tie.Config.DefaultFileHosts
-						fmt.Println("here", tie.Config.DefaultFileHosts)
-					} else {
-						hosts = ctx.StringSlice("host")
-					}
-					fmt.Println("Uploading to", hosts)
-					for _, h := range hosts {
-						if fi, err := os.Stat(file); err == nil {
-							if fi.IsDir() {
-								err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), "", client.TieImageDir, ctx.StringSlice("tags")) // TODO: Figure out how dirID should work
-								if err != nil {
-									fmt.Println(err)
-								}
-							} else {
-								err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), "") // TODO: Figure out how dirID should work
-								if err != nil {
-									fmt.Println(err)
-								}
-							}
+				fi, err := os.Stat(file)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+				if !fi.IsDir() && !IsImageFromPath(file) {
+					continue
+				}
+				var hosts []string
+				if len(ctx.StringSlice("host")) == 0 {
+					hosts = tie.Config.DefaultFileHosts
+				} else {
+					hosts = ctx.StringSlice("host")
+				}
+				fmt.Println("Uploading to", hosts)
+				for _, h := range hosts {
+					if fi.IsDir() {
+						if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags")); err != nil {
+							fmt.Println(err)
 						}
-						// status := putlib.Upload(tie.Config.FileHosts[h], file, putlib.PutConfig{})
-						// for _, x := range status.UploadedItems {
-						// 	if x.ErrorMsg == "" {
-						// 		fmt.Printf("%v %v\n", x.Hash, x.Filename)
-						// 		info := client.EssentialTagInfo(x.Hash, file, x.MediaType, client.TieImageFile, ctx.StringSlice("tags"))
-						// 		info.Image.GalleryName = ctx.String("gallery")
-						// 		client.Tag(tie, info)
-						// 	} else {
-						// 		fmt.Printf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
-						// 	}
-						// }
+					} else {
+						if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), ""); err != nil {
+							fmt.Println(err)
+						}
 					}
 				}
 			}

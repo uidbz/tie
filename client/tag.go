@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"git.sr.ht/~uid/tie/io/putlib"
+	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
 	"github.com/google/uuid"
 )
@@ -128,33 +129,87 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 			Tags:      tags,
 			IsDir:     stat.IsDir(),
 		}
-		// info := TagInfo {x.Hash, file, x.MediaType, directory, fileType, dirType, tags)
-		Tag(tie, info, collection)
-	} else {
-		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
+		return Tag(tie, info, collection)
 	}
-	return nil
+	return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
 }
 
-// TODO: FIX this
-func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, parentDir DirUID, dirType TieType, tags []string) error {
+// ImportDir uploads a directory tree to the filehost and mirrors its on-disk
+// hierarchy as nested virtual directories under file:/<dir-basename>. Every file
+// is tagged by its content hash and linked to its real containing directory's
+// DirUID, so the tree can be browsed by path; each file's own media type is
+// detected individually. dirType marks the import root (e.g. TieAudioDir for an
+// album), so it also surfaces in media queries. tags are applied to every file.
+//
+// Member order is left implicit: filesystem order already matches the tiedir
+// manifest order. An explicit position triple is only written when a user later
+// reorders members (future work).
+func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType TieType, tags []string) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: httpClientFor(host)})
+	if status.ErrorMsg != "" {
+		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
+	}
+
+	rootName := filepath.Base(dir)
+	dirCache := make(map[string]DirUID)
+	// dirUID resolves (creating on demand, with ancestors) the virtual DirUID for
+	// a directory given by its path relative to the import root ("." = the root).
+	dirUID := func(relDir string) (DirUID, error) {
+		if uid, ok := dirCache[relDir]; ok {
+			return uid, nil
+		}
+		vpath := FileURIScheme + "/" + rootName
+		if relDir != "." {
+			vpath += "/" + filepath.ToSlash(relDir)
+		}
+		uid, err := tie.MkTieDirAll(vpath)
+		if err != nil {
+			return "", err
+		}
+		dirCache[relDir] = uid
+		return uid, nil
+	}
+
 	for _, x := range status.UploadedItems {
-		if x.ErrorMsg == "" {
-			info := TagInfo{
-				Hash:      x.Hash,
-				File:      dir,
-				MediaType: x.MediaType,
-				Directory: parentDir,
-				TieType:   dirType,
-				Tags:      tags,
+		rel, err := filepath.Rel(dir, x.Filename)
+		if err != nil {
+			return err
+		}
+		if x.MediaType == "inode/directory" {
+			// Ensure the directory (and its ancestors) exist as DirUID entities,
+			// so even childless directories are browsable.
+			if _, err := dirUID(rel); err != nil {
+				return err
 			}
-			Tag(tie, info, collection)
-		} else {
-			return fmt.Errorf("Error uploading: %v\n%v\n", x.Filename, x.ErrorMsg)
+			continue
+		}
+		parent, err := dirUID(filepath.Dir(rel))
+		if err != nil {
+			return err
+		}
+		fileType, err := GetTieTypeFromPath(x.Filename)
+		if err != nil {
+			return err
+		}
+		info := TagInfo{
+			Hash:      x.Hash,
+			File:      x.Filename,
+			Size:      x.Size,
+			MediaType: x.MediaType,
+			Directory: parent,
+			TieType:   fileType,
+			Tags:      tags,
+		}
+		if err := Tag(tie, info, collection); err != nil {
+			return err
 		}
 	}
-	return nil
+
+	rootUID, err := dirUID(".")
+	if err != nil {
+		return err
+	}
+	return tie.SetDirType(rootUID, dirType)
 }
 
 func Tag(tie *TieClient, info TagInfo, collection string) error {
@@ -381,17 +436,180 @@ func (tie *TieClient) FilesWithTag(tag string, offset, limit int) ([]TaggedFile,
 	}
 	var files []TaggedFile
 	for _, t := range r.SortedResult {
-		hash := t.Key
-		meta := r.NextLevelResult[hash]
-		filename := meta[str(TieFilename)].ToString()
-		if filename == "" {
-			filename = hash
-		}
-		size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
-		isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
-		files = append(files, TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir})
+		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
 	}
 	return files, r.TotalCount, nil
+}
+
+// FilesWithTags returns the files that carry ALL of include and NONE of exclude,
+// scoped to a single media type (e.g. TieAudioFile for "find music with tag1,
+// tag2 but not tag4"). Tags share the "tag" relation so they AND/NOT together
+// inside one QueryTags call; tie-type lives under a different relation and cannot
+// be a query term (association-set intersection keys on the relation too), so the
+// media-type scoping is applied as a separate set intersected client-side. When
+// include is empty the whole media type is returned. offset/limit paginate after
+// filtering; limit <= 0 means no limit. The second return is the total number of
+// matching files before pagination.
+func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string, offset, limit int) ([]TaggedFile, int, error) {
+	typeSet, err := tie.hashesOfType(mediaType)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(typeSet) == 0 {
+		return nil, 0, nil
+	}
+
+	// With no tags, browse the whole media type directly.
+	if len(include) == 0 {
+		return tie.filesFromTypeSet(mediaType, typeSet, offset, limit)
+	}
+
+	o := GetOptions{
+		Reverse:      true,
+		Filter:       str(TieTag),
+		Include:      include[1:],
+		Exclude:      exclude,
+		GetNextLevel: true,
+	}
+	r, err := tie.Get(include[0], o)
+	if errors.Is(err, ErrNotFound) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var files []TaggedFile
+	for _, t := range r.SortedResult {
+		hash := t.Key
+		if _, ok := typeSet[hash]; !ok {
+			continue
+		}
+		files = append(files, taggedFileFrom(hash, r.NextLevelResult[hash]))
+	}
+	total := len(files)
+	return paginate(files, offset, limit), total, nil
+}
+
+// hashesOfType returns the set of content hashes tagged with the given media
+// type, via the reverse index on the "tie-type" relation.
+func (tie *TieClient) hashesOfType(mediaType TieType) (map[string]struct{}, error) {
+	o := GetOptions{Reverse: true, Filter: str(TieTypeProperty)}
+	r, err := tie.Get(str(mediaType), o)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]struct{}, len(r.Result))
+	r.Result.ForEachKey(func(hash string) {
+		set[hash] = struct{}{}
+	})
+	return set, nil
+}
+
+// filesFromTypeSet builds TaggedFiles for every hash of a media type, pulling
+// per-hash metadata via a reverse GetNextLevel lookup on the tie-type value.
+func (tie *TieClient) filesFromTypeSet(mediaType TieType, typeSet map[string]struct{}, offset, limit int) ([]TaggedFile, int, error) {
+	o := GetOptions{Reverse: true, Filter: str(TieTypeProperty), GetNextLevel: true}
+	r, err := tie.Get(str(mediaType), o)
+	if errors.Is(err, ErrNotFound) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	var files []TaggedFile
+	for _, t := range r.SortedResult {
+		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
+	}
+	total := len(files)
+	return paginate(files, offset, limit), total, nil
+}
+
+// taggedFileFrom builds a TaggedFile from a hash and its next-level metadata,
+// falling back to the hash as the display name when no filename is recorded.
+func taggedFileFrom(hash string, meta tiedb.Value1) TaggedFile {
+	filename := meta[str(TieFilename)].ToString()
+	if filename == "" {
+		filename = hash
+	}
+	size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
+	isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
+	return TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir}
+}
+
+// paginate applies offset/limit to files; limit <= 0 means no limit.
+func paginate(files []TaggedFile, offset, limit int) []TaggedFile {
+	if offset >= len(files) {
+		return nil
+	}
+	files = files[offset:]
+	if limit > 0 && limit < len(files) {
+		files = files[:limit]
+	}
+	return files
+}
+
+// MediaRelation is a named, directed association from one media item to another,
+// both identified by content hash (e.g. {hashA, "sampled-from", hashB}).
+type MediaRelation struct {
+	FromHash string
+	Relation string
+	ToHash   string
+}
+
+// RelateFiles records an open-vocabulary relation between two media items by
+// content hash, e.g. RelateFiles(track, "sampled-from", source). Both directed
+// edges are written as forward triples — (from, relation, to) and
+// (to, relation, from) — because forward associations are always stored (the
+// reverse index is a fixed allowlist that arbitrary relation names are not in).
+// Writing both directions makes the relation browsable from either media item
+// with a plain forward lookup. relation must not be one of the reserved metadata
+// relations (filename, tag, parent, ...).
+func (tie *TieClient) RelateFiles(fromHash, relation, toHash string) error {
+	if !metadata.IsHexHash(fromHash) || !metadata.IsHexHash(toHash) {
+		return errors.New("RelateFiles: both endpoints must be content hashes")
+	}
+	if relation == "" {
+		return errors.New("RelateFiles: relation must not be empty")
+	}
+	b := tie.NewBatch()
+	b.Add(fromHash, relation, toHash)
+	b.Add(toHash, relation, fromHash)
+	r, err := tie.Batch(b)
+	if err != nil {
+		return err
+	}
+	for _, a := range r.AddReplys {
+		if !a.Success {
+			return errors.New("RelateFiles: " + a.Message)
+		}
+	}
+	return nil
+}
+
+// RelationsFrom returns every media-to-media relation recorded on hash. Because
+// RelateFiles writes both directions as forward edges, this one forward lookup
+// surfaces relations pointing both from and into hash. Only triples whose object
+// is itself a content hash are returned, so file metadata (filename, tag, ...) is
+// excluded.
+func (tie *TieClient) RelationsFrom(hash string) ([]MediaRelation, error) {
+	r, err := tie.SimpleGet(hash)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var rels []MediaRelation
+	r.Result.ForEachValue2(func(key, relation, value2 string) {
+		if metadata.IsHexHash(value2) {
+			rels = append(rels, MediaRelation{FromHash: key, Relation: relation, ToHash: value2})
+		}
+	})
+	return rels, nil
 }
 
 // tieDirAncestors returns the virtual directory paths that make up p, from the
