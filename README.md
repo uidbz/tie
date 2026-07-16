@@ -230,7 +230,7 @@ Common tasks are wrapped in a `Makefile`:
 | `make clean` | Remove `dist/`. |
 | `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-daemon` / `tie-filehost`. |
 | `make push MSG="message"` | `go get -u . && go mod tidy`, then commit everything and push. |
-| `make release VERSION=<n>` | Tag `v0.<n>` and push the tag (e.g. `make release VERSION=3.7` tags `v0.3.7`). |
+| `make release VERSION=<tag>` | Tag `<tag>` and push it (e.g. `make release VERSION=v0.4.0`). |
 
 `push` and `release` require their argument and abort with a usage message if
 it is missing.

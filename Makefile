@@ -35,11 +35,11 @@ push:
 	git commit -m "$(MSG)"
 	git push
 
-# Tag a release and push the tag. Usage: make release VERSION=3.7  (tags v0.3.7)
+# Tag a release and push the tag. Usage: make release VERSION=v0.4.0
 release:
-	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=<n>  (tags v0.<n>)"; exit 1; }
-	git tag v0.$(VERSION)
-	git push origin v0.$(VERSION)
+	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=<tag>  (e.g. v0.4.0)"; exit 1; }
+	git tag $(VERSION)
+	git push origin $(VERSION)
 
 clean:
 	rm -rf $(DIST)
