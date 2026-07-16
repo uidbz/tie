@@ -62,13 +62,15 @@ first). All commands below assume `-c` is set or a config is discoverable.
 ## Importing media
 
 Import both uploads bytes to the filehost and writes the describing triples. The
-CLI entry point is `tie import image` — despite the name it handles files and
-directories of any media type; pass `--dir-type` to say what a directory *is*.
+CLI entry point is `tie import`, which handles files and directories of any media
+type — each file's own type is detected from its contents. To label a *directory
+root* as a media collection, use a dir-type subcommand (`audio-dir`, `image-dir`,
+`video-dir`, `document-dir`).
 
 ### A single file
 
 ```sh
-tie import image ~/Music/song.flac --tags favorite --tags chill
+tie import ~/Music/song.flac --tags favorite --tags chill
 ```
 
 This uploads the file, detects its media type from its content (not its
@@ -94,7 +96,7 @@ into a specific collection instead of the config default.
 ### A directory tree (albums, series, image sets)
 
 ```sh
-tie import image ~/Music/Album --dir-type audio-dir --tags jazz
+tie import audio-dir ~/Music/Album --tags jazz
 ```
 
 This uploads the whole tree and **mirrors its on-disk hierarchy** as nested
@@ -112,7 +114,7 @@ it creates:
 
 - Virtual directories `file:/Album` and `file:/Album/disc1`, each a `DirUID`
   entity (a UUID) with `path`, `parent`, and `tie-type` triples. `file:/Album` is
-  additionally marked with your `--dir-type` (here `audio-dir`).
+  additionally marked with the subcommand's dir-type (here `audio-dir`).
 - One set of file triples per file (as in the single-file case), each with a
   `parent` pointing at the `DirUID` of its *real* containing directory. So
   `cover.jpg`'s parent is `file:/Album` and the two `.flac` files' parent is
@@ -122,9 +124,10 @@ it creates:
 
 `--tags` are applied to every file in the tree.
 
-Valid `--dir-type` values: `image-dir`, `audio-dir`, `video-dir`, `document-dir`
-(default `image-dir`). Marking the type is what lets you later treat the
-directory as an ordered album / series / gallery.
+Dir-type subcommands: `audio-dir`, `image-dir`, `video-dir`, `document-dir`. A
+bare `tie import <dir>` labels the root as a generic `directory`. Marking the
+type is what lets you later treat the directory as an ordered album / series /
+gallery.
 
 **Ordering.** Members are left in filesystem (lexical) order, which matches the
 order the `tiedir` manifest already records — no per-file position triples are
@@ -326,8 +329,8 @@ note the range in the relation name or a companion triple.
 
 | Task | Command / API |
 |------|---------------|
-| Import a file | `tie import image <file> --tags a --tags b` |
-| Import a tree as an album | `tie import image <dir> --dir-type audio-dir` |
+| Import a file | `tie import <file> --tags a --tags b` |
+| Import a tree as an album | `tie import audio-dir <dir>` |
 | Add / remove a tag | `tie add <hash> tag t` / `tie del <hash> tag t` |
 | Files with one tag | `tie.FilesWithTag(tag, off, lim)` |
 | Music with tags, not others | `tie.FilesWithTags(TieAudioFile, incl, excl, off, lim)` |

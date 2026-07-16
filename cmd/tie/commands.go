@@ -493,62 +493,58 @@ func cmdConf() *cli.Command {
 	}
 }
 
-func ImportImage() *cli.Command {
-	return &cli.Command{
-		Name:    "image",
-		Aliases: []string{"img"},
-		Usage:   "Upload and tag an image",
-		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "gallery", Aliases: []string{"g"}, Usage: "Tag with gallery name (default parent dir)", Value: "$DIR"},
-			&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
-			&cli.StringFlag{Name: "dir-type", Usage: "Type for imported directories: image-dir|audio-dir|video-dir|document-dir", Value: "image-dir"},
-			&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
-			&cli.StringSliceFlag{Name: "host"},
-		},
-		// Subcommands: []*cli.Command{
-		// 	{
-		// 		Name:  "tags",
-		// 		Aliases: []string{"t"},
-		// 		Usage: "tags to add to the importet item(s)",
-		// 		Action: func(_ context.Context, cCtx *cli.Command) error {
-		// 			fmt.Println("new task template: ", cCtx.Args().First())
-		// 			return nil
-		// 		},
-		// 	},
-		Action: func(_ context.Context, ctx *cli.Command) error {
-			if tie == nil {
-				return errors.New("Error: Config not loaded")
-			}
-			dirType := client.StringToTieType(ctx.String("dir-type"))
-			for _, file := range ctx.Args().Slice() {
-				fi, err := os.Stat(file)
-				if err != nil {
+// importFlags are shared by the bare `import` command and every dir-type
+// subcommand.
+func importFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
+		&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
+		&cli.StringSliceFlag{Name: "host"},
+	}
+}
+
+// runImport uploads and tags every path argument. Each file's own tie-type is
+// detected from its contents; dirType only labels the root of an imported
+// directory tree (files inside are still detected individually).
+func runImport(ctx *cli.Command, dirType client.TieType) error {
+	if tie == nil {
+		return errors.New("Error: Config not loaded")
+	}
+	for _, file := range ctx.Args().Slice() {
+		fi, err := os.Stat(file)
+		if err != nil {
+			fmt.Println(err)
+			continue
+		}
+		hosts := ctx.StringSlice("host")
+		if len(hosts) == 0 {
+			hosts = tie.Config.DefaultFileHosts
+		}
+		fmt.Println("Uploading to", hosts)
+		for _, h := range hosts {
+			if fi.IsDir() {
+				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags")); err != nil {
 					fmt.Println(err)
-					continue
 				}
-				if !fi.IsDir() && !IsImageFromPath(file) {
-					continue
-				}
-				var hosts []string
-				if len(ctx.StringSlice("host")) == 0 {
-					hosts = tie.Config.DefaultFileHosts
-				} else {
-					hosts = ctx.StringSlice("host")
-				}
-				fmt.Println("Uploading to", hosts)
-				for _, h := range hosts {
-					if fi.IsDir() {
-						if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags")); err != nil {
-							fmt.Println(err)
-						}
-					} else {
-						if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), ""); err != nil {
-							fmt.Println(err)
-						}
-					}
+			} else {
+				if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), ""); err != nil {
+					fmt.Println(err)
 				}
 			}
-			return nil
+		}
+	}
+	return nil
+}
+
+// dirTypeImport builds an `import <name>` subcommand that labels imported
+// directory roots with dirType (e.g. `import audio-dir album/`).
+func dirTypeImport(name string, dirType client.TieType) *cli.Command {
+	return &cli.Command{
+		Name:  name,
+		Usage: "import files, labeling directory roots as " + name,
+		Flags: importFlags(),
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			return runImport(ctx, dirType)
 		},
 	}
 }
@@ -558,17 +554,18 @@ func cmdImport() *cli.Command {
 		Name:    "import",
 		Aliases: []string{"i"},
 		Usage:   "import files to tie-fileserver and tag them",
+		Flags:   importFlags(),
+		// Bare `import <paths>` auto-detects each file's type; directory roots
+		// get the generic directory label. Use a dir-type subcommand to label a
+		// directory root as a media collection (audio-dir, image-dir, ...).
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			return runImport(ctx, client.TieDirectory)
+		},
 		Commands: []*cli.Command{
-			ImportImage(),
-			{
-				Name:    "video",
-				Aliases: []string{"c"},
-				Usage:   "complete a task on the list",
-				Action: func(_ context.Context, cCtx *cli.Command) error {
-					fmt.Println("completed task: ", cCtx.Args().First())
-					return nil
-				},
-			},
+			dirTypeImport("audio-dir", client.TieAudioDir),
+			dirTypeImport("image-dir", client.TieImageDir),
+			dirTypeImport("video-dir", client.TieVideoDir),
+			dirTypeImport("document-dir", client.TieDocumentDir),
 		},
 	}
 }
