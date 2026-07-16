@@ -218,3 +218,19 @@ go build ./...
 
 Requires Go 1.25+. Mounting additionally requires FUSE (`/dev/fuse`,
 `fusermount`).
+
+### Makefile
+
+Common tasks are wrapped in a `Makefile`:
+
+| Command | What it does |
+|---------|--------------|
+| `make build` | Build all commands into `dist/`. |
+| `make install` | `go install` all commands into `GOBIN`. |
+| `make clean` | Remove `dist/`. |
+| `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-daemon` / `tie-filehost`. |
+| `make push MSG="message"` | `go get -u . && go mod tidy`, then commit everything and push. |
+| `make release VERSION=<n>` | Tag `v0.<n>` and push the tag (e.g. `make release VERSION=3.7` tags `v0.3.7`). |
+
+`push` and `release` require their argument and abort with a usage message if
+it is missing.
