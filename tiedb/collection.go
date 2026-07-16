@@ -32,10 +32,10 @@ func (ic *Collection) SetBlobPolicy(p *BlobPolicy) {
 		ic.hashValues = nil
 		return
 	}
-	ic.hashEntries = newLockedTree[uint64, [32]byte](uint64Compare)
-	ic.hashValues = newLockedTree[[32]byte, uint64](hashCompare)
-	ic.hashAssociations = newLockedTree[uint64, *AssociationSet](uint64Compare)
-	ic.hashReverseAssociations = newLockedTree[uint64, *AssociationSet](uint64Compare)
+	ic.hashEntries = newLockedTree[uint64, [32]byte](uint64Hash)
+	ic.hashValues = newLockedTree[[32]byte, uint64](hashHash)
+	ic.hashAssociations = newLockedTree[uint64, *AssociationSet](uint64Hash)
+	ic.hashReverseAssociations = newLockedTree[uint64, *AssociationSet](uint64Hash)
 }
 
 // associationsTree returns the forward-association tree housing associations
@@ -283,10 +283,10 @@ func (ic *Collection) secureLevelInIndex(level int) {
 
 	for i := ic.levelCount; i <= level; i++ {
 		ic.levels = append(ic.levels, entryLevel{
-			entries:             newLockedTree[uint64, *UniqueValue](uint64Compare),
-			uniqueValues:        newLockedTree[*UniqueValue, uint64](uniqueValueCompare),
-			associations:        newLockedTree[uint64, *AssociationSet](uint64Compare),
-			reverseAssociations: newLockedTree[uint64, *AssociationSet](uint64Compare),
+			entries:             newLockedTree[uint64, *UniqueValue](uint64Hash),
+			uniqueValues:        newLockedTree[UniqueValue, uint64](uniqueValueHash),
+			associations:        newLockedTree[uint64, *AssociationSet](uint64Hash),
+			reverseAssociations: newLockedTree[uint64, *AssociationSet](uint64Hash),
 		})
 		ic.levelCount++
 	}
@@ -311,7 +311,7 @@ func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]
 	if !ok {
 		return 0, false
 	}
-	if entryID, found := lvl.uniqueValues.Get(&UniqueValue{parentId, value}); found {
+	if entryID, found := lvl.uniqueValues.Get(UniqueValue{parentId, value}); found {
 		return entryID, true
 	} else {
 		return 0, false
@@ -410,7 +410,7 @@ func (ic *Collection) insertEntry(level int, id uint64, uv *UniqueValue) {
 	ic.secureLevelInIndex(level)
 	lvl, _ := ic.levelAt(level) // level exists after secureLevelInIndex
 	lvl.entries.Put(id, uv)
-	lvl.uniqueValues.Put(uv, id)
+	lvl.uniqueValues.Put(*uv, id)
 }
 
 // arenaStore places a Triple in the memory-mode arena and returns its position,

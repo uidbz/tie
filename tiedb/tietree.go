@@ -43,7 +43,7 @@ func (tree *TieTree) SetDefaultReverseRelations(relations []string) {
 
 func NewDB(writeToDisk bool) *TieTree {
 	return &TieTree{
-		collections: newLockedTree[CollectionKey, *Collection](collectionKeyCompare),
+		collections: newLockedTree[CollectionKey, *Collection](collectionKeyHash),
 		writeToDisk: writeToDisk,
 	}
 }

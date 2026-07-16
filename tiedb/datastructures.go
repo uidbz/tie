@@ -58,7 +58,7 @@ type RawDataEntry struct {
 
 type entryLevel struct {
 	entries             *lockedTree[uint64, *UniqueValue]
-	uniqueValues        *lockedTree[*UniqueValue, uint64]
+	uniqueValues        *lockedTree[UniqueValue, uint64]
 	associations        *lockedTree[uint64, *AssociationSet]
 	reverseAssociations *lockedTree[uint64, *AssociationSet]
 }
