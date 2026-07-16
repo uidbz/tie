@@ -42,15 +42,39 @@ func TestBoxingComparison(t *testing.T) {
 		runtime.KeepAlive(tr)
 	}
 
+	uaCompare := func(a, b UniqueAssociation) int {
+		switch {
+		case a.AssociateTo > b.AssociateTo:
+			return 1
+		case a.AssociateTo < b.AssociateTo:
+			return -1
+		case a.Relation > b.Relation:
+			return 1
+		case a.Relation < b.Relation:
+			return -1
+		default:
+			return 0
+		}
+	}
+
 	// v1: interface{} key + interface{} value (the pre-migration representation).
 	measure("v1 interface{} (disk pos)", func() any {
 		tr := rbt1.NewWith(func(a, b interface{}) int {
-			return assocCompare(a.(UniqueAssociation), b.(UniqueAssociation))
+			return uaCompare(a.(UniqueAssociation), b.(UniqueAssociation))
 		})
 		for i := 0; i < n; i++ {
 			tr.Put(UniqueAssociation{AssociateTo: uint64(i), Relation: uint64(i % 3)}, int64(i))
 		}
 		return tr
+	})
+
+	// production representation for a large (promoted) set: a plain map.
+	measure("map[UA]int64 (sharded set)", func() any {
+		m := make(map[UniqueAssociation]int64, n)
+		for i := 0; i < n; i++ {
+			m[UniqueAssociation{AssociateTo: uint64(i), Relation: uint64(i % 3)}] = int64(i)
+		}
+		return m
 	})
 
 	// production: the typed AssociationSet used by the live index.

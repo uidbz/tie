@@ -96,9 +96,12 @@ A triple's association is stored keyed by entry IDs, not strings. Per level
 - `reverseAssociations`: `value2 (uint64)` → `*AssociationSet` keyed by
   `UniqueAssociation{AssociateTo: key, Relation: value1}` → `int64` position
 
-The subtree (`AssociationSet` in `associationset.go`) is a typed gods v2 tree
-`Tree[UniqueAssociation, int64]`, so its key and value are stored unboxed. The
-`int64` value is a *position* in both modes:
+The subtree (`AssociationSet` in `associationset.go`) maps
+`UniqueAssociation → int64`. Query paths never rely on key ordering
+(`Sort` re-sorts by resolved strings; `intersect`/`exclude` use point lookups),
+so it is not an ordered tree — it picks the most compact of three
+representations by size (see "Tiered representation" below). The `int64` value
+is a *position* in both modes:
 
 - **disk-backed mode**: the byte offset of that triple's record in the on-disk
   file (`-1` until the writer assigns it). The full `(key, value1, value2)` IDs
@@ -109,8 +112,8 @@ The subtree (`AssociationSet` in `associationset.go`) is a typed gods v2 tree
   file. Freed slots are recycled via `arenaFree`, mirroring the disk `freespace`
   list.
 
-Keeping the value a uniform `int64` in both modes is deliberate: it lets the
-subtree stay a single `Tree[UniqueAssociation, int64]` instead of a union type
+Keeping the value a uniform `int64` in both modes is deliberate: it keeps every
+entry a fixed 16 bytes (`UniqueAssociation` + position) instead of a union type
 sized to the larger `Triple`, which measured worse.
 
 Both indexes hold the same position; the reverse index is a pure in-memory
@@ -118,12 +121,35 @@ acceleration structure, never persisted separately — it is rebuilt from the fi
 on load. `resolveTriple` turns a position back into a `Triple` uniformly (arena
 lookup in memory mode, cache/disk read in disk mode) for the query path.
 
-`AssociationSet` is also *lazy*: a subtree holding a single association keeps it
-inline in the struct and never allocates a backing tree — the common case for a
-forward index keyed by unique content-address hashes. It promotes to a real tree
-only on the second distinct key. Set algebra (`intersect`/`exclude`, used by
-`QueryTags`) stays internal to `tiedb`; no gods type parameter crosses into the
-`api` package.
+### Tiered representation
+
+`AssociationSet` grows through three representations, chosen by size, because
+the workload is bimodal: a forward index keyed by unique content-address hashes
+holds ~1 association per key, while a reverse index keyed by a shared value2
+(e.g. a "file" relation) can hold millions under one key.
+
+1. **inline** — a single association is held in the struct's `inlineKey` /
+   `inlineVal` fields; nothing is allocated. This is the common forward-index
+   case.
+2. **slice** — on the second distinct key it grows into a flat `[]assocEntry`
+   (a `{key, pos}` pair per entry). For the small-to-medium sets that make up
+   the bimodal middle this is the most memory-compact form: a Go map carries
+   bucket and control-word overhead even when nearly empty (~272 B for a
+   2-entry map vs ~88 B for a 2-entry slice), and a linear scan over a handful
+   of entries is as fast as hashing and stays in cache. Because no query relies
+   on ordering, `Delete` is a swap-remove.
+3. **sharded map** — once a set exceeds `shardThreshold` (256) it splits into
+   `assocShards` (16) independently-locked `map[UniqueAssociation]int64` shards.
+   This is reached only by the reverse index's shared-value hot sets, where two
+   things matter: the fixed per-shard overhead (~1 KiB of mutexes + map headers)
+   finally amortizes to a few percent, and — crucially — many concurrent load
+   workers inserting into the same large set no longer serialize on one lock,
+   since a key's shard is chosen by hashing it.
+
+The tiering is what makes the small-set case cheap: an earlier design allocated
+the 16-shard array on the *second* key, so every 2-entry set paid the full
+~1 KiB shard overhead — a large regression on a bimodal collection. Set algebra
+(`intersect`/`exclude`, used by `QueryTags`) stays internal to `tiedb`.
 
 `insertAssociation` (`collection.go`) builds the forward node always, and the
 reverse node only when `shouldBuildReverse` allows it (see below).
@@ -180,6 +206,14 @@ the entries trie to decide whether to build a reverse node. The loader runs
 worker goroutines that consume records in arbitrary order, so an association can
 be seen before the entry it references. Inserting all entries first guarantees
 every relation string resolves during pass 2.
+
+Each pass reads through one reusable buffer (reallocating it per read churned
+gigabytes of garbage on a large file) and feeds a modestly-sized channel to the
+workers; the reader `copy`s each record into a fixed-size array before sending,
+so buffer reuse is safe. `loadPass` fans out to several workers, and the GC
+pacer is relaxed (`debug.SetGCPercent`) for the load's duration — a bulk load
+builds an almost-entirely-retained heap, so the default pace wastes cycles
+re-scanning a live set that never shrinks.
 
 ## Memory considerations
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -143,6 +144,13 @@ func (t *Collection) loadDB(filename string) error {
 
 	Info(dbname + "Loading DB...")
 
+	// A bulk load builds a large, almost-entirely-retained heap, so the default
+	// GC pace spends cycles re-scanning a live set that never shrinks. Relax the
+	// pacer for the duration of the load (trading transient peak RAM for far
+	// fewer collections) and restore it afterwards.
+	prevGC := debug.SetGCPercent(200)
+	defer debug.SetGCPercent(prevGC)
+
 	// Two passes over the file: entries first, then associations. Associations
 	// resolve their relation string against the entries trie (shouldBuildReverse),
 	// so every entry must exist before any association is inserted.
@@ -163,18 +171,20 @@ func (t *Collection) loadDB(filename string) error {
 // loadPass streams every record of the open db file through worker, which
 // consumes a channel of RawDataEntry and decides which record types to handle.
 func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.WaitGroup)) error {
-	rawDataToLoad := make(chan RawDataEntry, 1024*1024*64)
+	rawDataToLoad := make(chan RawDataEntry, 8192)
 
-	workers := 2
+	workers := 8
 	workersFinished := sync.WaitGroup{}
 	workersFinished.Add(workers)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go worker(rawDataToLoad, &workersFinished)
 	}
 
+	// One reusable read buffer for the whole pass. Reallocating it per iteration
+	// churned ~16 GiB of garbage on a large DB and dominated GC time at load.
+	buf := make([]byte, ENTRY_SIZE*1024*1024)
 	var entry int64
 	for {
-		buf := make([]byte, ENTRY_SIZE*1024*1024)
 		v, err := db.Read(buf)
 		if err != nil && !errors.Is(err, io.EOF) {
 			panic("Error reading database: " + err.Error())
