@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 
 	"git.sr.ht/~uid/tie/client"
 
-	// "github.com/spf13/cobra"
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
 var (
@@ -23,8 +23,10 @@ type Stdin struct {
 }
 
 func main() {
-	app := &cli.App{
-		Usage: "Hey",
+	cmd := &cli.Command{
+		Name:                  "tie",
+		Usage:                 "Hey",
+		EnableShellCompletion: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load", Value: "config.toml"},
 			&cli.StringFlag{Name: "table", Aliases: []string{"t"}, Usage: "Output as table"},
@@ -41,18 +43,18 @@ func main() {
 			cmdDump(),
 			cmdRestore(),
 		},
-		Before: func(cCtx *cli.Context) error {
-			config, err := client.LoadConfig(cCtx.String("config"))
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			config, err := client.LoadConfig(cmd.String("config"))
 			if err != nil {
 				log.Println(err)
 				log.Println("Error opening config file!")
 			} else {
 				tie = client.NewTieClient(config)
 			}
-			return nil
+			return ctx, nil
 		},
 	}
-	if err := app.Run(os.Args); err != nil {
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,8 +24,7 @@ import (
 	"git.sr.ht/~uid/tie/io/fuselib"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
-	"github.com/urfave/cli/v2"
-	// "github.com/spf13/cobra"
+	"github.com/urfave/cli/v3"
 )
 
 func cmdAdd() *cli.Command {
@@ -37,7 +37,7 @@ func cmdAdd() *cli.Command {
 			&cli.StringFlag{Name: "tags", Aliases: []string{"t"}},
 		},
 
-		Action: func(cCtx *cli.Context) error {
+		Action: func(_ context.Context, cCtx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
@@ -68,7 +68,7 @@ func cmdGet() *cli.Command {
 			&cli.StringFlag{Name: "sortby", Aliases: []string{"s"}},
 			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}},
 		},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
@@ -118,7 +118,7 @@ func cmdGet() *cli.Command {
 // resolveFileHost picks the filehost for a file command. A raw --server address
 // takes precedence (with --insecure controlling TLS verification); otherwise the
 // named --host is looked up in config.
-func resolveFileHost(ctx *cli.Context) (client.FileHost, error) {
+func resolveFileHost(ctx *cli.Command) (client.FileHost, error) {
 	if server := ctx.String("server"); server != "" {
 		return client.FileHost{URL: server, Insecure: ctx.Bool("insecure")}, nil
 	}
@@ -151,7 +151,7 @@ func cmdUpload() *cli.Command {
 			&cli.BoolFlag{Name: "insecure", Usage: "Skip TLS certificate verification (with --server)"},
 			&cli.BoolFlag{Name: "json", Usage: "Emit result as JSON"},
 		},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			if ctx.Args().Len() < 1 {
 				return errors.New("Need 1 arg: file")
 			}
@@ -201,7 +201,7 @@ func cmdDownload() *cli.Command {
 			&cli.StringFlag{Name: "server", Usage: "Raw filehost URL, bypassing config"},
 			&cli.BoolFlag{Name: "insecure", Usage: "Skip TLS certificate verification (with --server)"},
 		},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			if ctx.Args().Len() < 2 {
 				return errors.New("Need 2 args: source-hash, dest")
 			}
@@ -240,7 +240,7 @@ func cmdDump() *cli.Command {
 				Usage:   "Read triples directly from a local .tie file instead of the server (offline export; do not use against a file a running daemon has open)",
 			},
 		},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			var triples []tiedb.StringTriple
 			if path := ctx.String("file"); path != "" {
 				var err error
@@ -294,7 +294,7 @@ func cmdRestore() *cli.Command {
 	return &cli.Command{
 		Name:  "restore",
 		Usage: "Restore triples from TSV (key<TAB>value1<TAB>value2) on stdin into the current collection (additive)",
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
@@ -339,7 +339,7 @@ func cmdMount() *cli.Command {
 			&cli.IntFlag{Name: "cache", Usage: "In-memory file cache size in GB", Value: 1},
 			&cli.BoolFlag{Name: "db", Usage: "Mount the live tag-derived filesystem instead of a dir-hash"},
 		},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
@@ -399,7 +399,7 @@ func cmdDel() *cli.Command {
 		Name:    "del",
 		Aliases: []string{"d"},
 		Usage:   "Delete a triple: del [key] [value1] [value2]",
-		Action: func(cCtx *cli.Context) error {
+		Action: func(_ context.Context, cCtx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
@@ -460,11 +460,11 @@ func cmdConf() *cli.Command {
 		Name:    "conf",
 		Aliases: []string{"c"},
 		Usage:   "conf",
-		Subcommands: []*cli.Command{
+		Commands: []*cli.Command{
 			{
 				Name:  "create",
 				Usage: "Create new default config file: conf create [name]",
-				Action: func(cCtx *cli.Context) error {
+				Action: func(_ context.Context, cCtx *cli.Command) error {
 					var name string
 					if cCtx.Args().Len() == 0 {
 						name = "config"
@@ -509,12 +509,12 @@ func ImportImage() *cli.Command {
 		// 		Name:  "tags",
 		// 		Aliases: []string{"t"},
 		// 		Usage: "tags to add to the importet item(s)",
-		// 		Action: func(cCtx *cli.Context) error {
+		// 		Action: func(_ context.Context, cCtx *cli.Command) error {
 		// 			fmt.Println("new task template: ", cCtx.Args().First())
 		// 			return nil
 		// 		},
 		// 	},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
@@ -567,13 +567,13 @@ func cmdImport() *cli.Command {
 		Name:    "import",
 		Aliases: []string{"i"},
 		Usage:   "import files to tie-fileserver and tag them",
-		Subcommands: []*cli.Command{
+		Commands: []*cli.Command{
 			ImportImage(),
 			{
 				Name:    "video",
 				Aliases: []string{"c"},
 				Usage:   "complete a task on the list",
-				Action: func(cCtx *cli.Context) error {
+				Action: func(_ context.Context, cCtx *cli.Command) error {
 					fmt.Println("completed task: ", cCtx.Args().First())
 					return nil
 				},
