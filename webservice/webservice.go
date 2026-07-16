@@ -5,25 +5,19 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
 	"github.com/caddyserver/certmagic"
-	"github.com/julienschmidt/httprouter"
 )
 
 type Webservice struct {
 	Config           WebserviceConfig
-	router           *httprouter.Router
+	mux              *http.ServeMux
 	requests         []RequestInterface
-	validationCodes  map[string]string
-	validationTimers map[string]*time.Timer
-	validationMutex  sync.Mutex
 	db               *tiedb.TieTree
 	requestsToAnswer chan *RequestToAnswer
 }
@@ -36,22 +30,6 @@ type RequestToAnswer struct {
 	Wait     *sync.WaitGroup
 }
 
-const (
-	PASSWORDFIELD         = "password"
-	MAILSETTINGSDB        = "mailsettingsdb"
-	REQUESTVALIDATIONCODE = "requestvalidationcode"
-	REQUESTCREATEACCOUNT  = "requestcreateaccount"
-	VALIDATIONCHARS       = "0123456789"
-	MAIL                  = "mail"     // Used for mail settings db
-	SERVER                = "server"   // Used for mail settings db
-	FROM                  = "from"     // Used for mail settings db
-	SUBJECT               = "subject"  // Used for mail settings db
-	USERNAME              = "username" // Used for mail settings db
-	PASSWORD              = "password" // Used for mail settings db
-	MESSAGE               = "message"  // Used for mail settings db
-	VALIDATIONLENGTH      = 4
-)
-
 type WebserviceConfig struct {
 	ListenOn      string
 	Insecure      bool
@@ -59,11 +37,12 @@ type WebserviceConfig struct {
 	KeyFile       string
 	UseCertmagic  bool
 	CertmagicHost string
-	AuthNamespace string
 	UserNamespace string
-	AuthFile      string
-	authKey       tiedb.CollectionKey
 	DbPath        string
+
+	// Users maps a username to its password. Access management is done by
+	// populating this from the daemon's config file; it is read-only at runtime.
+	Users map[string]string
 
 	// ReverseRelations restricts which relations (value1) collections index in
 	// reverse. Empty/nil indexes every relation (the original behavior). Set it
@@ -72,42 +51,29 @@ type WebserviceConfig struct {
 	ReverseRelations []string
 }
 
-type MailSettings struct {
-	Server   string
-	From     string
-	Subject  string
-	Username string
-	Password string
-	Message  string
-}
-
 func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webservice {
 	ws := &Webservice{}
-	ws.router = httprouter.New()
+	ws.mux = http.NewServeMux()
 	ws.Config = config
-	ws.Config.authKey = tiedb.CollectionKey{ws.DbPath(config.AuthNamespace), config.AuthFile}
 	ws.requests = requests
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	ws.db.SetBlobPolicy(metadata.HexHashBlobPolicy())
-	ws.validationCodes = make(map[string]string)
-	ws.validationTimers = make(map[string]*time.Timer)
-	rand.Seed(time.Now().UnixNano())
 	ws.requestsToAnswer = make(chan *RequestToAnswer, 10000)
 	ws.startRequestAnswerer()
 
 	return ws
 }
 
-func (ws *Webservice) ListenAndServe(routes func(*httprouter.Router)) {
-	routes(ws.router)
+func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
+	routes(ws.mux)
 
 	if ws.Config.Insecure {
 		fmt.Println("Listening on http://" + ws.Config.ListenOn + "\n")
-		log.Fatal(http.ListenAndServe(ws.Config.ListenOn, ws.router))
+		log.Fatal(http.ListenAndServe(ws.Config.ListenOn, ws.mux))
 	} else {
 		if ws.Config.UseCertmagic {
-			log.Fatal(certmagic.HTTPS([]string{ws.Config.CertmagicHost}, ws.router))
+			log.Fatal(certmagic.HTTPS([]string{ws.Config.CertmagicHost}, ws.mux))
 		} else {
 			if ws.Config.CertFile == "" || ws.Config.KeyFile == "" {
 				fmt.Println("Error: Please provide --tls-cert <file.crt> and --tls-key <file.key> or set --insecure.")
@@ -115,33 +81,19 @@ func (ws *Webservice) ListenAndServe(routes func(*httprouter.Router)) {
 				return
 			}
 			fmt.Println("Listening on https://" + ws.Config.ListenOn + "\n")
-			log.Fatal(http.ListenAndServeTLS(ws.Config.ListenOn, ws.Config.CertFile, ws.Config.KeyFile, ws.router))
+			log.Fatal(http.ListenAndServeTLS(ws.Config.ListenOn, ws.Config.CertFile, ws.Config.KeyFile, ws.mux))
 		}
 	}
 }
 
-func (ws *Webservice) BasicAuth(h httprouter.Handle) httprouter.Handle {
-	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (ws *Webservice) BasicAuth(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		// Get the Basic Authentication credentials
 		user, password, hasAuth := r.BasicAuth()
 		realPW, userExists := ws.GetPassword(user)
 		if hasAuth && userExists && password == realPW {
-			// Delegate request to the given handle
-			switch user {
-			case REQUESTVALIDATIONCODE:
-				raw_data, _ := io.ReadAll(r.Body)
-				valid := NewValidationCodeRequest()
-				valid.getValidationCode = ws.GetValidationCode
-				ws.AnswerRequest(&RequestToAnswer{w, raw_data, valid, user, nil})
-			case REQUESTCREATEACCOUNT:
-				raw_data, _ := io.ReadAll(r.Body)
-				account := NewCreateAccountRequest()
-				account.validate = ws.Validate
-				account.addUser = ws.AddUser
-				ws.AnswerRequest(&RequestToAnswer{w, raw_data, account, user, nil})
-			default:
-				h(w, r, ps)
-			}
+			// Delegate request to the given handler
+			h(w, r)
 		} else {
 			// Request Basic Authentication otherwise
 			w.Header().Set("WWW-Authenticate", "Basic realm=Restricted")
@@ -151,68 +103,9 @@ func (ws *Webservice) BasicAuth(h httprouter.Handle) httprouter.Handle {
 }
 
 func (ws *Webservice) GetPassword(user string) (password string, exists bool) {
-	if user == REQUESTVALIDATIONCODE || user == REQUESTCREATEACCOUNT {
-		return "", true
-	}
-	col := ws.db.GetCollection(ws.Config.authKey)
-	userdata, userExists := col.Get(user, PASSWORDFIELD)
-	pw := ""
-	if userExists {
-		pw, _ = userdata[user][PASSWORDFIELD].One()
-		// if password == "" then do something appropriate
-	}
+	pw, ok := ws.Config.Users[user]
 
-	return pw, userExists
-}
-
-func RandomCode() string {
-	b := make([]byte, VALIDATIONLENGTH)
-	for i := range b {
-		b[i] = VALIDATIONCHARS[rand.Intn(len(VALIDATIONCHARS))]
-	}
-
-	return string(b)
-}
-
-func (ws *Webservice) GetValidationCode(user string) string {
-	ws.validationMutex.Lock()
-	defer ws.validationMutex.Unlock()
-
-	code := RandomCode()
-	ws.validationCodes[user] = code
-	timeout := 4 * time.Hour
-
-	if _, exists := ws.validationTimers[user]; exists {
-		ws.validationTimers[user].Reset(timeout)
-	} else {
-		ws.validationTimers[user] = time.NewTimer(timeout)
-		go func() {
-			<-ws.validationTimers[user].C
-			ws.validationMutex.Lock()
-			defer ws.validationMutex.Unlock()
-			if _, ok := ws.validationCodes[user]; ok {
-				delete(ws.validationCodes, user)
-			}
-			delete(ws.validationTimers, user)
-		}()
-	}
-
-	return code
-}
-
-func (ws *Webservice) Validate(user, code string) bool {
-	ws.validationMutex.Lock()
-	defer ws.validationMutex.Unlock()
-
-	if realcode, exists := ws.validationCodes[user]; exists {
-		if code == realcode {
-			delete(ws.validationCodes, user)
-
-			return true
-		}
-	}
-
-	return false
+	return pw, ok
 }
 
 func (ws *Webservice) DbPath(namespace string) string {
@@ -231,41 +124,10 @@ func (ws *Webservice) GetCollection(namespace, collection string) *tiedb.Collect
 	return ws.db.GetCollection(key)
 }
 
-func (ws *Webservice) AddUser(username, password string) {
-	col := ws.db.GetCollection(ws.Config.authKey)
-	col.Add(username, PASSWORDFIELD, password)
-}
-
-func (ws *Webservice) DelUser(username, password string) bool {
-	col := ws.db.GetCollection(ws.Config.authKey)
-	_, success := col.Delete(username, PASSWORDFIELD, password)
-
-	return success
-}
-
-func (ws *Webservice) UpdatePassword(username, password, newpassword string) bool {
-	col := ws.db.GetCollection(ws.Config.authKey)
-	_, success := col.Update(username, PASSWORDFIELD, password, newpassword)
-
-	return success
-}
-
-func (ws *Webservice) SetMailSettings(mail MailSettings) {
-	key := tiedb.CollectionKey{ws.Config.AuthNamespace, MAILSETTINGSDB}
-	col := ws.db.GetCollection(key)
-
-	col.SimpleUpdate(MAIL, SERVER, mail.Server, true)
-	col.SimpleUpdate(MAIL, FROM, mail.From, true)
-	col.SimpleUpdate(MAIL, SUBJECT, mail.Subject, true)
-	col.SimpleUpdate(MAIL, USERNAME, mail.Username, true)
-	col.SimpleUpdate(MAIL, PASSWORD, mail.Password, true)
-	col.SimpleUpdate(MAIL, MESSAGE, mail.Message, true)
-}
-
-func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	raw_data, _ := io.ReadAll(r.Body)
 	r.Body.Close()
-	reqName := ps.ByName("request")
+	reqName := r.PathValue("request")
 	log.Println("Request from " + r.RemoteAddr + ": " + reqName)
 	username, _, _ := r.BasicAuth() // Credentials already validated
 
@@ -286,7 +148,7 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request, ps 
 		}
 	}
 
-	log.Println("Unrecognized request from " + r.RemoteAddr + ": " + ps.ByName("type"))
+	log.Println("Unrecognized request from " + r.RemoteAddr + ": " + reqName)
 }
 
 func (ws *Webservice) startRequestAnswerer() {
@@ -312,7 +174,6 @@ func ErrorToJsonString(prepend string, err error) string {
 	return string(json_reply)
 }
 
-// func (ws *Webservice) AnswerRequest(w http.ResponseWriter, raw_data []byte, r RequestInterface, username string) {
 func (ws *Webservice) AnswerRequest(req *RequestToAnswer) {
 	errRequest := json.Unmarshal(req.RawData, req.Request)
 	if errRequest != nil {

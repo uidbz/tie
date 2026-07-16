@@ -1,5 +1,4 @@
 FROM golang as builder
-RUN go get -d -v github.com/julienschmidt/httprouter
 RUN go get -d -v git.sr.ht/~uid/tiedb
 RUN go get -d -v github.com/dhowden/tag
 RUN go get -d -v github.com/h2non/filetype

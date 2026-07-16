@@ -2,17 +2,24 @@
 
 https://tiedb.eth.link (soon available)
 
+### Configuration
+
+All settings — server options and user accounts — live in a TOML config file.
+Copy `tie-daemon.toml.example` to `tie-daemon.toml` and edit it. Access
+management is done by adding/removing `[[Users]]` entries; passwords are stored
+in plaintext, so keep the file readable only by the daemon's user.
+
 ### Installation & run
 ```
 go get git.sr.ht/~uid/tie-daemon ...
 cd $GOPATH/src/git.sr.ht/~uid/tie-daemon
 go build
-./tie-daemon --db-path <path> [--tls-cert <file.crt> --tls-key <file.key> || --insecure]
+./tie-daemon -config tie-daemon.toml
 ```
 
 ### Run with Docker
 ```
-docker run -p 1161:1161 -v <db-path>:/data -v <certificate-path>:/keys uid3/tie-daemon:latest --db-path /data --tls-cert /keys/<my-cert>.crt --tls-key /keys/<my-key>.key
+docker run -p 1161:1161 -v <db-path>:/data -v <config-path>:/config uid3/tie-daemon:latest -config /config/tie-daemon.toml
 ```
 
 ### Interaction

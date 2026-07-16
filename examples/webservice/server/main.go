@@ -1,15 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"net/http"
 	"os"
 
 	"git.sr.ht/~uid/tie/examples/webservice/api"
-
-	"github.com/julienschmidt/httprouter"
 
 	"git.sr.ht/~uid/tie/webservice"
 )
@@ -38,9 +35,8 @@ func main() {
 		KeyFile:       *keyFile,
 		UseCertmagic:  *useCertmagic,
 		CertmagicHost: *certmagicHost,
-		AuthNamespace: "authentication",
 		UserNamespace: "userdata",
-		AuthFile:      "db",
+		Users:         map[string]string{"myuser": "mypassword"},
 	}
 
 	requests := []webservice.RequestInterface{
@@ -49,24 +45,9 @@ func main() {
 
 	ws := webservice.NewWebservice(config, requests)
 
-	b, err := os.ReadFile("mailsettings.json")
-	if err != nil {
-		log.Fatal("Error reading mail settings file:", err)
+	routes := func(mux *http.ServeMux) {
+		mux.HandleFunc("POST /{request}", ws.BasicAuth(ws.RequestHandler))
 	}
-
-	mail := webservice.MailSettings{}
-	errMail := json.Unmarshal(b, &mail)
-	if errMail != nil {
-		log.Fatal("Error unmarshalling mail settings file:", errMail)
-	}
-
-	ws.SetMailSettings(mail)
-
-	routes := func(r *httprouter.Router) {
-		r.POST("/:request", ws.BasicAuth(ws.RequestHandler))
-	}
-
-	ws.AddUser("myuser", "mypassword")
 
 	ws.ListenAndServe(routes)
 }

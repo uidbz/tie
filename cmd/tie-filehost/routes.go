@@ -1,13 +1,13 @@
 package main
 
 import (
-	"github.com/julienschmidt/httprouter"
+	"net/http"
 )
 
-func routes(r *httprouter.Router) {
-	r.GET("/:hash", DownloadHandler)
-	r.GET("/:hash/:filename", NamedDownloadHandler)
-	r.PUT("/upload", UploadHandler)
-	r.PUT("/upload/:hash", UploadHandler)
-	r.PUT("/upload/:hash/:json", UploadHandler)
+func routes(r *http.ServeMux) {
+	r.HandleFunc("GET /{hash}", DownloadHandler)
+	r.HandleFunc("GET /{hash}/{filename}", NamedDownloadHandler)
+	r.HandleFunc("PUT /upload", UploadHandler)
+	r.HandleFunc("PUT /upload/{hash}", UploadHandler)
+	r.HandleFunc("PUT /upload/{hash}/{json}", UploadHandler)
 }

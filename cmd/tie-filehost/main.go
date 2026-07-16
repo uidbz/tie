@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 
 	"github.com/caddyserver/certmagic"
-	"github.com/julienschmidt/httprouter"
 	"github.com/minio/highwayhash"
 )
 
@@ -77,9 +76,9 @@ func MakeDestinationPath(hash string) string {
 	return dest
 }
 
-func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	h := p.ByName("hash")
-	jsonOut := p.ByName("json")
+func UploadHandler(w http.ResponseWriter, r *http.Request) {
+	h := r.PathValue("hash")
+	jsonOut := r.PathValue("json")
 	log.Println("Receiving file:", h)
 	var dest string
 	defer func() {
@@ -156,8 +155,8 @@ func UploadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) 
 	}
 }
 
-func DownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	hash := p.ByName("hash")
+func DownloadHandler(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
 	if len(hash) != 64 {
 		fmt.Println("Invalid hash:", hash)
 		fmt.Fprint(w, "Invalid hash:", hash)
@@ -168,9 +167,9 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params
 	http.ServeFile(w, r, path)
 }
 
-func NamedDownloadHandler(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
-	hash := p.ByName("hash")
-	filename := p.ByName("filename")
+func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	filename := r.PathValue("filename")
 	if len(hash) != 64 {
 		fmt.Println("Invalid hash:", hash)
 		fmt.Fprint(w, "Invalid hash:", hash)
@@ -210,7 +209,7 @@ func main() {
 	flag.Parse()
 
 	InitKey()
-	router := httprouter.New()
+	router := http.NewServeMux()
 	routes(router)
 	if *path == "" {
 		fmt.Println("Please provide a data-path")

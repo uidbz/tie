@@ -3,12 +3,13 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 
+	"git.sr.ht/~uid/conf"
 	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/tiedb"
 	"git.sr.ht/~uid/tie/webservice"
-	"github.com/julienschmidt/httprouter"
 )
 
 var (
@@ -19,35 +20,67 @@ var (
 	dbPath string
 )
 
+// User is a single account entry in the daemon config. Passwords are stored in
+// plaintext, so the config file must be tightly permissioned.
+type User struct {
+	Username string
+	Password string
+}
+
+// DaemonConfig is the full tie-daemon configuration, loaded from TOML. It holds
+// both the server settings and the list of accounts allowed to authenticate.
+// Access management is done by editing this file, not through the wire protocol.
+type DaemonConfig struct {
+	ListenOn      string
+	Insecure      bool
+	CertFile      string
+	KeyFile       string
+	UseCertmagic  bool
+	CertmagicHost string
+	DbPath        string
+	Users         []User
+}
+
+func defaultConfig() DaemonConfig {
+	return DaemonConfig{
+		ListenOn: ":1161",
+	}
+}
+
 func main() {
-	var insecure = flag.Bool("insecure", false, "Use HTTP instead of HTTPS.")
-	var certFile = flag.String("tls-cert", "", "Root certificate filename.")
-	var keyFile = flag.String("tls-key", "", "Private key filename.")
-	var addr = flag.String("listen", ":1161", "Listen on particular address/port (ignored if using certmagic).")
-	var useCertmagic = flag.Bool("certmagic", false, "Use Let's encrypt for TLS certificate")
-	var certmagicHost = flag.String("host", "", "Hostname for certmagic")
-	var path = flag.String("db-path", "", "Databases path.")
+	var configPath = flag.String("config", "tie-daemon.toml", "Path to TOML config file.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `Example webservice server
+		fmt.Fprintf(os.Stderr, `tie daemon
 -----------------------------
+Configuration (server settings and user accounts) is read from a TOML file.
 `)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
+	cfg := defaultConfig()
+	if _, err := conf.LoadFromCurrentDir(*configPath, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
+		os.Exit(1)
+	}
+
+	users := make(map[string]string, len(cfg.Users))
+	for _, u := range cfg.Users {
+		users[u.Username] = u.Password
+	}
+
 	config := webservice.WebserviceConfig{
-		ListenOn:      *addr,
-		Insecure:      *insecure,
-		CertFile:      *certFile,
-		KeyFile:       *keyFile,
-		UseCertmagic:  *useCertmagic,
-		CertmagicHost: *certmagicHost,
-		AuthNamespace: "authentication",
+		ListenOn:      cfg.ListenOn,
+		Insecure:      cfg.Insecure,
+		CertFile:      cfg.CertFile,
+		KeyFile:       cfg.KeyFile,
+		UseCertmagic:  cfg.UseCertmagic,
+		CertmagicHost: cfg.CertmagicHost,
 		UserNamespace: "userdata",
-		AuthFile:      "db",
-		DbPath:        *path,
+		DbPath:        cfg.DbPath,
+		Users:         users,
 		// Only these relations are ever queried in reverse (tag lookups, path->UID,
 		// and UID children via parent). Restricting the reverse index to them keeps
 		// the bulk of file metadata (filename, size, media-type, ...) from doubling
@@ -71,11 +104,9 @@ func main() {
 
 	ws := webservice.NewWebservice(config, requests)
 
-	routes := func(r *httprouter.Router) {
-		r.POST("/:request", ws.BasicAuth(ws.RequestHandler))
+	routes := func(mux *http.ServeMux) {
+		mux.HandleFunc("POST /{request}", ws.BasicAuth(ws.RequestHandler))
 	}
-
-	ws.AddUser("defaultuser", "defaultpassword")
 
 	ws.ListenAndServe(routes)
 }
