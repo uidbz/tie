@@ -57,6 +57,11 @@ List every known tag:
 
     cat query/tags
 
+Saved queries from your config's [Queries] table appear here as ready-made
+directories, e.g. a "chill-jazz = jazz mellow -live" entry gives:
+
+    ls query/chill-jazz
+
 The other top-level directory, files/<path>/, is the path-based virtual
 directory tree.
 `
@@ -116,6 +121,10 @@ func (q *tagQueryRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 		{Name: tagHelpName, Mode: fuse.S_IFREG},
 		{Name: tagListName, Mode: fuse.S_IFREG},
 	}
+	// Saved queries from config appear as ready-made query directories.
+	for name := range q.state.tie.Config.Queries {
+		entries = append(entries, fuse.DirEntry{Name: name, Mode: fuse.S_IFDIR})
+	}
 	return fs.NewListDirStream(entries), 0
 }
 
@@ -129,10 +138,15 @@ func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 		child := &tagListFile{state: q.state}
 		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
 	}
-	// Treat the directory name as a tag query; validate it resolves before
-	// materializing the inode so a bogus query returns ENOENT rather than an
-	// empty directory.
-	mediaType, include, exclude := parseTagQuery(name)
+	// A saved query name resolves to its stored expression; otherwise the name
+	// is itself treated as an ad-hoc query.
+	query := name
+	if saved, ok := q.state.tie.Config.Queries[name]; ok {
+		query = saved
+	}
+	// Validate the query resolves before materializing the inode so a bogus
+	// query returns ENOENT rather than an empty directory.
+	mediaType, include, exclude := parseTagQuery(query)
 	if len(include) == 0 && mediaType == client.TieUnknownFile {
 		return nil, syscall.ENOENT
 	}

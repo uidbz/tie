@@ -326,10 +326,29 @@ mounts a live filesystem derived from the triple store. Under `query/`, a
 directory named after a tag query lists the matching files — e.g.
 `query/jazz mellow -live` ANDs `jazz` and `mellow` and excludes `live`, and a
 `type:` token (e.g. `type:audio`) scopes to a media type; `cat query/tags` lists
-every known tag. Under `files/`, the path-based import tree is browsable
-directly. It reflects the store on every directory read, so tagging a file makes
-it appear under a matching query without remounting. A tagged directory shows up
+every known tag. Saved queries from the config's `[Queries]` table appear under
+`query/` as ready-made directories (see below). Under `files/`, the path-based
+import tree is browsable directly. It reflects the store on every directory read,
+so tagging a file makes it appear under a matching query without remounting. A
+tagged directory shows up
 as a real directory and expands into its immutable `tiedir` snapshot.
+
+Frequently-used queries can be saved in the config's `[Queries]` table, mapping a
+friendly name to a query string. Each entry shows up as a directory under
+`query/`:
+
+```toml
+[Queries]
+chill-jazz = "jazz mellow -live"
+recent-photos = "type:image 2024"
+```
+
+```sh
+ls "query/chill-jazz"   # runs "jazz mellow -live"
+```
+
+The stored query uses the same syntax as an ad-hoc query directory (space-ANDed
+terms, `-` excludes, optional `type:` scope).
 
 ### As a virtual directory tree (Go)
 

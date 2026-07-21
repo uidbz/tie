@@ -192,10 +192,11 @@ content-addressed tree.
 store. Under `query/`, a directory named after a tag query lists the matching
 files — e.g. `query/jazz mellow -live` ANDs `jazz` and `mellow` and excludes
 `live`, and a `type:` token scopes to a media type; `cat query/tags` lists every
-known tag. Under `files/`, the path-based import tree (`file:/...`) is browsable
-directly. It reflects the store on every directory read, so re-tagging shows up
-without remounting. A tagged directory appears as a real directory and expands
-into its immutable `tiedir` snapshot.
+known tag. Saved queries from the config's `[Queries]` table appear under
+`query/` as ready-made directories. Under `files/`, the path-based import tree
+(`file:/...`) is browsable directly. It reflects the store on every directory
+read, so re-tagging shows up without remounting. A tagged directory appears as a
+real directory and expands into its immutable `tiedir` snapshot.
 
 ### Backup / interop
 

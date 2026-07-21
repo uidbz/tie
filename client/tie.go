@@ -65,6 +65,12 @@ type Config struct {
 	// absolute on-disk path. Supported variables: artist, album, year, title,
 	// track.
 	ImportDest map[string]string
+	// Queries maps a friendly name to a saved tag query, e.g.
+	// "chill-jazz" = "jazz mellow -live". Each entry appears as a directory
+	// under the mount's query/ tree, so "ls query/chill-jazz" runs the stored
+	// query. The query string uses the same syntax as an ad-hoc query dir
+	// (space-ANDed terms, "-" excludes, optional "type:" scope).
+	Queries map[string]string
 	key        []byte
 	verbose    bool
 }

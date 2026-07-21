@@ -8,3 +8,7 @@ DefaultFileHosts = ['default']
 [FileHosts.default]
 URL = 'http://localhost:1162'
 Insecure = false
+
+[Queries]
+outdoor-getaways = 'vacation outdoors'
+non-vacation-outdoors = 'outdoors -vacation'
