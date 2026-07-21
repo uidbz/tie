@@ -609,32 +609,6 @@ func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
 	return tags, r.TotalCount, nil
 }
 
-// FilesWithTag returns the files tagged with tag, ordered by content hash.
-// Files are stored as forward triples (hash, "tag", tag), so a reverse lookup on
-// the tag name yields the hashes; GetNextLevel pulls each hash's filename and
-// size in the same call. offset/limit paginate; limit <= 0 means no limit. The
-// second return is the total number of files before pagination.
-func (tie *TieClient) FilesWithTag(tag string, offset, limit int) ([]TaggedFile, int, error) {
-	o := GetOptions{
-		Reverse:      true,
-		Filter:       str(TieTag),
-		GetNextLevel: true,
-	}
-	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
-	r, err := tie.Get(tag, o)
-	if errors.Is(err, ErrNotFound) {
-		return nil, 0, nil
-	}
-	if err != nil {
-		return nil, 0, err
-	}
-	var files []TaggedFile
-	for _, t := range r.SortedResult {
-		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
-	}
-	return files, r.TotalCount, nil
-}
-
 // FilesWithTags returns the files that carry ALL of include and NONE of exclude,
 // optionally scoped to a single media type (e.g. TieAudioFile for "find music
 // with tag1, tag2 but not tag4"). Tags share the "tag" relation so they AND/NOT

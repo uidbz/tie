@@ -13,13 +13,13 @@ import (
 // TieDBFuse serves a live, mutable virtual filesystem derived from the triple
 // store. The layout is:
 //
-//	/tag                       a text file explaining the query syntax
-//	/tag/<query>/<filename>    files matching a tag query; the directory name is
-//	                           the query itself, e.g. "jazz mellow -live" ANDs
-//	                           jazz and mellow, excludes live. A "type:audio"
-//	                           token scopes to a media type (default: all types).
-//	/by-tag/<tag>/<filename>   flat listing of the files carrying one tag
-//	/files/<path>/...          the path-based virtual directory tree (file:/...)
+//	/query                      README explaining the syntax + a "tags" listing
+//	/query/tags                 newline-separated list of every known tag
+//	/query/<query>/<filename>   files matching a tag query; the directory name is
+//	                            the query itself, e.g. "jazz mellow -live" ANDs
+//	                            jazz and mellow, excludes live. A "type:audio"
+//	                            token scopes to a media type (default: all types).
+//	/files/<path>/...           the path-based virtual directory tree (file:/...)
 //
 // Files serve their bytes from the filehost by hash; tagged directories expand
 // as immutable content-addressed trees (tiedir blobs). Unlike the
@@ -42,21 +42,23 @@ const tagHelpText = `tie tag-query filesystem
 
 Navigate to a directory whose name is a tag query to list the matching files:
 
-    ls "tag/jazz"                 files tagged jazz
-    ls "tag/jazz mellow"          tagged jazz AND mellow
-    ls "tag/jazz mellow -live"    tagged jazz AND mellow, but NOT live
+    ls "query/jazz"                 files tagged jazz
+    ls "query/jazz mellow"          tagged jazz AND mellow
+    ls "query/jazz mellow -live"    tagged jazz AND mellow, but NOT live
 
 Space separates terms (all ANDed). A leading "-" excludes a tag.
 
 Scope to a media type with a "type:" token (default: all types):
 
-    ls "tag/mellow type:audio"    audio files tagged mellow
-    ls "tag/type:image"           all image files
+    ls "query/mellow type:audio"    audio files tagged mellow
+    ls "query/type:image"           all image files
 
-Other top-level directories:
+List every known tag:
 
-    by-tag/<tag>/    flat listing of the files carrying one tag
-    files/<path>/    the path-based virtual directory tree
+    cat query/tags
+
+The other top-level directory, files/<path>/, is the path-based virtual
+directory tree.
 `
 
 // dbRoot lists the top-level virtual directories.
@@ -72,8 +74,7 @@ var (
 
 func (r *dbRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
-		{Name: "tag", Mode: fuse.S_IFDIR},
-		{Name: "by-tag", Mode: fuse.S_IFDIR},
+		{Name: "query", Mode: fuse.S_IFDIR},
 		{Name: "files", Mode: fuse.S_IFDIR},
 	}
 	return fs.NewListDirStream(entries), 0
@@ -81,11 +82,8 @@ func (r *dbRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 func (r *dbRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
-	case "tag":
+	case "query":
 		child := &tagQueryRoot{state: r.state}
-		return r.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
-	case "by-tag":
-		child := &byTagRoot{state: r.state}
 		return r.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 	case "files":
 		child := &pathDir{state: r.state, path: "/"}
@@ -94,9 +92,10 @@ func (r *dbRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*
 	return nil, syscall.ENOENT
 }
 
-// tagQueryRoot is the /tag directory. It cannot enumerate every possible query,
-// so a readdir shows only a README explaining the syntax; each lookup of a
-// non-README name is treated as a query string and resolved live.
+// tagQueryRoot is the /query directory. It cannot enumerate every possible
+// query, so a readdir shows only two helper files: a README explaining the
+// syntax and a "tags" listing of every known tag. Any other name is treated as
+// a query string and resolved live.
 type tagQueryRoot struct {
 	fs.Inode
 	state *TieDBFuse
@@ -107,17 +106,27 @@ var (
 	_ = (fs.NodeLookuper)((*tagQueryRoot)(nil))
 )
 
-const tagHelpName = "README"
+const (
+	tagHelpName = "README"
+	tagListName = "tags"
+)
 
 func (q *tagQueryRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	entries := []fuse.DirEntry{{Name: tagHelpName, Mode: fuse.S_IFREG}}
+	entries := []fuse.DirEntry{
+		{Name: tagHelpName, Mode: fuse.S_IFREG},
+		{Name: tagListName, Mode: fuse.S_IFREG},
+	}
 	return fs.NewListDirStream(entries), 0
 }
 
 func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if name == tagHelpName {
+	switch name {
+	case tagHelpName:
 		child := &staticFile{data: []byte(tagHelpText)}
 		out.Size = uint64(len(child.data))
+		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
+	case tagListName:
+		child := &tagListFile{state: q.state}
 		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
 	}
 	// Treat the directory name as a tag query; validate it resolves before
@@ -129,6 +138,51 @@ func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	}
 	child := &tagQueryDir{state: q.state, mediaType: mediaType, include: include, exclude: exclude}
 	return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
+}
+
+// tagListFile serves the newline-separated list of every known tag, fetched
+// live on each open so a newly added tag shows up without remounting.
+type tagListFile struct {
+	fs.Inode
+	state *TieDBFuse
+}
+
+var (
+	_ = (fs.NodeGetattrer)((*tagListFile)(nil))
+	_ = (fs.NodeOpener)((*tagListFile)(nil))
+)
+
+func (f *tagListFile) contents() ([]byte, syscall.Errno) {
+	tags, _, err := f.state.tie.ListTags(0, 0)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	if len(tags) == 0 {
+		return nil, 0
+	}
+	return []byte(strings.Join(tags, "\n") + "\n"), 0
+}
+
+func (f *tagListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	data, errno := f.contents()
+	if errno != 0 {
+		return errno
+	}
+	out.Size = uint64(len(data))
+	return 0
+}
+
+// Open snapshots the current tag list into a read-only handle, so the bytes
+// stay consistent for the duration of one open.
+func (f *tagListFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	if flags&(syscall.O_RDWR|syscall.O_WRONLY) != 0 {
+		return nil, 0, syscall.EROFS
+	}
+	data, errno := f.contents()
+	if errno != 0 {
+		return nil, 0, errno
+	}
+	return &staticFileHandle{data: data}, 0, 0
 }
 
 // mediaTypeToken maps the friendly "type:" token values to TieTypes. It also
@@ -203,7 +257,7 @@ func (d *tagQueryDir) Lookup(ctx context.Context, name string, out *fuse.EntryOu
 	return lookupTaggedFile(ctx, &d.Inode, d.state, files, name, out)
 }
 
-// staticFile serves fixed in-memory bytes (e.g. the /tag README).
+// staticFile serves fixed in-memory bytes (e.g. the /query README).
 type staticFile struct {
 	fs.Inode
 	data []byte
@@ -228,14 +282,33 @@ func (f *staticFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 }
 
 func (f *staticFile) Read(ctx context.Context, fh fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	if off < 0 || off > int64(len(f.data)) {
+	return readAt(f.data, dest, off)
+}
+
+// staticFileHandle serves a fixed byte snapshot for the duration of one open,
+// used for files whose contents are fetched live at Open time (e.g. the tag
+// list).
+type staticFileHandle struct {
+	data []byte
+}
+
+var _ = (fs.FileReader)((*staticFileHandle)(nil))
+
+func (h *staticFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	return readAt(h.data, dest, off)
+}
+
+// readAt copies the [off, off+len(dest)) window of data into a ReadResult,
+// clamping to the end of data.
+func readAt(data, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	if off < 0 || off > int64(len(data)) {
 		return nil, syscall.EINVAL
 	}
 	end := off + int64(len(dest))
-	if end > int64(len(f.data)) {
-		end = int64(len(f.data))
+	if end > int64(len(data)) {
+		end = int64(len(data))
 	}
-	return fuse.ReadResultData(f.data[off:end]), 0
+	return fuse.ReadResultData(data[off:end]), 0
 }
 
 // taggedFileStream builds a readdir stream from a set of tagged files, reusing
@@ -274,62 +347,6 @@ func lookupTaggedFile(ctx context.Context, parent *fs.Inode, state *TieDBFuse, f
 		return parent.NewInode(ctx, child, stable), 0
 	}
 	return nil, syscall.ENOENT
-}
-
-// byTagRoot lists one directory per known tag.
-type byTagRoot struct {
-	fs.Inode
-	state *TieDBFuse
-}
-
-var (
-	_ = (fs.NodeReaddirer)((*byTagRoot)(nil))
-	_ = (fs.NodeLookuper)((*byTagRoot)(nil))
-)
-
-func (b *byTagRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	tags, _, err := b.state.tie.ListTags(0, 0)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-	entries := make([]fuse.DirEntry, 0, len(tags))
-	for _, tag := range tags {
-		entries = append(entries, fuse.DirEntry{Name: tag, Mode: fuse.S_IFDIR})
-	}
-	return fs.NewListDirStream(entries), 0
-}
-
-func (b *byTagRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	child := &tagDir{state: b.state, tag: name}
-	return b.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
-}
-
-// tagDir lists the files (and tagged sub-directories) carrying one tag.
-type tagDir struct {
-	fs.Inode
-	state *TieDBFuse
-	tag   string
-}
-
-var (
-	_ = (fs.NodeReaddirer)((*tagDir)(nil))
-	_ = (fs.NodeLookuper)((*tagDir)(nil))
-)
-
-func (d *tagDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	files, _, err := d.state.tie.FilesWithTag(d.tag, 0, 0)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-	return taggedFileStream(d.state, files), 0
-}
-
-func (d *tagDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	files, _, err := d.state.tie.FilesWithTag(d.tag, 0, 0)
-	if err != nil {
-		return nil, syscall.EIO
-	}
-	return lookupTaggedFile(ctx, &d.Inode, d.state, files, name, out)
 }
 
 // pathDir exposes the path-based virtual directory tree (the file:/... hierarchy

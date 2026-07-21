@@ -322,9 +322,13 @@ tie get <hash>                     # shows all triples on a hash, relations incl
 tie mount --db /mnt/media
 ```
 
-mounts a live filesystem derived from the triple store, laid out as
-`by-tag/<tag>/<file>`. It reflects the store on every directory read, so tagging a
-file makes it appear under its tag without remounting. A tagged directory shows up
+mounts a live filesystem derived from the triple store. Under `query/`, a
+directory named after a tag query lists the matching files — e.g.
+`query/jazz mellow -live` ANDs `jazz` and `mellow` and excludes `live`, and a
+`type:` token (e.g. `type:audio`) scopes to a media type; `cat query/tags` lists
+every known tag. Under `files/`, the path-based import tree is browsable
+directly. It reflects the store on every directory read, so tagging a file makes
+it appear under a matching query without remounting. A tagged directory shows up
 as a real directory and expands into its immutable `tiedir` snapshot.
 
 ### As a virtual directory tree (Go)

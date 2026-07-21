@@ -34,12 +34,12 @@ echo
 echo "== Browsing $TIE_MNT =="
 set -x
 ls "$TIE_MNT"
-ls "$TIE_MNT/by-tag"
-ls -la "$TIE_MNT/by-tag/vacation"
-cat "$TIE_MNT/by-tag/vacation/beach.txt"
-ls "$TIE_MNT/by-tag/vacation/holiday-pics"
-cat "$TIE_MNT/by-tag/vacation/holiday-pics/pic1.txt"
-ls "$TIE_MNT/by-tag/outdoors"
+cat "$TIE_MNT/query/tags"
+ls -la "$TIE_MNT/query/vacation"
+cat "$TIE_MNT/query/vacation/beach.txt"
+ls "$TIE_MNT/query/vacation/holiday-pics"
+cat "$TIE_MNT/query/vacation/holiday-pics/pic1.txt"
+ls "$TIE_MNT/query/vacation outdoors"
 set +x
 
 echo

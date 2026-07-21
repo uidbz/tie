@@ -2,7 +2,7 @@
 # Populate the stores with sample data:
 #   1. create a few sample files + a sample directory
 #   2. upload their bytes to the filehost (content-addressed)
-#   3. write the tag triples the DB mount reads, so they appear under /by-tag
+#   3. write the tag triples the DB mount reads, so they appear under /query
 #
 # The tag schema (matches client.Tag):
 #   (hash,   "filename", <name>)
@@ -78,4 +78,4 @@ echo
 echo "Seed complete. Known tags:"
 tie_cli get -f all tags 2>/dev/null | awk '{print "  - "$3}'
 echo
-echo "Now mount with:  ./mount-db.sh   (then browse $TIE_MNT/by-tag)"
+echo "Now mount with:  ./mount-db.sh   (then browse $TIE_MNT/query)"

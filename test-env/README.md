@@ -23,10 +23,11 @@ cd test-env     # from the repo root
 Then, in another terminal:
 
 ```bash
-ls  mnt/by-tag/                        # finance  outdoors  vacation
-ls  mnt/by-tag/vacation/               # beach.txt  holiday-pics/
-cat mnt/by-tag/vacation/beach.txt
-ls  mnt/by-tag/vacation/holiday-pics/  # a tagged dir, expanded from its tiedir blob
+cat mnt/query/tags                    # finance  outdoors  vacation
+ls  mnt/query/vacation/               # beach.txt  holiday-pics/
+cat mnt/query/vacation/beach.txt
+ls "mnt/query/vacation outdoors"      # AND query: files tagged both
+ls  mnt/query/vacation/holiday-pics/  # a tagged dir, expanded from its tiedir blob
 ```
 
 Press Ctrl-C in the mount terminal to unmount, then `./stop.sh` to shut the
@@ -57,11 +58,15 @@ store on every `readdir`, so tagging changes show up without remounting:
 # in another shell — tag a file while it's mounted:
 tie -c config.toml add <hash> tag newtag
 tie -c config.toml add tags all newtag
-ls mnt/by-tag/          # newtag/ appears on the next listing
+cat mnt/query/tags      # newtag appears on the next read
 ```
 
-Layout: `mnt/by-tag/<tag>/<file>`. A tagged **directory** appears as a real
-directory and expands into its immutable tiedir snapshot from the filehost.
+Layout: `mnt/query/<query>/<file>`, where `<query>` is a tag expression
+(space-ANDed terms, `-` excludes, optional `type:` scope) — e.g.
+`mnt/query/vacation outdoors -live`. `cat mnt/query/tags` lists every known
+tag. A tagged **directory** appears as a real directory and expands into its
+immutable tiedir snapshot from the filehost. The path-based import tree is
+under `mnt/files/`.
 
 **`mount <hash>` (immutable).** `seed.sh` prints the tiedir hash of the sample
 `holiday-pics/` directory. Mount it directly:
