@@ -562,9 +562,13 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 			fallthrough
 		case types.Has(str(TieDocumentFile)):
 			size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
+			filename := meta[str(TieFilename)].ToString()
+			if filename == "" {
+				filename = key // fall back to the hash when no filename is recorded
+			}
 			f := File{
 				Uid:       key,
-				Filename:  meta[str(TieFilename)].ToString(),
+				Filename:  filename,
 				TieType:   StringToTieType(types.ToString()),
 				MediaType: meta[str(TieMediaType)].ToString(),
 				Size:      size,
