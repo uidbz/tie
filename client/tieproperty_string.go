@@ -22,15 +22,21 @@ func _() {
 	_ = x[TieCollection-11]
 	_ = x[TieTypeProperty-12]
 	_ = x[TieAll-13]
+	_ = x[TieTitle-14]
+	_ = x[TieArtist-15]
+	_ = x[TieAlbum-16]
+	_ = x[TieYear-17]
+	_ = x[TieTrack-18]
 }
 
-const _TieProperty_name = "tie-uidfilenamefilesizenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typeall"
+const _TieProperty_name = "tie-uidfilenamefilesizenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typealltitleartistalbumyeartrack"
 
-var _TieProperty_index = [...]uint8{0, 7, 15, 23, 27, 37, 45, 48, 52, 58, 62, 70, 80, 88, 91}
+var _TieProperty_index = [...]uint8{0, 7, 15, 23, 27, 37, 45, 48, 52, 58, 62, 70, 80, 88, 91, 96, 102, 107, 111, 116}
 
 func (i TieProperty) String() string {
-	if i < 0 || i >= TieProperty(len(_TieProperty_index)-1) {
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_TieProperty_index)-1 {
 		return "TieProperty(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _TieProperty_name[_TieProperty_index[i]:_TieProperty_index[i+1]]
+	return _TieProperty_name[_TieProperty_index[idx]:_TieProperty_index[idx+1]]
 }

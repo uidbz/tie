@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 
 	"git.sr.ht/~uid/tie/client"
 
@@ -23,6 +24,17 @@ type Stdin struct {
 }
 
 func main() {
+	// Load config before building the command tree so `import` can generate a
+	// subcommand per configured dir-type. The -c/--config flag isn't parsed yet
+	// at this point, so peek it out of os.Args directly.
+	config, err := client.LoadConfig(configArg(os.Args))
+	if err != nil {
+		log.Println(err)
+		log.Println("Error opening config file!")
+	} else {
+		tie = client.NewTieClient(config)
+	}
+
 	cmd := &cli.Command{
 		Name:                  "tie",
 		Usage:                 "Hey",
@@ -36,27 +48,38 @@ func main() {
 			cmdDel(),
 			cmdGet(),
 			cmdConf(),
-			cmdImport(),
+			cmdImport(config),
 			cmdMount(),
 			cmdUpload(),
 			cmdDownload(),
 			cmdDump(),
 			cmdRestore(),
 		},
-		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
-			config, err := client.LoadConfig(cmd.String("config"))
-			if err != nil {
-				log.Println(err)
-				log.Println("Error opening config file!")
-			} else {
-				tie = client.NewTieClient(config)
-			}
-			return ctx, nil
-		},
 	}
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// configArg extracts the value of the global -c/--config flag from the raw
+// argument list, matching the cli default when the flag is absent. It only
+// needs to find the global flag (which precedes any subcommand), so a simple
+// left-to-right scan is enough.
+func configArg(args []string) string {
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-c" || a == "--config":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		case strings.HasPrefix(a, "-c="):
+			return strings.TrimPrefix(a, "-c=")
+		case strings.HasPrefix(a, "--config="):
+			return strings.TrimPrefix(a, "--config=")
+		}
+	}
+	return "config.toml"
 }
 
 // if err := app.Run(os.Args); err != nil {

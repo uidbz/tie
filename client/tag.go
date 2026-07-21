@@ -57,6 +57,11 @@ const (
 	TieCollection                      // collection
 	TieTypeProperty                    // tie-type
 	TieAll                             // all
+	TieTitle                           // title
+	TieArtist                          // artist
+	TieAlbum                           // album
+	TieYear                            // year
+	TieTrack                           // track
 )
 
 const (
@@ -104,6 +109,7 @@ type TagInfo struct {
 	Tags      []string
 	Directory DirUID
 	IsDir     bool
+	Metadata  metadata.Media
 }
 
 func (tie *TieClient) ImportFile(file string, host FileHost, collection string, tags []string, directory DirUID) error {
@@ -128,36 +134,198 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 			TieType:   fileType,
 			Tags:      tags,
 			IsDir:     stat.IsDir(),
+			Metadata:  ExtractMediaMetadata(file),
 		}
 		return Tag(tie, info, collection)
 	}
 	return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
 }
 
+// sanitizePathSegment makes a metadata value safe to embed in a single virtual
+// path segment: path separators become spaces (so a value can't inject extra
+// directory levels), "." and ".." are neutralized, control characters are
+// dropped, and surrounding whitespace is trimmed.
+func sanitizePathSegment(s string) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '/' || r == '\\':
+			return ' '
+		case r < 0x20:
+			return -1
+		default:
+			return r
+		}
+	}, s)
+	s = strings.TrimSpace(s)
+	if s == "." || s == ".." {
+		return ""
+	}
+	return s
+}
+
+// renderDestTemplate expands {artist}, {album}, {year}, {title}, {track} in tmpl
+// from m, sanitizing each value so it stays within one path segment. It returns
+// an error if any referenced variable resolves to an empty value, so the caller
+// can fall back rather than produce a path with blank segments. An unknown
+// variable name is also an error.
+func renderDestTemplate(tmpl string, m metadata.Media) (string, error) {
+	value := func(name string) (string, bool) {
+		switch name {
+		case "artist":
+			return sanitizePathSegment(m.Artist), true
+		case "album":
+			return sanitizePathSegment(m.Album), true
+		case "title":
+			return sanitizePathSegment(m.Title), true
+		case "year":
+			if m.Year == 0 {
+				return "", true
+			}
+			return strconv.Itoa(m.Year), true
+		case "track":
+			if m.Track == 0 {
+				return "", true
+			}
+			return strconv.Itoa(m.Track), true
+		}
+		return "", false
+	}
+
+	var out strings.Builder
+	for i := 0; i < len(tmpl); {
+		c := tmpl[i]
+		if c != '{' {
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		end := strings.IndexByte(tmpl[i:], '}')
+		if end < 0 {
+			return "", fmt.Errorf("unterminated '{' in import destination template %q", tmpl)
+		}
+		name := tmpl[i+1 : i+end]
+		v, ok := value(name)
+		if !ok {
+			return "", fmt.Errorf("unknown variable {%s} in import destination template %q", name, tmpl)
+		}
+		if v == "" {
+			return "", fmt.Errorf("empty value for {%s}", name)
+		}
+		out.WriteString(v)
+		i += end + 1
+	}
+	return out.String(), nil
+}
+
+// aggregateMetadata collapses per-file metadata into a single directory-level
+// value per field by taking the most common non-empty value. Album/artist/year
+// describe the directory (album) as a whole, so the modal value is the stable
+// choice even when a stray file carries different tags.
+func aggregateMetadata(items []metadata.Media) metadata.Media {
+	modeStr := func(get func(metadata.Media) string) string {
+		counts := make(map[string]int)
+		for _, it := range items {
+			if v := get(it); v != "" {
+				counts[v]++
+			}
+		}
+		best, bestN := "", 0
+		for v, n := range counts {
+			if n > bestN {
+				best, bestN = v, n
+			}
+		}
+		return best
+	}
+	modeInt := func(get func(metadata.Media) int) int {
+		counts := make(map[int]int)
+		for _, it := range items {
+			if v := get(it); v != 0 {
+				counts[v]++
+			}
+		}
+		best, bestN := 0, 0
+		for v, n := range counts {
+			if n > bestN {
+				best, bestN = v, n
+			}
+		}
+		return best
+	}
+	return metadata.Media{
+		Artist: modeStr(func(m metadata.Media) string { return m.Artist }),
+		Album:  modeStr(func(m metadata.Media) string { return m.Album }),
+		Title:  modeStr(func(m metadata.Media) string { return m.Title }),
+		Year:   modeInt(func(m metadata.Media) int { return m.Year }),
+		Track:  modeInt(func(m metadata.Media) int { return m.Track }),
+	}
+}
+
+// importRootPath decides where an imported directory tree is rooted in the
+// virtual tree, in precedence order:
+//
+//  1. an explicit --dest path, if given;
+//  2. a per-dir-type template from Config.ImportDest, rendered from the tree's
+//     aggregated metadata (falls back to 3 if a template variable is empty);
+//  3. the directory's absolute on-disk path (the default), which keeps imports
+//     that share a basename from colliding under one root.
+func (tie *TieClient) importRootPath(dir, dest, dirType string, meta []metadata.Media) (string, error) {
+	if dest != "" {
+		return FileURIScheme + "/" + strings.TrimPrefix(filepath.ToSlash(dest), "/"), nil
+	}
+	// A non-empty template for this dir-type reshapes the root from metadata; an
+	// empty template value declares the dir-type as label-only (root at the
+	// source path, no reshaping).
+	if tmpl, ok := tie.Config.ImportDest[dirType]; ok && tmpl != "" {
+		rendered, err := renderDestTemplate(tmpl, aggregateMetadata(meta))
+		if err == nil {
+			return FileURIScheme + "/" + strings.TrimPrefix(filepath.ToSlash(rendered), "/"), nil
+		}
+		fmt.Println("import destination template not applied, using source path:", err)
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	return FileURIScheme + filepath.ToSlash(absDir), nil
+}
+
 // ImportDir uploads a directory tree to the filehost and mirrors its on-disk
-// hierarchy as nested virtual directories under file:/<dir-basename>. Every file
-// is tagged by its content hash and linked to its real containing directory's
-// DirUID, so the tree can be browsed by path; each file's own media type is
-// detected individually. dirType marks the import root (e.g. TieAudioDir for an
-// album), so it also surfaces in media queries. tags are applied to every file.
+// hierarchy as nested virtual directories. The tree's root is chosen by
+// importRootPath (explicit dest, a per-dir-type metadata template, or the
+// source's absolute path). Every file is tagged by its content hash and linked
+// to its real containing directory's DirUID, so the tree can be browsed by path;
+// each file's own media type is detected individually. dirType is the tie-type
+// label written on the import root (e.g. "audio-dir" for an album, or any custom
+// type); it is a free-form string, so callers can pass built-in or user-defined
+// dir-types. tags are applied to every file.
 //
 // Member order is left implicit: filesystem order already matches the tiedir
 // manifest order. An explicit position triple is only written when a user later
 // reorders members (future work).
-func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType TieType, tags []string) error {
+func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: httpClientFor(host)})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}
 
-	// Root the virtual tree at the directory's absolute path so imports of
-	// different directories that happen to share a basename (e.g. ~/a/Album and
-	// ~/b/Album) don't collide under one file:/Album root.
-	absDir, err := filepath.Abs(dir)
+	// Extract embedded metadata from each local file once, keyed by local path,
+	// so it feeds both the root-path template (aggregated) and per-file tagging.
+	fileMeta := make(map[string]metadata.Media)
+	allMeta := make([]metadata.Media, 0, len(status.UploadedItems))
+	for _, x := range status.UploadedItems {
+		if x.MediaType == "inode/directory" {
+			continue
+		}
+		m := ExtractMediaMetadata(x.Filename)
+		fileMeta[x.Filename] = m
+		allMeta = append(allMeta, m)
+	}
+
+	rootPath, err := tie.importRootPath(dir, dest, dirType, allMeta)
 	if err != nil {
 		return err
 	}
-	rootPath := FileURIScheme + filepath.ToSlash(absDir)
 	dirCache := make(map[string]DirUID)
 	// dirUID resolves (creating on demand, with ancestors) the virtual DirUID for
 	// a directory given by its path relative to the import root ("." = the root).
@@ -206,6 +374,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			Directory: parent,
 			TieType:   fileType,
 			Tags:      tags,
+			Metadata:  fileMeta[x.Filename],
 		}
 		if err := Tag(tie, info, collection); err != nil {
 			return err
@@ -240,6 +409,21 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 				batch.Add(str(TieTags), str(TieAll), tag)
 			}
 		}
+	}
+	if info.Metadata.Title != "" {
+		batch.Add(hash, str(TieTitle), info.Metadata.Title)
+	}
+	if info.Metadata.Artist != "" {
+		batch.Add(hash, str(TieArtist), info.Metadata.Artist)
+	}
+	if info.Metadata.Album != "" {
+		batch.Add(hash, str(TieAlbum), info.Metadata.Album)
+	}
+	if info.Metadata.Year != 0 {
+		batch.Add(hash, str(TieYear), strconv.Itoa(info.Metadata.Year))
+	}
+	if info.Metadata.Track != 0 {
+		batch.Add(hash, str(TieTrack), strconv.Itoa(info.Metadata.Track))
 	}
 	if info.IsDir {
 		batch.Add(hash, str(TieTypeProperty), str(TieDirectory))
@@ -657,8 +841,8 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 	return uid, nil
 }
 
-func (tie *TieClient) SetDirType(uid DirUID, dirType TieType) error {
-	_, err := tie.Add(str(uid), str(TieTypeProperty), str(dirType))
+func (tie *TieClient) SetDirType(uid DirUID, dirType string) error {
+	_, err := tie.Add(str(uid), str(TieTypeProperty), dirType)
 	return err
 }
 

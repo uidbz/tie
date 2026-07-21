@@ -3,7 +3,6 @@ package putlib
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 
 type PutConfig struct {
 	PathToWorkdir bool
-	JsonOutput    bool
 	// Client is the HTTP client used for uploads. When nil, http.DefaultClient
 	// is used. Set it to control TLS behavior (e.g. InsecureSkipVerify).
 	Client *http.Client
@@ -28,11 +26,6 @@ type PutConfig struct {
 	// body sent, so callers can render an upload progress bar. The total byte
 	// count equals the file/manifest length.
 	Progress io.Writer
-}
-
-type Info struct {
-	Hash      string
-	MediaType string
 }
 
 type Status struct {
@@ -92,10 +85,6 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 
 	bufferedFileReader := bufio.NewReader(f)
 
-	if pc.JsonOutput {
-		url += "/json"
-	}
-
 	var reqBody io.Reader = bufferedFileReader
 	if pc.Progress != nil {
 		reqBody = io.TeeReader(bufferedFileReader, pc.Progress)
@@ -138,31 +127,13 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 		errorMsg = writeErr.Error()
 	}
 
-	var hash string
-	if pc.JsonOutput {
-		info := metadata.Info{}
-		check(json.Unmarshal(body, &info))
-		if writeErr != nil {
-			errorMsg = writeErr.Error()
-		}
-		hash = info.Hash
-		return StatusItem{
-			Hash:      hash,
-			Filename:  path,
-			ErrorMsg:  errorMsg,
-			MediaType: contentType,
-			Size:      length,
-			Head:      head,
-		}
-	} else {
-		return StatusItem{
-			Hash:      string(body),
-			ErrorMsg:  errorMsg,
-			Filename:  path,
-			MediaType: contentType,
-			Size:      length,
-			Head:      head,
-		}
+	return StatusItem{
+		Hash:      string(body),
+		ErrorMsg:  errorMsg,
+		Filename:  path,
+		MediaType: contentType,
+		Size:      length,
+		Head:      head,
 	}
 }
 
@@ -211,23 +182,6 @@ func Upload(url string, file string, config PutConfig) *Status {
 	}
 
 	status.upload(url, file, config)
-
-	return status
-}
-
-// Upload without calculating hash on the client
-func UploadNoHash(url string, file io.Reader, length int, config PutConfig) *Status {
-	status := &Status{}
-
-	// url = ValidateURL(url, status)
-	// if status.ErrorMsg != "" {
-	// 	return status
-	// }
-
-	s := config.UploadMultipart(url, file, length, "dummyfilename")
-
-	// When uploading from reader we don't calculate local hash
-	validate(s.Hash, s, status)
 
 	return status
 }

@@ -124,3 +124,37 @@ referenced a `TieAdd` callback API that no longer exists and duplicated logic no
 living in `client/tag.go` (`ImportFile`/`Tag`). The type-specific enrichment
 (pull ID3 tags for audio, resolution for video at import time) is the part worth
 carrying forward into the canonical import path.
+
+## UploadNoHash — stream an upload without a local hash
+
+Removed: `putlib.UploadNoHash(url, file io.Reader, length int, config)`.
+
+It uploaded from an `io.Reader` (no seekable file on disk), so the client could
+not compute the content hash locally; it trusted the server's returned hash
+instead of validating against a locally-computed one. It had no callers.
+
+Intent worth keeping: a streaming upload path for content the client doesn't
+hold as a file — e.g. piping stdin, or proxying bytes from elsewhere. The wrinkle
+is that content-addressing wants the hash *before* deciding whether an upload is
+even needed (dedup), and a pure stream can't be rewound to hash-then-send without
+buffering. If revived, decide explicitly: buffer to hash first (costs memory for
+large streams), or accept server-trust for this path (weakens the end-to-end
+checksum guarantee that `validate()` gives the normal path).
+
+## Server-side "hash → metadata" service
+
+Context: media metadata extraction (ID3 audio tags via `dhowden/tag`) used to
+live in the filehost and was returned from the upload endpoint via a `/json`
+path-value. It was moved fully client-side (`client.ExtractMediaMetadata`, called
+from `ImportFile`/`ImportDir`) to keep the filehost a clean, content-addressed
+byte store with no media-format knowledge.
+
+The one capability lost by moving it: deriving metadata for a blob the client
+does *not* hold locally (e.g. "re-extract tags for everything already stored").
+No current flow needs this, but if it arises, the clean design is a *separate*
+service that maps a content hash to extracted metadata — reading bytes from the
+filehost, running the same extraction the client uses, and returning `Media`.
+Keeping it out of the filehost preserves the blob store's simplicity; sharing the
+extraction code (`client.ExtractMediaMetadata` or a lifted `metadata`-package
+function) avoids two divergent implementations.
+

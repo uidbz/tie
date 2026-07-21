@@ -58,8 +58,15 @@ type Config struct {
 	WebserviceInsecure bool
 	DefaultFileHosts   []string
 	FileHosts          map[string]FileHost
-	key                []byte
-	verbose            bool
+	// ImportDest maps a dir-type name (e.g. "audio-dir") to a virtual-path
+	// template rendered from a directory's aggregated metadata, e.g.
+	// "/music/{artist}/{year}. {album}". When a dir-type has an entry, imports
+	// of that type are rooted at the rendered path instead of the source's
+	// absolute on-disk path. Supported variables: artist, album, year, title,
+	// track.
+	ImportDest map[string]string
+	key        []byte
+	verbose    bool
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify

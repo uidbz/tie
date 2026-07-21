@@ -100,10 +100,11 @@ tie import audio-dir ~/Music/Album --tags jazz
 ```
 
 This uploads the whole tree and **mirrors its on-disk hierarchy** as nested
-virtual directories rooted at the directory's **absolute path** under `file:`
-(the argument is resolved with `filepath.Abs`, so relative paths and `~` expand
-to a full path). Concretely, for `~/Music/Album` (say `/home/you/Music/Album`)
-containing
+virtual directories. Where the tree is *rooted* in the virtual filesystem is
+decided in precedence order (see "Choosing where a tree lands" below); by default
+it is rooted at the directory's **absolute path** under `file:` (the argument is
+resolved with `filepath.Abs`, so relative paths and `~` expand to a full path).
+Concretely, for `~/Music/Album` (say `/home/you/Music/Album`) containing
 
 ```
 Album/
@@ -130,38 +131,75 @@ it creates:
 
 `--tags` are applied to every file in the tree.
 
-Dir-type subcommands: `audio-dir`, `image-dir`, `video-dir`, `document-dir`. A
-bare `tie import <dir>` labels the root as a generic `directory`. Marking the
-type is what lets you later treat the directory as an ordered album / series /
-gallery.
+Built-in dir-type subcommands: `audio-dir`, `image-dir`, `video-dir`,
+`document-dir`. A bare `tie import <dir>` labels the root as a generic
+`directory`. Marking the type is what lets you later treat the directory as an
+ordered album / series / gallery.
+
+**Custom dir-types.** The dir-type label is a free-form `tie-type` value, so you
+are not limited to the built-ins. Any key you add to the config's `[ImportDest]`
+table becomes its own `import` subcommand:
+
+```toml
+[ImportDest]
+podcast-dir = "/podcasts/{artist}/{title}"   # custom type, with a template
+comic-dir   = ""                              # custom type, label-only
+```
+
+`tie import podcast-dir <dir>` then labels the root `podcast-dir` and roots it via
+the template; `comic-dir` (empty template) just labels the root and leaves it at
+the source path. The built-ins are always present even if absent from
+`[ImportDest]`.
 
 **Ordering.** Members are left in filesystem (lexical) order, which matches the
 order the `tiedir` manifest already records — no per-file position triples are
 written on import. Explicit ordering (for a manually reordered playlist) is a
 future addition.
 
-### Importing your whole filesystem
+### Choosing where a tree lands
 
-Point `import` at a top-level directory to mirror an entire tree. Because content
-is addressed by hash, re-importing an unchanged tree re-uploads nothing new and
-re-tags idempotently, so imports are safe to repeat.
+The virtual root of an imported directory is chosen by the first rule that
+applies:
 
-> **Open question — absolute-path rooting is machine-specific (revisit).**
-> Directory roots are keyed on the importing machine's absolute path
-> (`file:/home/you/Music/Album`). This fixes basename collisions within one
-> machine, but it means:
->
-> - The same logical tree imported from two machines (or after the user's home
->   dir moves) lands under *different* virtual roots, so directory structure is
->   not deduped across machines even though file *content* still is (hash-based).
-> - Stored paths leak the local filesystem layout (usernames, mount points).
-> - It is not backward-compatible with pre-change imports, which were rooted at
->   `file:/<basename>`; those directory entities won't match new imports.
->
-> If cross-machine dedup or portability matters later, consider a configurable
-> root label / import-root alias (e.g. map `~/Music` → `file:/music`) instead of
-> the raw absolute path, so the virtual tree is stable regardless of where the
-> bytes live on disk.
+1. **Explicit `--dest`.** `tie import audio-dir ~/Music/Album --dest /music/blue`
+   roots the tree at `file:/music/blue` verbatim. Highest precedence; overrides
+   everything below.
+2. **A per-dir-type template** from the client config's `[ImportDest]` table,
+   rendered from the tree's *aggregated* metadata. Example config:
+
+   ```toml
+   [ImportDest]
+   audio-dir = "/music/{artist}/{year}. {album}"
+   image-dir = "/pictures/{album}"
+   ```
+
+   Importing an album of Miles Davis tracks tagged `Kind of Blue` (1959) then
+   lands at `file:/music/Miles Davis/1959. Kind of Blue`. Supported variables:
+   `{artist}`, `{album}`, `{year}`, `{title}`, `{track}`. Values are pulled from
+   the files' embedded tags (e.g. ID3 for audio), extracted client-side at import
+   time, and collapsed to one directory-level value each by taking the most common
+   non-empty value across the tree — a stray `cover.jpg` with different tags does
+   not skew placement. Each value is sanitized so a `/` in a tag (e.g. `AC/DC`)
+   can't inject an extra path segment.
+3. **The source's absolute path** (the default), e.g.
+   `file:/home/you/Music/Album`. Used when no `--dest` is given and either no
+   template is configured for the dir-type (including an *empty* template value,
+   which declares a label-only custom type) *or* a referenced template variable
+   is empty (so nothing lands under a half-blank path like `/music//1959. …`). This
+   is also the behavior for a bare `tie import <dir>`.
+
+Because content is addressed by hash, re-importing an unchanged tree re-uploads
+nothing new and re-tags idempotently, so imports are safe to repeat — and since
+the tree is just `parent`/`path` triples over content-addressed files, a tree can
+later be re-placed by rewriting those triples without re-uploading a byte.
+
+> **Note — absolute-path rooting is machine-specific.** The default root (rule 3)
+> is keyed on the importing machine's absolute path, which means the same logical
+> tree imported from two machines lands under *different* virtual roots (file
+> *content* still dedupes, since that is hash-based), and stored paths leak the
+> local layout (usernames, mount points). Use a `[ImportDest]` template or
+> `--dest` to root imports at a stable, machine-independent path when
+> cross-machine dedup or portability matters.
 
 ## Tagging after import
 

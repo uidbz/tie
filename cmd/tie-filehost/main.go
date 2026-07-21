@@ -78,7 +78,6 @@ func MakeDestinationPath(hash string) string {
 
 func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	h := r.PathValue("hash")
-	jsonOut := r.PathValue("json")
 	log.Println("Receiving file:", h)
 	var dest string
 	defer func() {
@@ -99,13 +98,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		jsonData, _, _ := GetMetadata(dest, h)
-		switch jsonOut {
-		case "json":
-			fmt.Fprint(w, string(jsonData))
-		default:
-			fmt.Fprint(w, h)
-		}
+		fmt.Fprint(w, h)
 		return
 	}
 
@@ -147,12 +140,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		dest = dest2
 	}
 	log.Println("Calculated hash:", hashHex)
-	jsonData, _, _ := GetMetadata(dest, hashHex)
-	if jsonOut == "json" {
-		fmt.Fprint(w, string(jsonData))
-	} else {
-		fmt.Fprint(w, hashHex)
-	}
+	fmt.Fprint(w, hashHex)
 }
 
 func DownloadHandler(w http.ResponseWriter, r *http.Request) {

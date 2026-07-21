@@ -500,13 +500,19 @@ func importFlags() []cli.Flag {
 		&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
 		&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
 		&cli.StringSliceFlag{Name: "host"},
+		&cli.StringFlag{Name: "dest", Usage: "Virtual path to root the imported directory tree at (overrides config ImportDest and the source path)"},
 	}
 }
+
+// builtinDirTypes are the dir-type labels always available as import
+// subcommands, regardless of config. Custom types are added from the config's
+// [ImportDest] keys.
+var builtinDirTypes = []string{"audio-dir", "image-dir", "video-dir", "document-dir"}
 
 // runImport uploads and tags every path argument. Each file's own tie-type is
 // detected from its contents; dirType only labels the root of an imported
 // directory tree (files inside are still detected individually).
-func runImport(ctx *cli.Command, dirType client.TieType) error {
+func runImport(ctx *cli.Command, dirType string) error {
 	if tie == nil {
 		return errors.New("Error: Config not loaded")
 	}
@@ -523,7 +529,7 @@ func runImport(ctx *cli.Command, dirType client.TieType) error {
 		fmt.Println("Uploading to", hosts)
 		for _, h := range hosts {
 			if fi.IsDir() {
-				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags")); err != nil {
+				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags"), ctx.String("dest")); err != nil {
 					fmt.Println(err)
 				}
 			} else {
@@ -538,18 +544,41 @@ func runImport(ctx *cli.Command, dirType client.TieType) error {
 
 // dirTypeImport builds an `import <name>` subcommand that labels imported
 // directory roots with dirType (e.g. `import audio-dir album/`).
-func dirTypeImport(name string, dirType client.TieType) *cli.Command {
+func dirTypeImport(name string) *cli.Command {
 	return &cli.Command{
 		Name:  name,
 		Usage: "import files, labeling directory roots as " + name,
 		Flags: importFlags(),
 		Action: func(_ context.Context, ctx *cli.Command) error {
-			return runImport(ctx, dirType)
+			return runImport(ctx, name)
 		},
 	}
 }
 
-func cmdImport() *cli.Command {
+// importDirTypes returns the dir-type subcommand names: the built-ins plus any
+// custom types declared as [ImportDest] keys in config, deduped and with the
+// built-ins kept first so their order is stable.
+func importDirTypes(config client.Config) []string {
+	seen := make(map[string]bool, len(builtinDirTypes))
+	types := make([]string, 0, len(builtinDirTypes)+len(config.ImportDest))
+	for _, name := range builtinDirTypes {
+		seen[name] = true
+		types = append(types, name)
+	}
+	for name := range config.ImportDest {
+		if !seen[name] {
+			seen[name] = true
+			types = append(types, name)
+		}
+	}
+	return types
+}
+
+func cmdImport(config client.Config) *cli.Command {
+	subcommands := make([]*cli.Command, 0, len(builtinDirTypes)+len(config.ImportDest))
+	for _, name := range importDirTypes(config) {
+		subcommands = append(subcommands, dirTypeImport(name))
+	}
 	return &cli.Command{
 		Name:    "import",
 		Aliases: []string{"i"},
@@ -557,16 +586,12 @@ func cmdImport() *cli.Command {
 		Flags:   importFlags(),
 		// Bare `import <paths>` auto-detects each file's type; directory roots
 		// get the generic directory label. Use a dir-type subcommand to label a
-		// directory root as a media collection (audio-dir, image-dir, ...).
+		// directory root as a media collection (audio-dir, image-dir, ..., or any
+		// custom type declared in the config's [ImportDest] table).
 		Action: func(_ context.Context, ctx *cli.Command) error {
-			return runImport(ctx, client.TieDirectory)
+			return runImport(ctx, client.TieDirectory.String())
 		},
-		Commands: []*cli.Command{
-			dirTypeImport("audio-dir", client.TieAudioDir),
-			dirTypeImport("image-dir", client.TieImageDir),
-			dirTypeImport("video-dir", client.TieVideoDir),
-			dirTypeImport("document-dir", client.TieDocumentDir),
-		},
+		Commands: subcommands,
 	}
 }
 
