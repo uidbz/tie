@@ -512,6 +512,7 @@ type File struct {
 	Uid       string
 	TieType   TieType
 	MediaType string
+	Size      int
 }
 
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
@@ -560,11 +561,13 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 		case types.Has(str(TieAudioFile)):
 			fallthrough
 		case types.Has(str(TieDocumentFile)):
+			size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
 			f := File{
 				Uid:       key,
 				Filename:  meta[str(TieFilename)].ToString(),
 				TieType:   StringToTieType(types.ToString()),
 				MediaType: meta[str(TieMediaType)].ToString(),
+				Size:      size,
 			}
 			dir.Files = append(dir.Files, f)
 
@@ -633,26 +636,35 @@ func (tie *TieClient) FilesWithTag(tag string, offset, limit int) ([]TaggedFile,
 }
 
 // FilesWithTags returns the files that carry ALL of include and NONE of exclude,
-// scoped to a single media type (e.g. TieAudioFile for "find music with tag1,
-// tag2 but not tag4"). Tags share the "tag" relation so they AND/NOT together
-// inside one QueryTags call; the media-type scoping keys on a different relation
-// (tie-type), so it rides along as the query's Scope, which the server intersects
-// by hash identity — no client-side filtering. When include is empty the whole
-// media type is browsed directly. The server paginates via offset/limit; limit
+// optionally scoped to a single media type (e.g. TieAudioFile for "find music
+// with tag1, tag2 but not tag4"). Tags share the "tag" relation so they AND/NOT
+// together inside one QueryTags call; the media-type scoping keys on a different
+// relation (tie-type), so it rides along as the query's Scope, which the server
+// intersects by hash identity — no client-side filtering. Pass TieUnknownFile as
+// mediaType to query across all types (no scope). When include is empty the whole
+// media type is browsed directly (or, with no type, nothing is returned since
+// there is no set to seed from). The server paginates via offset/limit; limit
 // <= 0 means no limit. The second return is the total number of matching files
 // before pagination.
 func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string, offset, limit int) ([]TaggedFile, int, error) {
-	// With no tags, browse the whole media type directly.
+	// With no tags to seed from, a query needs a media type to browse.
 	if len(include) == 0 {
+		if mediaType == TieUnknownFile {
+			return nil, 0, nil
+		}
 		return tie.filesOfType(mediaType, offset, limit)
 	}
 
+	scope := ""
+	if mediaType != TieUnknownFile {
+		scope = str(mediaType)
+	}
 	o := GetOptions{
 		Reverse:      true,
 		Filter:       str(TieTag),
 		Include:      include[1:],
 		Exclude:      exclude,
-		Scope:        str(mediaType),
+		Scope:        scope,
 		GetNextLevel: true,
 	}
 	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}

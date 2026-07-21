@@ -3,13 +3,59 @@ package fuselib
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/metadata"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
+
+func TestParseTagQuery(t *testing.T) {
+	tests := []struct {
+		query    string
+		wantType client.TieType
+		wantInc  []string
+		wantExc  []string
+	}{
+		{"jazz", client.TieUnknownFile, []string{"jazz"}, nil},
+		{"jazz mellow -live", client.TieUnknownFile, []string{"jazz", "mellow"}, []string{"live"}},
+		{"mellow type:audio", client.TieAudioFile, []string{"mellow"}, nil},
+		{"type:image", client.TieImageFile, nil, nil},
+		{"  jazz   -live  ", client.TieUnknownFile, []string{"jazz"}, []string{"live"}},
+		{"type:bogus jazz", client.TieUnknownFile, []string{"jazz"}, nil}, // unknown type -> all
+		{"-", client.TieUnknownFile, nil, nil},                            // bare dash ignored
+	}
+	for _, tt := range tests {
+		gotType, gotInc, gotExc := parseTagQuery(tt.query)
+		if gotType != tt.wantType {
+			t.Errorf("parseTagQuery(%q) type = %v, want %v", tt.query, gotType, tt.wantType)
+		}
+		if !reflect.DeepEqual(gotInc, tt.wantInc) {
+			t.Errorf("parseTagQuery(%q) include = %v, want %v", tt.query, gotInc, tt.wantInc)
+		}
+		if !reflect.DeepEqual(gotExc, tt.wantExc) {
+			t.Errorf("parseTagQuery(%q) exclude = %v, want %v", tt.query, gotExc, tt.wantExc)
+		}
+	}
+}
+
+func TestBaseName(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"file:/music", "music"},
+		{"file:/music/jazz", "jazz"},
+		{"file:/music/jazz/", "jazz"},
+		{"file:/", ""},
+		{"music", "music"},
+	}
+	for _, tt := range tests {
+		if got := baseName(tt.in); got != tt.want {
+			t.Errorf("baseName(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
 
 // hashOf returns the tie content address of s, matching what a filehost stores.
 func hashOf(t *testing.T, s string) string {
