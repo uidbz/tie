@@ -11,17 +11,7 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-var (
-	stdin         []Stdin
-	outputAsTable bool
-	configFile    string
-	tie           *client.TieClient
-)
-
-type Stdin struct {
-	hash string
-	path string
-}
+var tie *client.TieClient
 
 func main() {
 	// Load config before building the command tree so `import` can generate a
@@ -81,47 +71,3 @@ func configArg(args []string) string {
 	}
 	return "config.toml"
 }
-
-// if err := app.Run(os.Args); err != nil {
-// 	log.Fatal(err)
-// }
-// fi, err := os.Stdin.Stat()
-// if err != nil {
-// 	panic(err)
-// }
-// if !(fi.Mode()&os.ModeNamedPipe == 0) {
-// 	scanner := bufio.NewScanner(os.Stdin)
-// 	first := true
-// 	for scanner.Scan() {
-// 		line := scanner.Text()
-// 		if first && len(line) > 1 && line[0] == '{' { // json input
-
-// 		} else {
-// 			parts := strings.Split(line, "\t")
-// 			// Assumes input from put
-// 			if len(parts) == 2 {
-// 				input := Stdin{parts[0], parts[1]}
-// 				stdin = append(stdin, input)
-// 			} else {
-// 				input := Stdin{hash: line}
-// 				stdin = append(stdin, input)
-// 			}
-// 		}
-// 	}
-
-// 	if err := scanner.Err(); err != nil {
-// 		log.Println(err)
-// 	}
-// }
-// cobra.OnInitialize(func() {
-// 	config := client.ReadConfig(configFile)
-// 	tie = client.NewTieClient(config)
-// })
-
-// var rootCmd = &cobra.Command{Use: "tie"}
-// rootCmd.AddCommand(cmdList()...)
-// rootCmd.PersistentFlags().StringVarP(&configFile, "config", "c", "config", "Config file to load")
-// // rootCmd.PersistentFlags().BoolVarP(&tie.CurrentState.Verbose, "verbose", "v", false, "Verbose output")
-// rootCmd.PersistentFlags().BoolVarP(&outputAsTable, "table", "t", false, "Output as table")
-
-// rootCmd.Execute()

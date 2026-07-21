@@ -158,3 +158,26 @@ Keeping it out of the filehost preserves the blob store's simplicity; sharing th
 extraction code (`client.ExtractMediaMetadata` or a lifted `metadata`-package
 function) avoids two divergent implementations.
 
+## Piped stdin as an implicit command target
+
+Removed: a commented-out block in `cmd/tie/main.go` (cobra era) plus the now-orphaned
+`stdin []Stdin` / `type Stdin struct { hash, path string }` declarations it fed.
+
+Intent: let a command read its targets from stdin when the input is a pipe, so the
+output of `put` (which emits `hash<TAB>path` lines, or bare hash lines) could be
+piped straight into a `tie` command to apply it to every uploaded item — e.g.
+`put ./music/* | tie tag jazz`. The sketch:
+
+- `os.Stdin.Stat()`, and if `fi.Mode()&os.ModeNamedPipe != 0` treat stdin as input.
+- Scan line by line. A first line beginning with `{` was meant to switch to JSON
+  input (never implemented). Otherwise split on `\t`: two fields → `Stdin{hash, path}`,
+  one field → `Stdin{hash: line}`.
+- Commands then looped over `stdin` instead of positional args (see the old cobra
+  `cmdTag`/`cmdAdd`, which branched on `len(stdin)` to pick a min-args count).
+
+Why removed: never ported to urfave/cli; the current commands take explicit args.
+The restore command (`cmd/tie/commands.go`) already reads TSV from stdin for its own
+purpose, so a revived version should share that scanning path and define one clear
+convention for what piped lines mean per command (targets vs. triples) rather than
+overloading stdin differently in each.
+
