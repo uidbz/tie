@@ -1,6 +1,8 @@
 package client
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -13,7 +15,6 @@ import (
 	"git.sr.ht/~uid/tie/io/putlib"
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
-	"github.com/google/uuid"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -836,6 +837,13 @@ func (tie *TieClient) SetDirType(uid DirUID, dirType string) error {
 	return err
 }
 
+// newDirUID mints a DirUID as a 64-char hex string of 32 random bytes. This
+// matches the content-hash shape so metadata.HexHashBlobPolicy stores it as one
+// flat record instead of chunking a longer string across the trie.
 func (tie *TieClient) newDirUID() DirUID {
-	return DirUID(uuid.Must(uuid.NewV7()).String())
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic("client: reading random bytes for DirUID: " + err.Error())
+	}
+	return DirUID(hex.EncodeToString(b[:]))
 }
