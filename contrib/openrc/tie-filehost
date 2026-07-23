@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+
+description="tie content-addressed filehost"
+
+command="/usr/local/bin/tie-filehost"
+command_args="-config /etc/tie/tie-filehost.toml"
+command_user="tie:tie"
+
+supervisor="supervise-daemon"
+directory="/var/lib/tie"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+output_log="/var/log/tie/${RC_SVCNAME}.log"
+error_log="/var/log/tie/${RC_SVCNAME}.log"
+
+respawn_delay=5
+respawn_max=0
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --directory --owner tie:tie --mode 0755 /var/lib/tie
+	checkpath --directory --owner tie:tie --mode 0755 /var/log/tie
+}

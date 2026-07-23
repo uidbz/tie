@@ -1,0 +1,34 @@
+[Unit]
+Description=tie content-addressed filehost
+Documentation=https://sr.ht/~uid/tie
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tie
+Group=tie
+ExecStart=/usr/local/bin/tie-filehost -config /etc/tie/tie-filehost.toml
+Restart=on-failure
+RestartSec=5s
+
+# State directory: /var/lib/tie (created and chowned to tie by systemd).
+StateDirectory=tie
+WorkingDirectory=/var/lib/tie
+
+# Hardening. The filehost only needs to read its config and write its data dir.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/lib/tie
+
+[Install]
+WantedBy=multi-user.target

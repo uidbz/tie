@@ -249,7 +249,7 @@ Common tasks are wrapped in a `Makefile`:
 | Command | What it does |
 |---------|--------------|
 | `make build` | Build all commands into `dist/`. |
-| `make install` | `go install` all commands into `GOBIN`. |
+| `make install` | Install `tie-daemon` + `tie-filehost` as system services (systemd/OpenRC). Run as `sudo make install`. See [Running as system services](#running-as-system-services). |
 | `make clean` | Remove `dist/`. |
 | `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-daemon` / `tie-filehost`. |
 | `make push MSG="message"` | `go get -u . && go mod tidy`, then commit everything and push. |
@@ -257,3 +257,42 @@ Common tasks are wrapped in a `Makefile`:
 
 `push` and `release` require their argument and abort with a usage message if
 it is missing.
+
+## Deployment
+
+`tie-daemon` (triple store, port 1161) and `tie-filehost` (blob store, port
+1162) are two separate services. TLS is normally terminated by a reverse proxy
+(nginx / Caddy) in front of them: run with `Insecure = true` bound to
+localhost, and let the proxy handle certificates. Alternatively set
+`CertFile`/`KeyFile` in each config to serve HTTPS directly.
+
+### Running as system services
+
+The installer builds both binaries, creates a dedicated `tie` user, lays down
+config in `/etc/tie/` and data in `/var/lib/tie/`, and installs service files
+for whichever init system is detected (systemd or OpenRC):
+
+```sh
+sudo make install      # or: sudo ./contrib/install.sh
+```
+
+Then edit `/etc/tie/tie-daemon.toml` (at least the `[[Users]]` account) and
+start the services (`systemctl start tie-daemon tie-filehost`, or
+`rc-service tie-daemon start`). Re-running the installer to upgrade binaries is
+safe — existing config is never overwritten. See
+[contrib/README.md](contrib/README.md) for the full reference.
+
+### Docker
+
+The `Dockerfile` at the repo root builds a single image that runs **both**
+services together:
+
+```sh
+docker build -t tie .
+docker run -p 1161:1161 -p 1162:1162 -v tie-data:/data tie
+```
+
+On first run it generates default configs under `/etc/tie` pointing at the
+`/data` volume (daemon db in `/data/db`, filehost blobs in `/data/data`). Set
+`TIE_USER` / `TIE_PASSWORD` to seed the daemon's initial account, or mount your
+own `/etc/tie` to override the configs entirely.

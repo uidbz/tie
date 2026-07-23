@@ -13,12 +13,10 @@ build:
 		go build -o $(DIST)/ ./cmd/$$cmd || exit 1; \
 	done
 
-# Install all commands into GOBIN.
+# Install tie as system services (systemd/OpenRC). Requires root, so run as
+# `sudo make install`. See contrib/install.sh and contrib/README.md.
 install:
-	@for cmd in $(CMDS); do \
-		echo "Installing $$cmd..."; \
-		go install ./cmd/$$cmd || exit 1; \
-	done
+	./contrib/install.sh
 
 # Generate a self-signed localhost certificate for tie-daemon / tie-filehost.
 # Copy localhost.crt to clients and trust it there.

@@ -18,9 +18,15 @@ go build
 ```
 
 ### Run with Docker
+
+The `Dockerfile` at the repo root builds a single image that runs both
+tie-daemon and tie-filehost together:
 ```
-docker run -p 1161:1161 -v <db-path>:/data -v <config-path>:/config uid3/tie-daemon:latest -config /config/tie-daemon.toml
+docker build -t tie .
+docker run -p 1161:1161 -p 1162:1162 -v tie-data:/data tie
 ```
+See the root `README.md` and `contrib/` for running as system services
+(systemd / OpenRC).
 
 ### Interaction
 * For CLI use: [tie](https://sr.ht/~uid/tie)
