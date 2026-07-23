@@ -27,7 +27,12 @@ start_one() { # name binary pidfile logfile args...
 		return
 	fi
 	echo "Starting $name ..."
-	( cd "$TIE_ENV" && nohup "$bin" "$@" >"$logfile" 2>&1 & echo $! >"$pidfile" )
+	# Background a subshell that exec's the binary, so the process REPLACES the
+	# subshell and $! (the subshell PID) is the binary's own PID. Backgrounding
+	# the `cd && nohup ...` compound directly would record the subshell PID while
+	# the binary ran at the next PID, leaving stop.sh unable to kill it.
+	( cd "$TIE_ENV" && exec nohup "$bin" "$@" >"$logfile" 2>&1 ) &
+	echo $! >"$pidfile"
 	echo "  pid $(cat "$pidfile"), log $logfile"
 }
 
