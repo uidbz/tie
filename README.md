@@ -33,7 +33,7 @@ combinations, and linking media together — see
 | `metadata`    | The `tiedir` directory-blob format (headers, entry lines, media-type detection). |
 | `io/putlib`   | Upload files to a `tie-filehost`. |
 | `io/getlib`   | Download files from a `tie-filehost`. |
-| `io/fuselib`  | Mount tie directories as a FUSE filesystem. |
+| `io/fuselib`  | Mount tie directories as a FUSE filesystem (the live `--db` mount is read-write: rename, `mkdir`, and tag editing). See [docs/mount.md](docs/mount.md). |
 
 ## The data model
 
@@ -189,14 +189,27 @@ URL — `Insecure` only controls certificate checking, it does not switch
 content-addressed tree.
 
 `tie mount --db <mountpoint>` mounts a live filesystem derived from the triple
-store. Under `query/`, a directory named after a tag query lists the matching
-files — e.g. `query/jazz mellow -live` ANDs `jazz` and `mellow` and excludes
-`live`, and a `type:` token scopes to a media type; `cat query/tags` lists every
-known tag. Saved queries from the config's `[Queries]` table appear under
-`query/` as ready-made directories. Under `files/`, the path-based import tree
-(`file:/...`) is browsable directly. It reflects the store on every directory
-read, so re-tagging shows up without remounting. A tagged directory appears as a
-real directory and expands into its immutable `tiedir` snapshot.
+store, with three top-level trees:
+
+- **`query/`** — a directory named after a tag query lists the matching files —
+  e.g. `query/jazz mellow -live` ANDs `jazz` and `mellow` and excludes `live`,
+  and a `type:` token scopes to a media type; `cat query/tags` lists every known
+  tag. Saved queries from the config's `[Queries]` table appear here as
+  ready-made directories. Read-only.
+- **`files/`** — the path-based import tree (`file:/...`), browsable directly.
+  **Writable**: `mv` renames or moves a file (updating its `filename`/`parent`
+  triples) or a directory (cascading the path over its descendants), and `mkdir`
+  creates a new directory.
+- **`tags/`** — mirrors `files/`, but each leaf is a small **writable text file**
+  whose contents are that file's tags, one per line. `cat` shows the current
+  tags; writing the file replaces the set (empty clears all).
+
+It reflects the store on every directory read, so re-tagging shows up without
+remounting. A tagged directory appears as a real directory and expands into its
+immutable `tiedir` snapshot. Names and tags attach to the content hash, so an
+edit is visible everywhere that content appears. See
+[docs/mount.md](docs/mount.md) for the full mount reference and the technical
+implementation of the write paths.
 
 ### Backup / interop
 

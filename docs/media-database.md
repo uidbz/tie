@@ -322,18 +322,25 @@ tie get <hash>                     # shows all triples on a hash, relations incl
 tie mount --db /mnt/media
 ```
 
-mounts a live filesystem derived from the triple store, with two top-level trees:
+mounts a live filesystem derived from the triple store, with three top-level trees:
 
 - **`query/`** — a directory named after a tag query lists the matching files.
   `query/jazz mellow -live` ANDs `jazz` and `mellow` and excludes `live`; a
   `type:` token (e.g. `type:audio`) scopes to a media type. `cat query/tags`
   lists every known tag, and saved queries from the config's `[Queries]` table
-  appear here as ready-made directories (see below).
-- **`files/`** — the path-based import tree (`file:/...`), browsable directly.
+  appear here as ready-made directories (see below). Read-only.
+- **`files/`** — the path-based import tree (`file:/...`), browsable directly,
+  and **writable**: `mv` renames or moves a file or a directory, and `mkdir`
+  creates a directory. Reorganize your library with ordinary filesystem tools.
+- **`tags/`** — mirrors `files/`, but each leaf is a **writable text file** of
+  that file's tags, one per line. `cat tags/music/album/track.flac` shows the
+  tags; rewriting the file re-tags the track (empty clears all its tags).
 
 It reflects the store on every directory read, so tagging a file makes it appear
 under a matching query without remounting. A tagged directory shows up as a real
-directory and expands into its immutable `tiedir` snapshot.
+directory and expands into its immutable `tiedir` snapshot. Because names and
+tags are properties of the content hash, editing them affects the track wherever
+it appears. See [mount.md](mount.md) for the complete mount reference.
 
 Frequently-used queries can be saved in the config's `[Queries]` table, mapping a
 friendly name to a query string. Each entry shows up as a directory under
@@ -424,6 +431,9 @@ note the range in the relation name or a companion triple.
 | Relate two media | `tie.RelateFiles(a, "relation", b)` |
 | Relations on an item | `tie.RelationsFrom(hash)` |
 | Browse by tag (mount) | `tie mount --db <mountpoint>` |
+| Rename / move in mount | `mv mnt/files/a mnt/files/b` |
+| Make a directory in mount | `mkdir mnt/files/newdir` |
+| Edit tags in mount | `printf 'a\nb\n' > mnt/tags/<dir>/<file>` |
 | Read the virtual tree | `client.ReadTieDir(tie, uid)` |
 | Download bytes | `tie download <hash> <dest>` |
 | Backup / restore | `tie dump > f.tsv` / `tie restore < f.tsv` |
