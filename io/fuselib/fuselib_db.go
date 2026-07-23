@@ -13,12 +13,15 @@ import (
 // TieDBFuse serves a live, mutable virtual filesystem derived from the triple
 // store. The layout is:
 //
-//	/query                      README explaining the syntax + a "tags" listing
+//	/query                      README + "tags" and "types" listings
 //	/query/tags                 newline-separated list of every known tag
+//	/query/types                newline-separated list of every known dir-type label
 //	/query/<query>/<filename>   files matching a tag query; the directory name is
 //	                            the query itself, e.g. "jazz mellow -live" ANDs
 //	                            jazz and mellow, excludes live. A "type:audio"
-//	                            token scopes to a media type (default: all types).
+//	                            token scopes to a tie-type (default: all types);
+//	                            a custom dir-type label (e.g. "type:live-album")
+//	                            works too.
 //	/files/<path>/...           the path-based virtual directory tree (file:/...)
 //	/tags/<path>/...            mirrors /files, but each leaf is a small writable
 //	                            text file whose contents are the file's tags (one
@@ -56,14 +59,17 @@ Navigate to a directory whose name is a tag query to list the matching files:
 
 Space separates terms (all ANDed). A leading "-" excludes a tag.
 
-Scope to a media type with a "type:" token (default: all types):
+Scope to a tie-type with a "type:" token (default: all types). This accepts a
+media type, a full type name, or a custom directory label:
 
     ls "query/mellow type:audio"    audio files tagged mellow
     ls "query/type:image"           all image files
+    ls "query/type:live-album"      dirs carrying the custom "live-album" label
 
-List every known tag:
+List every known tag, or every known dir-type label:
 
     cat query/tags
+    cat query/types
 
 Saved queries from your config's [Queries] table appear here as ready-made
 directories, e.g. a "chill-jazz = jazz mellow -live" entry gives:
@@ -110,9 +116,10 @@ func (r *dbRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*
 }
 
 // tagQueryRoot is the /query directory. It cannot enumerate every possible
-// query, so a readdir shows only two helper files: a README explaining the
-// syntax and a "tags" listing of every known tag. Any other name is treated as
-// a query string and resolved live.
+// query, so a readdir shows only three helper files: a README explaining the
+// syntax, a "tags" listing of every known tag, and a "types" listing of every
+// known dir-type label. Any other name is treated as a query string and resolved
+// live.
 type tagQueryRoot struct {
 	fs.Inode
 	state *TieDBFuse
@@ -124,14 +131,16 @@ var (
 )
 
 const (
-	tagHelpName = "README"
-	tagListName = "tags"
+	tagHelpName  = "README"
+	tagListName  = "tags"
+	typeListName = "types"
 )
 
 func (q *tagQueryRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
 		{Name: tagHelpName, Mode: fuse.S_IFREG},
 		{Name: tagListName, Mode: fuse.S_IFREG},
+		{Name: typeListName, Mode: fuse.S_IFREG},
 	}
 	// Saved queries from config appear as ready-made query directories.
 	for name := range q.state.tie.Config.Queries {
@@ -149,6 +158,9 @@ func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	case tagListName:
 		child := &tagListFile{state: q.state}
 		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
+	case typeListName:
+		child := &typeListFile{state: q.state}
+		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
 	}
 	// A saved query name resolves to its stored expression; otherwise the name
 	// is itself treated as an ad-hoc query.
@@ -158,11 +170,11 @@ func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	}
 	// Validate the query resolves before materializing the inode so a bogus
 	// query returns ENOENT rather than an empty directory.
-	mediaType, include, exclude := parseTagQuery(query)
-	if len(include) == 0 && mediaType == client.TieUnknownFile {
+	scope, include, exclude := parseTagQuery(query)
+	if len(include) == 0 && scope == "" {
 		return nil, syscall.ENOENT
 	}
-	child := &tagQueryDir{state: q.state, mediaType: mediaType, include: include, exclude: exclude}
+	child := &tagQueryDir{state: q.state, scope: scope, include: include, exclude: exclude}
 	return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 }
 
@@ -211,31 +223,81 @@ func (f *tagListFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, ui
 	return &staticFileHandle{data: data}, 0, 0
 }
 
-// mediaTypeToken maps the friendly "type:" token values to TieTypes. It also
-// accepts the full stringer names (e.g. "audio-file") via StringToTieType below.
-var mediaTypeToken = map[string]client.TieType{
-	"image":    client.TieImageFile,
-	"audio":    client.TieAudioFile,
-	"video":    client.TieVideoFile,
-	"document": client.TieDocumentFile,
-	"archive":  client.TieArchiveFile,
+// typeListFile serves the newline-separated list of every known dir-type
+// classification label (built-in directory types unioned with the custom labels
+// registered via .type), fetched live on each open so a newly created label shows
+// up without remounting.
+type typeListFile struct {
+	fs.Inode
+	state *TieDBFuse
 }
 
-// parseTagQuery splits a query directory name into a media-type scope and the
+var (
+	_ = (fs.NodeGetattrer)((*typeListFile)(nil))
+	_ = (fs.NodeOpener)((*typeListFile)(nil))
+)
+
+func (f *typeListFile) contents() ([]byte, syscall.Errno) {
+	types, err := f.state.tie.ListDirTypes()
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	if len(types) == 0 {
+		return nil, 0
+	}
+	return []byte(strings.Join(types, "\n") + "\n"), 0
+}
+
+func (f *typeListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	data, errno := f.contents()
+	if errno != 0 {
+		return errno
+	}
+	out.Size = uint64(len(data))
+	return 0
+}
+
+// Open snapshots the current type list into a read-only handle, so the bytes stay
+// consistent for the duration of one open.
+func (f *typeListFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	if flags&(syscall.O_RDWR|syscall.O_WRONLY) != 0 {
+		return nil, 0, syscall.EROFS
+	}
+	data, errno := f.contents()
+	if errno != 0 {
+		return nil, 0, errno
+	}
+	return &staticFileHandle{data: data}, 0, 0
+}
+
+// mediaTypeToken maps the friendly "type:" token values to their full tie-type
+// value strings. Any other token value is used verbatim as the scope, so full
+// stringer names ("audio-file") and custom dir-type labels ("live-album") both
+// pass through unchanged.
+var mediaTypeToken = map[string]string{
+	"image":    client.TieImageFile.String(),
+	"audio":    client.TieAudioFile.String(),
+	"video":    client.TieVideoFile.String(),
+	"document": client.TieDocumentFile.String(),
+	"archive":  client.TieArchiveFile.String(),
+}
+
+// parseTagQuery splits a query directory name into a tie-type scope and the
 // include/exclude tag sets. Space separates terms; a leading "-" excludes; a
-// "type:<name>" token sets the scope (default: TieUnknownFile, meaning all
-// types). <name> accepts a friendly form ("audio") or the full type name
-// ("audio-file"). The convention matches the `tie get` CLI.
-func parseTagQuery(query string) (mediaType client.TieType, include, exclude []string) {
-	mediaType = client.TieUnknownFile
+// "type:<name>" token sets the scope (default: "", meaning all types). <name>
+// accepts a friendly form ("audio", resolved to "audio-file"), a full type name
+// ("audio-file"), or a custom dir-type label ("live-album"), each of which is
+// used as a raw tie-type value — unlike a media-type enum, an unknown label is
+// kept literally rather than collapsed to "all", so custom labels are queryable.
+func parseTagQuery(query string) (scope string, include, exclude []string) {
 	for _, term := range strings.Fields(query) {
 		switch {
 		case strings.HasPrefix(term, "type:"):
 			name := strings.TrimPrefix(term, "type:")
-			if t, ok := mediaTypeToken[name]; ok {
-				mediaType = t
+			if resolved, ok := mediaTypeToken[name]; ok {
+				scope = resolved
 			} else {
-				mediaType = client.StringToTieType(name)
+				scope = name
 			}
 		case strings.HasPrefix(term, "-"):
 			if tag := term[1:]; tag != "" {
@@ -245,16 +307,16 @@ func parseTagQuery(query string) (mediaType client.TieType, include, exclude []s
 			include = append(include, term)
 		}
 	}
-	return mediaType, include, exclude
+	return scope, include, exclude
 }
 
 // tagQueryDir lists the files matching one tag query.
 type tagQueryDir struct {
 	fs.Inode
-	state     *TieDBFuse
-	mediaType client.TieType
-	include   []string
-	exclude   []string
+	state   *TieDBFuse
+	scope   string
+	include []string
+	exclude []string
 }
 
 var (
@@ -263,7 +325,7 @@ var (
 )
 
 func (d *tagQueryDir) query() ([]client.TaggedFile, error) {
-	files, _, err := d.state.tie.FilesWithTags(d.mediaType, d.include, d.exclude, 0, 0)
+	files, _, err := d.state.tie.FilesWithTags(d.scope, d.include, d.exclude, 0, 0)
 	return files, err
 }
 
@@ -585,13 +647,31 @@ func childPath(parent, name string) string {
 
 // tagsDir mirrors the pathDir navigation of the /files tree, but its leaf files
 // are tagFile nodes: writable text files whose contents are the tags attached to
-// the underlying content. Directories are pure navigation (no tag file of their
-// own for now).
+// the underlying content. Each directory also exposes a ".tags" file bound to
+// the directory's own DirUID, so a directory's tags are editable the same way a
+// leaf file's are.
 type tagsDir struct {
 	fs.Inode
 	state *TieDBFuse
 	path  string // slash path relative to the tie root, e.g. "/" or "/music"
 }
+
+// tagsSelfName is the fixed filename inside every /tags directory that exposes
+// the directory's own tags for editing. It is a tagFile bound to the directory's
+// DirUID rather than a content hash. A real child file literally named ".tags"
+// would be shadowed by it, which is why a dotfile name is used.
+const tagsSelfName = ".tags"
+
+// tagsTypeName is the fixed filename inside every /tags directory that exposes
+// the directory's own tie-type classification labels for editing. It is a
+// metaFile bound to the directory's DirUID (via newTypeFile). Like .tags it uses
+// a dotfile name so a real child file named ".type" isn't shadowed.
+const tagsTypeName = ".type"
+
+// typeInodeKey derives the inode key for a directory's .type file. It must differ
+// from the .tags key (the bare DirUID, used for the directory's own tag file) so
+// the two control files in one directory get distinct inodes.
+func typeInodeKey(uid client.DirUID) string { return string(uid) + "\x00type" }
 
 var (
 	_ = (fs.NodeReaddirer)((*tagsDir)(nil))
@@ -614,7 +694,19 @@ func (d *tagsDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files))
+	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+2)
+	entries = append(entries,
+		fuse.DirEntry{
+			Name: tagsSelfName,
+			Mode: fuse.S_IFREG,
+			Ino:  d.state.fuseTree.inodeID(string(dir.Uid)),
+		},
+		fuse.DirEntry{
+			Name: tagsTypeName,
+			Mode: fuse.S_IFREG,
+			Ino:  d.state.fuseTree.inodeID(typeInodeKey(dir.Uid)),
+		},
+	)
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
 			if name := baseName(p); name != "" {
@@ -637,6 +729,18 @@ func (d *tagsDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 	if err != nil {
 		return nil, syscall.EIO
 	}
+	if name == tagsSelfName {
+		child := newTagFile(d.state, string(dir.Uid))
+		out.Size = uint64(len(child.render()))
+		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(string(dir.Uid))}
+		return d.NewInode(ctx, child, stable), 0
+	}
+	if name == tagsTypeName {
+		child := newTypeFile(d.state, dir.Uid)
+		out.Size = uint64(len(child.render()))
+		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(typeInodeKey(dir.Uid))}
+		return d.NewInode(ctx, child, stable), 0
+	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
 			if baseName(p) != name {
@@ -650,41 +754,62 @@ func (d *tagsDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 		if f.Filename != name {
 			continue
 		}
-		child := &tagFile{state: d.state, hash: f.Uid}
+		child := newTagFile(d.state, f.Uid)
 		out.Size = uint64(len(child.render()))
 		return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
 	}
 	return nil, syscall.ENOENT
 }
 
-// tagFile is a writable text file backing one content hash's tags. Reading it
-// returns the current tags, one per line, sorted. Writing it replaces the tag
-// set: editors truncate-then-rewrite, so the file buffers written bytes and, on
-// flush/close, parses the buffer into a tag set and commits the diff via
-// SetTags. The empty buffer removes all tags.
-type tagFile struct {
+// metaFile is a writable text file whose contents are a set of string values,
+// one per line, sorted. Reading it snapshots the current set; writing it replaces
+// the set: editors truncate-then-rewrite, so the file buffers written bytes and,
+// on flush/close, parses the buffer into a set and commits it via store. The
+// empty buffer clears the set. load/store bind one metaFile to a concrete backing
+// set — a content hash's tags (newTagFile) or a directory's tie-type labels
+// (newTypeFile) — so the two share this one truncate-safe write path.
+type metaFile struct {
 	fs.Inode
-	state *TieDBFuse
-	hash  string
+	load  func() ([]string, error)
+	store func([]string) error
 }
 
 var (
-	_ = (fs.NodeGetattrer)((*tagFile)(nil))
-	_ = (fs.NodeSetattrer)((*tagFile)(nil))
-	_ = (fs.NodeOpener)((*tagFile)(nil))
+	_ = (fs.NodeGetattrer)((*metaFile)(nil))
+	_ = (fs.NodeSetattrer)((*metaFile)(nil))
+	_ = (fs.NodeOpener)((*metaFile)(nil))
 )
 
-// render returns the current tags as newline-terminated bytes. Errors surface as
-// empty content so a stat/read never panics; the write path reports real errors.
-func (f *tagFile) render() []byte {
-	tags, err := client.GetTags(f.state.tie, f.hash)
-	if err != nil || len(tags) == 0 {
-		return nil
+// newTagFile builds a metaFile backing one content hash's tags.
+func newTagFile(state *TieDBFuse, hash string) *metaFile {
+	return &metaFile{
+		load:  func() ([]string, error) { return client.GetTags(state.tie, hash) },
+		store: func(v []string) error { return client.SetTags(state.tie, hash, v) },
 	}
-	return []byte(strings.Join(tags, "\n") + "\n")
 }
 
-func (f *tagFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+// newTypeFile builds a metaFile backing one directory's tie-type classification
+// labels (the structural "directory" marker is preserved by SetDirTypes and never
+// surfaced by GetDirType, so editing this file can't break navigation).
+func newTypeFile(state *TieDBFuse, uid client.DirUID) *metaFile {
+	return &metaFile{
+		load:  func() ([]string, error) { return client.GetDirType(state.tie, uid) },
+		store: func(v []string) error { return client.SetDirTypes(state.tie, uid, v) },
+	}
+}
+
+// render returns the current values as newline-terminated bytes. Errors surface
+// as empty content so a stat/read never panics; the write path reports real
+// errors.
+func (f *metaFile) render() []byte {
+	vals, err := f.load()
+	if err != nil || len(vals) == 0 {
+		return nil
+	}
+	return []byte(strings.Join(vals, "\n") + "\n")
+}
+
+func (f *metaFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Size = uint64(len(f.render()))
 	return 0
 }
@@ -692,10 +817,10 @@ func (f *tagFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrO
 // Setattr accepts node-level attribute changes. The one that matters is the
 // truncate the kernel issues before a rewrite open (go-fuse does not advertise
 // ATOMIC_O_TRUNC, so truncation arrives here as a SETATTR(size) rather than an
-// O_TRUNC open flag). A writable open rebuilds the tag set from scratch, so this
+// O_TRUNC open flag). A writable open rebuilds the set from scratch, so this
 // only needs to acknowledge the change; other attributes are accepted as no-ops
 // so chmod/utimes from tools don't fail.
-func (f *tagFile) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (f *metaFile) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	if sz, ok := in.GetSize(); ok {
 		out.Size = sz
 		return 0
@@ -704,12 +829,12 @@ func (f *tagFile) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAtt
 	return 0
 }
 
-// Open returns a tagFileHandle. A read-only open snapshots the current tags so a
-// cat shows them. A writable open starts from an empty buffer and commits the
-// buffer verbatim on flush: a tag file is always fully rewritten (shell
-// redirection, tee, editor save), so the written bytes are the new tag set.
-func (f *tagFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	h := &tagFileHandle{file: f}
+// Open returns a metaFileHandle. A read-only open snapshots the current values so
+// a cat shows them. A writable open starts from an empty buffer and commits the
+// buffer verbatim on flush: a meta file is always fully rewritten (shell
+// redirection, tee, editor save), so the written bytes are the new set.
+func (f *metaFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	h := &metaFileHandle{file: f}
 	if flags&(syscall.O_WRONLY|syscall.O_RDWR) != 0 {
 		h.writable = true
 		h.buf = []byte{}
@@ -719,25 +844,25 @@ func (f *tagFile) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32
 	return h, fuse.FOPEN_DIRECT_IO, 0
 }
 
-// tagFileHandle carries the per-open buffer of tag text. Direct I/O is used so
-// the kernel doesn't cache a stale size between the truncate and the rewrite.
-type tagFileHandle struct {
-	file     *tagFile
+// metaFileHandle carries the per-open buffer of text. Direct I/O is used so the
+// kernel doesn't cache a stale size between the truncate and the rewrite.
+type metaFileHandle struct {
+	file     *metaFile
 	buf      []byte
 	writable bool
 }
 
 var (
-	_ = (fs.FileReader)((*tagFileHandle)(nil))
-	_ = (fs.FileWriter)((*tagFileHandle)(nil))
-	_ = (fs.FileFlusher)((*tagFileHandle)(nil))
+	_ = (fs.FileReader)((*metaFileHandle)(nil))
+	_ = (fs.FileWriter)((*metaFileHandle)(nil))
+	_ = (fs.FileFlusher)((*metaFileHandle)(nil))
 )
 
-func (h *tagFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (h *metaFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	return readAt(h.buf, dest, off)
 }
 
-func (h *tagFileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+func (h *metaFileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
 	if !h.writable {
 		return 0, syscall.EBADF
 	}
@@ -751,30 +876,29 @@ func (h *tagFileHandle) Write(ctx context.Context, data []byte, off int64) (uint
 	return uint32(len(data)), 0
 }
 
-// Flush commits the buffered tag text on close: split into lines, each line one
-// tag, and replace the content's tag set. Any writable open commits, even if no
-// bytes were written, so emptying the file (e.g. ": > file") clears all tags.
-func (h *tagFileHandle) Flush(ctx context.Context) syscall.Errno {
+// Flush commits the buffered text on close: split into lines, each line one
+// value, and replace the backing set via store. Any writable open commits, even
+// if no bytes were written, so emptying the file (e.g. ": > file") clears the set.
+func (h *metaFileHandle) Flush(ctx context.Context) syscall.Errno {
 	if !h.writable {
 		return 0
 	}
-	tags := parseTagLines(h.buf)
-	if err := client.SetTags(h.file.state.tie, h.file.hash, tags); err != nil {
+	if err := h.file.store(parseLines(h.buf)); err != nil {
 		return syscall.EIO
 	}
 	return 0
 }
 
-// parseTagLines splits tag-file contents into individual tags: one tag per line,
-// surrounding whitespace trimmed, blank lines dropped.
-func parseTagLines(data []byte) []string {
-	var tags []string
+// parseLines splits meta-file contents into individual values: one value per
+// line, surrounding whitespace trimmed, blank lines dropped.
+func parseLines(data []byte) []string {
+	var vals []string
 	for _, line := range strings.Split(string(data), "\n") {
 		if t := strings.TrimSpace(line); t != "" {
-			tags = append(tags, t)
+			vals = append(vals, t)
 		}
 	}
-	return tags
+	return vals
 }
 
 // MountDB mounts the tag-derived virtual filesystem at mountpoint.

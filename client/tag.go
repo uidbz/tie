@@ -785,29 +785,26 @@ func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
 }
 
 // FilesWithTags returns the files that carry ALL of include and NONE of exclude,
-// optionally scoped to a single media type (e.g. TieAudioFile for "find music
-// with tag1, tag2 but not tag4"). Tags share the "tag" relation so they AND/NOT
-// together inside one QueryTags call; the media-type scoping keys on a different
-// relation (tie-type), so it rides along as the query's Scope, which the server
-// intersects by hash identity — no client-side filtering. Pass TieUnknownFile as
-// mediaType to query across all types (no scope). When include is empty the whole
-// media type is browsed directly (or, with no type, nothing is returned since
-// there is no set to seed from). The server paginates via offset/limit; limit
-// <= 0 means no limit. The second return is the total number of matching files
-// before pagination.
-func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string, offset, limit int) ([]TaggedFile, int, error) {
-	// With no tags to seed from, a query needs a media type to browse.
+// optionally scoped to a single tie-type value (e.g. "audio-file" for "find music
+// with tag1, tag2 but not tag4", or a custom dir-type label like "live-album").
+// Tags share the "tag" relation so they AND/NOT together inside one QueryTags
+// call; the tie-type scoping keys on a different relation (tie-type), so it rides
+// along as the query's Scope, which the server intersects by hash identity — no
+// client-side filtering. Pass an empty scope to query across all types. When
+// include is empty the whole scope is browsed directly (or, with no scope,
+// nothing is returned since there is no set to seed from). The scope is a raw
+// tie-type value string so built-in media types and custom labels are handled
+// uniformly. The server paginates via offset/limit; limit <= 0 means no limit.
+// The second return is the total number of matching files before pagination.
+func (tie *TieClient) FilesWithTags(scope string, include, exclude []string, offset, limit int) ([]TaggedFile, int, error) {
+	// With no tags to seed from, a query needs a scope to browse.
 	if len(include) == 0 {
-		if mediaType == TieUnknownFile {
+		if scope == "" {
 			return nil, 0, nil
 		}
-		return tie.filesOfType(mediaType, offset, limit)
+		return tie.filesOfType(scope, offset, limit)
 	}
 
-	scope := ""
-	if mediaType != TieUnknownFile {
-		scope = str(mediaType)
-	}
 	o := GetOptions{
 		Reverse:      true,
 		Filter:       str(TieTag),
@@ -832,13 +829,13 @@ func (tie *TieClient) FilesWithTags(mediaType TieType, include, exclude []string
 	return files, r.TotalCount, nil
 }
 
-// filesOfType builds TaggedFiles for every hash of a media type, pulling per-hash
-// metadata via a reverse GetNextLevel lookup on the tie-type value. The server
+// filesOfType builds TaggedFiles for every hash carrying the tie-type value
+// scope, pulling per-hash metadata via a reverse GetNextLevel lookup. The server
 // paginates via offset/limit.
-func (tie *TieClient) filesOfType(mediaType TieType, offset, limit int) ([]TaggedFile, int, error) {
+func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile, int, error) {
 	o := GetOptions{Reverse: true, Filter: str(TieTypeProperty), GetNextLevel: true}
 	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
-	r, err := tie.Get(str(mediaType), o)
+	r, err := tie.Get(scope, o)
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil
 	}
@@ -1002,9 +999,119 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 	return uid, nil
 }
 
+// typeRegistrySubject is the subject of the dir-type registry: a directory's
+// classification labels are registered as (types,"all",<label>) so /query/types
+// can list every custom label in use, mirroring the (tags,"all",<tag>) registry
+// that Tag/SetTags write. The structural "directory" marker is never registered.
+const typeRegistrySubject = "types"
+
 func (tie *TieClient) SetDirType(uid DirUID, dirType string) error {
-	_, err := tie.Add(str(uid), str(TieTypeProperty), dirType)
-	return err
+	if _, err := tie.Add(str(uid), str(TieTypeProperty), dirType); err != nil {
+		return err
+	}
+	if dirType != str(TieDirectory) {
+		if _, err := tie.Add(typeRegistrySubject, str(TieAll), dirType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetDirType returns a directory's classification labels — its
+// (uid,"tie-type",*) values with the structural "directory" marker filtered out
+// — sorted. The marker is what ReadTieDir uses to tell subdirs from files, so it
+// is never surfaced here. A directory with no extra labels returns an empty
+// slice, not an error.
+func GetDirType(tie *TieClient, uid DirUID) ([]string, error) {
+	r, err := tie.SimpleGet(string(uid))
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var labels []string
+	for _, t := range r.Result[string(uid)][str(TieTypeProperty)].ToSlice() {
+		if t != str(TieDirectory) {
+			labels = append(labels, t)
+		}
+	}
+	sort.Strings(labels)
+	return labels, nil
+}
+
+// SetDirTypes replaces a directory's classification labels with newLabels,
+// diffing against the current labels: added labels get (uid,"tie-type",<label>)
+// plus the (types,"all",<label>) registry entry, removed labels get a Delete.
+// The structural "directory" marker is preserved untouched (never added, never
+// removed), so a text-editor rewrite of the .type file cannot break navigation.
+// Empty entries are ignored. The change is committed and synced.
+func SetDirTypes(tie *TieClient, uid DirUID, newLabels []string) error {
+	current, err := GetDirType(tie, uid)
+	if err != nil {
+		return err
+	}
+
+	want := make(map[string]bool, len(newLabels))
+	for _, t := range newLabels {
+		if t = strings.TrimSpace(t); t != "" && t != str(TieDirectory) {
+			want[t] = true
+		}
+	}
+	have := make(map[string]bool, len(current))
+	for _, t := range current {
+		have[t] = true
+	}
+
+	batch := tie.NewBatch()
+	changed := false
+	for t := range want {
+		if !have[t] {
+			batch.Add(string(uid), str(TieTypeProperty), t)
+			batch.Add(typeRegistrySubject, str(TieAll), t)
+			changed = true
+		}
+	}
+	for t := range have {
+		if !want[t] {
+			batch.Delete(string(uid), str(TieTypeProperty), t)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// ListDirTypes returns the dir-type classification labels known to the store: the
+// custom labels registered in (types,"all",<label>) unioned with the built-in
+// directory TieTypes (the *-dir / *-archive / directory stringers), sorted and
+// de-duplicated. The union means /query/types shows both user-created labels and
+// the built-in vocabulary without pre-seeding the registry with built-ins.
+func (tie *TieClient) ListDirTypes() ([]string, error) {
+	set := make(map[string]bool)
+	for t := TieImageDir; t <= TieDirectory; t++ {
+		set[t.String()] = true
+	}
+	r, err := tie.Get(typeRegistrySubject, GetOptions{Filter: str(TieAll)})
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if err == nil {
+		r.Result.ForEachValue2(func(_, _, value2 string) {
+			set[value2] = true
+		})
+	}
+	labels := make([]string, 0, len(set))
+	for t := range set {
+		labels = append(labels, t)
+	}
+	sort.Strings(labels)
+	return labels, nil
 }
 
 // newDirUID mints a DirUID as a 64-char hex string of 32 random bytes. This

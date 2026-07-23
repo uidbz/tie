@@ -31,8 +31,11 @@ in `io/fuselib/fuselib_db.go`; the root (`dbRoot`) exposes three top-level trees
 ```
 /query/<query>/<file>   files matching a tag query (read-only)
 /query/tags             newline list of every known tag (read-only)
+/query/types            newline list of every known dir-type label (read-only)
 /files/<path>/...       the path-based import tree, file:/...  (writable: rename, mkdir)
-/tags/<path>/...        mirrors /files, but each leaf is a writable tag file
+/tags/<path>/...        mirrors /files; each leaf is a writable tag file, and each
+                        directory has a writable .tags (its tags) and .type (its
+                        dir-type labels)
 ```
 
 `TieDBFuse` embeds a `TieFuse` (`fuseTree`) purely to reuse its filehost byte
@@ -161,10 +164,11 @@ listable and can be populated by further `mkdir`s.
 ## The `/tags` tree — editing tags as text files
 
 `tagsDir` mirrors `pathDir`'s navigation exactly (resolve path → DirUID, list
-children by the reverse `parent` lookup), but its **leaves are `tagFile` nodes**:
+children by the reverse `parent` lookup), but its **leaves are `metaFile` nodes**:
 small writable text files whose contents are the underlying content's tags, one
-per line. Directories are pure navigation — a directory has no tag file of its
-own (see "Future work").
+per line. Each directory additionally exposes two `metaFile` control files bound
+to the directory's own `DirUID` — **`.tags`** (its tags) and **`.type`** (its
+dir-type labels) — see "A directory's own tags and type" below.
 
 - **Read** (`cat /tags/music/song.mp3`) returns the current tags, sorted, via
   `client.GetTags(hash)` — the `(hash, "tag", *)` values.
@@ -177,26 +181,67 @@ own (see "Future work").
 Because tags attach to the hash, an edit here is visible under every `/query`
 view immediately.
 
+### One node type, two backing sets — `metaFile`
+
+`.tags` (on a leaf or a directory) and `.type` (on a directory) are the same
+`metaFile` node: a writable text file whose contents are a sorted set of strings,
+one per line, with a truncate-safe rewrite path. A `metaFile` differs only in two
+closures — `load` and `store` — bound at construction:
+
+- `newTagFile(state, hash)` → `client.GetTags` / `client.SetTags` on a subject
+  (a content hash *or* a `DirUID` — both key the same `(subject,"tag",*)` shape).
+- `newTypeFile(state, uid)` → `client.GetDirType` / `client.SetDirTypes` on a
+  `DirUID`, editing its `(uid,"tie-type",*)` classification labels.
+
+So read, full-rewrite, and clear behave identically for both; only the triples
+touched on flush differ.
+
+### A directory's own tags and type — `.tags` and `.type`
+
+Every `/tags/<path>/` directory contains two dotfiles bound to that directory's
+`DirUID` rather than to any child's content hash:
+
+- **`.tags`** — the directory's own tags. A tagged directory carries
+  `tie-type directory` + `tag` triples on its UID; `.tags` edits the `tag` set
+  exactly as a leaf does.
+- **`.type`** — the directory's dir-type classification labels (`audio-dir`, or
+  any custom label like `live-album`). `GetDirType` returns the `(uid,"tie-type",*)`
+  values **with the structural `directory` marker filtered out**, and
+  `SetDirTypes` diffs against those, **never adding or removing `directory`** — so
+  a text-editor rewrite of `.type` can't drop the marker that `ReadTieDir` uses to
+  tell subdirs from files. Added labels also get a `(types, "all", label)`
+  registry entry (the analogue of the tags registry), which `/query/types` reads
+  back. Directory type labels do **not** cascade to descendants.
+
+`tagsDir.Lookup` resolves the fixed names `tagsSelfName` (`.tags`) and
+`tagsTypeName` (`.type`) to `d.read().Uid`; `Readdir` lists both in every
+directory (including the root and childless dirs, where they may read empty).
+Dotfile names are used deliberately: a child file literally named `.tags`/`.type`
+would be shadowed. The two share one `DirUID` but need distinct inodes, so `.type`
+keys its inode on `typeInodeKey(uid)` (`uid + "\x00type"`) while `.tags` keys on
+the bare `uid`.
+
 ### The write path in detail (and the ATOMIC_O_TRUNC gotcha)
 
 Tools rewrite a whole file to "set" its contents: shell redirection, `tee`, and
-editors all **truncate to zero, then write**. `tagFile` models exactly that:
+editors all **truncate to zero, then write**. `metaFile` models exactly that:
 
-- `Open` for read snapshots the current tags into the handle buffer. `Open` for
-  write starts from an **empty** buffer — a tag file is always a full rewrite, so
-  the bytes written *are* the new tag set. `FOPEN_DIRECT_IO` is returned so the
+- `Open` for read snapshots the current values into the handle buffer. `Open` for
+  write starts from an **empty** buffer — a meta file is always a full rewrite, so
+  the bytes written *are* the new set. `FOPEN_DIRECT_IO` is returned so the
   kernel doesn't serve a stale cached size between the truncate and the rewrite.
-- `tagFileHandle.Write` copies incoming bytes into the buffer at the given
+- `metaFileHandle.Write` copies incoming bytes into the buffer at the given
   offset.
-- `Flush` (on `close(2)`) commits: any writable handle commits its buffer via
-  `SetTags`, even if zero bytes were written, so `: > file` clears all tags.
+- `Flush` (on `close(2)`) commits: any writable handle commits its buffer via the
+  node's `store` closure (`SetTags` / `SetDirTypes`), even if zero bytes were
+  written, so `: > file` clears the set.
 
 The subtle part is the truncate. go-fuse does **not** advertise the
 `ATOMIC_O_TRUNC` capability by default (checked through v2.11.0 — the capability
 mask in `fuse/opcode.go`'s init handler omits it; v2.11.0 adds an opt-in
 `ExtraCapabilities` server option). Without it, the kernel strips `O_TRUNC` from
 the open flags and instead issues a separate node-level `SETATTR(size=0)` *before*
-`Open`. So `tagFile` implements `fs.NodeSetattrer` and accepts the size change
+`Open`. So `metaFile` implements `fs.NodeSetattrer` and accepts the size change
 there; the truncate never reaches an open handle. This is why the truncate is
 handled at the node level rather than via an `O_TRUNC` branch in `Open` — it makes
 the behavior independent of whether ATOMIC_O_TRUNC is ever negotiated. Non-size
@@ -236,18 +281,27 @@ mkdir "mnt/files/<dir>/new"
 cat  "mnt/tags/<dir>/<file>"                   # current tags, one per line
 printf 'jazz\nmellow\n' > "mnt/tags/<dir>/<file>"   # replace the set
 : > "mnt/tags/<dir>/<file>"                     # clear all tags
+
+# edit a directory's own tags
+cat  "mnt/tags/<dir>/.tags"                    # the directory's tags
+printf 'album\nfavorite\n' > "mnt/tags/<dir>/.tags"
+
+# edit a directory's own dir-type labels (the structural "directory" marker is
+# preserved; added labels register in /query/types and become type: queryable)
+cat  "mnt/tags/<dir>/.type"
+printf 'audio-dir\nlive-album\n' > "mnt/tags/<dir>/.type"
+cat  mnt/query/types                           # every known dir-type label
+ls   "mnt/query/type:live-album"               # dirs carrying the custom label
 ```
 
 Confirm the effect with `tie dump` (the `filename` / `parent` / `path` / `tag`
-triples) and by checking that `/query/<tag>` reflects tag edits. `/query` must
-reject writes (`mv` there returns "Operation not supported").
+triples, and `tie-type` for `.type`) and by checking that `/query/<tag>` reflects
+tag edits. After a `.type` edit, `tie dump | grep <DirUID>` must still show the
+`tie-type directory` marker alongside the edited labels. `/query` must reject
+writes (`mv` there returns "Operation not supported").
 
 ## Future work
 
-- **`.tags` inside directories.** Directories are navigation-only today. A tagged
-  directory (a dir hash carrying `tie-type directory` + `tag` triples) could
-  expose a `.tags` file *inside* itself to make its own tags editable, the same
-  way leaf files work. Deferred past the first cut.
 - **Creating files through the mount.** `mkdir` creates directory nodes, but
   there is no `Create`/`Write` path for new *files* — that needs a filehost
   upload plus tagging, a larger change. `touch`/copy-in are unsupported.
