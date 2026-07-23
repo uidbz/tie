@@ -104,9 +104,7 @@ func (ic *Collection) loadEntries(rawDataToLoad chan RawDataEntry, wg *sync.Wait
 			ic.loadHash(entryID, raw)
 
 		case TYPE_DELETE:
-			if len(ic.freespace) < MaxFreespace {
-				ic.freespace <- entry.Position
-			}
+			ic.freeSlot(entry.Position)
 		}
 	}
 	wg.Done()
@@ -207,29 +205,102 @@ func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.
 	return nil
 }
 
+// openDB opens (creating if needed) the DB file handle. It does NOT set db_size:
+// db_size is the append cursor owned by allocSlot and initialized once by
+// initDBSize. A lazy reopen must not reset it, or an allocSlot bump made while
+// the file was idle-closed would be clobbered and hand out a colliding offset.
 func (t *Collection) openDB() *os.File {
 	f, err := os.OpenFile(t.dBFullPath, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		panic(err)
 	}
-	fi, err := f.Stat()
+	return f
+}
+
+// initDBSize establishes db_size (the end-of-file append cursor) exactly once,
+// before the writer goroutine starts and before any Add can call allocSlot. A
+// crash mid-write can leave a trailing partial record; that tail was never
+// acknowledged, so trim it back to a record boundary rather than refusing to
+// open the whole DB.
+func (t *Collection) initDBSize() {
+	fi, err := os.Stat(t.dBFullPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			t.db_size = 0
+			return
+		}
 		panic(err)
 	}
 	t.db_size = fi.Size()
-	// A crash mid-write can leave a trailing partial record. That tail was never
-	// acknowledged, so trim it back to a record boundary rather than refusing to
-	// open the whole DB.
-	if rem := t.db_size % ENTRY_SIZE; rem != 0 {
-		trimmed := t.db_size - rem
-		log.Printf("tiedb: %s has a %d-byte partial trailing record; truncating to %d bytes",
-			t.dBFullPath, rem, trimmed)
-		if err := f.Truncate(trimmed); err != nil {
-			panic("tiedb: failed to truncate partial record: " + err.Error())
-		}
-		t.db_size = trimmed
+	rem := t.db_size % ENTRY_SIZE
+	if rem == 0 {
+		return
 	}
-	return f
+	trimmed := t.db_size - rem
+	log.Printf("tiedb: %s has a %d-byte partial trailing record; truncating to %d bytes",
+		t.dBFullPath, rem, trimmed)
+	f, err := os.OpenFile(t.dBFullPath, os.O_RDWR, 0600)
+	if err != nil {
+		panic("tiedb: failed to open for truncation: " + err.Error())
+	}
+	if err := f.Truncate(trimmed); err != nil {
+		panic("tiedb: failed to truncate partial record: " + err.Error())
+	}
+	if err := f.Close(); err != nil {
+		panic("tiedb: failed to close after truncation: " + err.Error())
+	}
+	t.db_size = trimmed
+}
+
+// applyFileMod persists one queued modification to the open db handle. It runs
+// only on the writer goroutine, which owns the fd, so it takes no lock. A
+// FILE_DELETE with Position -1 (the tree placeholder for a triple whose FILE_ADD
+// has not yet been processed) has no on-disk record to tombstone, so it is
+// skipped. Any I/O error or short write is fatal — the DB is presumed corrupt.
+func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
+	var n int
+	var err error
+
+	switch file_mod.Mode {
+	case FILE_DELETE:
+		pos := file_mod.Position
+		if pos == -1 {
+			return
+		}
+		b := make([]byte, ENTRY_SIZE)
+		binary.LittleEndian.PutUint16(b, TYPE_DELETE)
+		ic.freeSlot(pos)
+		n, err = db.WriteAt(b, pos)
+
+	case FILE_ADD:
+		// The producer reserved the offset via allocSlot and already inserted the
+		// association into the tree at that position, so the writer only persists
+		// the bytes — it never re-inserts. (Re-inserting here raced a concurrent
+		// Delete: the delete could remove the placeholder entry before this ran,
+		// and the re-insert would silently resurrect the deleted triple.)
+		pos := file_mod.Position
+		switch file_mod.EntryType {
+		case TYPE_ASSOCIATION:
+			n, err = db.WriteAt(file_mod.Triple.toBytes(), pos)
+			ic.finishedAdding.Done()
+		case TYPE_ENTRY:
+			n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)
+		case TYPE_HASH:
+			n, err = db.WriteAt(HashToBytes(file_mod.EntryID, file_mod.HashValue), pos)
+		default:
+			panic("Wrong EntryType provided for DB writer.")
+		}
+
+	default:
+		panic("Wrong 'Mode' provided for DB writer" + strconv.Itoa(file_mod.Mode))
+	}
+
+	if err != nil {
+		panic(err)
+	}
+	if n != ENTRY_SIZE {
+		panic(fmt.Sprintf("Assertion: wrote %d bytes, expected %d. DB probably corrupt.", n, ENTRY_SIZE))
+	}
 }
 
 func (ic *Collection) dBWriter() {
@@ -237,41 +308,27 @@ func (ic *Collection) dBWriter() {
 	ic.dBReadQueue = make(chan ReadRequest, 100000)
 	ic.dBCloseWriter = make(chan bool, 1)
 
-	var db *os.File
-	var open bool = false
-	var timeout *time.Timer
-	var openLock sync.Mutex
+	// db_size is the append cursor consumed by allocSlot. Set it once here,
+	// before any Add can allocate.
+	ic.initDBSize()
 
-	closeAfter := time.Second * 10
+	// The writer goroutine owns the fd for its whole lifetime: it opens once
+	// here and closes only on shutdown. Durability comes from a periodic Sync on
+	// syncInterval rather than from closing the handle when idle (holding an fd
+	// open is free; the old idle-close existed only to force that Sync).
+	db := ic.openDB()
+	syncInterval := time.Second * 10
 
-	openDb := func() {
-		if !open {
-			db = ic.openDB()
-			open = true
-			ic.finished.Add(1)
-			timeout = time.AfterFunc(closeAfter, func() {
-				openLock.Lock()
-				open = false
-				if err := db.Sync(); err != nil {
-					log.Println("tiedb: DB sync error on idle close:", err)
-				}
-				if err := db.Close(); err != nil {
-					log.Println("tiedb: DB close error on idle close:", err)
-				}
-				openLock.Unlock()
-				ic.finished.Done()
-			})
-		} else {
-			timeout.Reset(time.Second * 10)
-			open = true
-		}
-	}
+	// finished lets closeDB block until the fd is synced and closed.
+	ic.finished.Add(1)
 	go func() {
+		defer ic.finished.Done()
+		syncTicker := time.NewTicker(syncInterval)
+		defer syncTicker.Stop()
+
 		for {
 			select {
 			case req := <-ic.dBReadQueue:
-				openLock.Lock()
-				openDb()
 				b := make([]byte, ENTRY_SIZE)
 				n, err := db.ReadAt(b, req.Position)
 				if err != nil {
@@ -286,80 +343,33 @@ func (ic *Collection) dBWriter() {
 						req.ReplyChan <- a
 					}
 				}
-				openLock.Unlock()
 
 			case file_mod := <-ic.dBWriteQueue:
-				openLock.Lock()
-				openDb()
-				var n int
-				var err error
-				var pos int64
+				ic.applyFileMod(db, file_mod)
 
-				switch file_mod.Mode {
-				case FILE_DELETE:
-					b := make([]byte, ENTRY_SIZE)
-					datatype := make([]byte, SIZE_DATATYPE)
-					binary.LittleEndian.PutUint16(datatype, TYPE_DELETE)
-					b = append(datatype, b[2:]...)
-					pos = file_mod.Position
-					if pos != -1 {
-						if len(ic.freespace) < MaxFreespace {
-							ic.freespace <- pos
-						}
-						n, err = db.WriteAt(b, pos)
-					}
+			case <-syncTicker.C:
+				if err := db.Sync(); err != nil {
+					log.Println("tiedb: periodic DB sync error:", err)
+				}
 
-				case FILE_ADD:
-					if len(ic.freespace) == 0 {
-						pos = ic.db_size
-						ic.db_size += ENTRY_SIZE
-					} else {
-						pos = <-ic.freespace
-					}
-					switch file_mod.EntryType {
-					case TYPE_ASSOCIATION:
-						ic.insertAssociation(file_mod.Level, file_mod.Triple, pos)
-						n, err = db.WriteAt(file_mod.Triple.toBytes(), pos)
-						ic.finishedAdding.Done()
-					case TYPE_ENTRY:
-						n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)
-					case TYPE_HASH:
-						n, err = db.WriteAt(HashToBytes(file_mod.EntryID, file_mod.HashValue), pos)
+			case <-ic.dBCloseWriter:
+				// Drain any writes already queued so no acknowledged Add is lost,
+				// then sync and close. Reads are best-effort and can be dropped.
+				for drained := false; !drained; {
+					select {
+					case file_mod := <-ic.dBWriteQueue:
+						ic.applyFileMod(db, file_mod)
 					default:
-						panic("Wrong EntryType provided for DB writer.")
+						drained = true
 					}
-
-				default:
-					panic("Wrong 'Mode' provided for DB writer" + strconv.Itoa(file_mod.Mode))
 				}
-
-				if err != nil {
-					panic(err)
+				if err := db.Sync(); err != nil {
+					log.Println("tiedb: DB sync error on close:", err)
 				}
-
-				if n != ENTRY_SIZE {
-					fmt.Println("N", n)
-					fmt.Println("Entry", ENTRY_SIZE)
-					panic("Assertion: Bytes written differs from expected. DB probably corrupt.")
+				if err := db.Close(); err != nil {
+					log.Println("tiedb: DB close error on close:", err)
 				}
-				openLock.Unlock()
-
-			case closewriter := <-ic.dBCloseWriter:
-				if closewriter {
-					openLock.Lock()
-					if open {
-						open = false
-						if err := db.Sync(); err != nil {
-							log.Println("tiedb: DB sync error on close:", err)
-						}
-						if err := db.Close(); err != nil {
-							log.Println("tiedb: DB close error on close:", err)
-						}
-					}
-					fmt.Println("Closing DB writer")
-					openLock.Unlock()
-					return
-				}
+				return
 			}
 		}
 	}()

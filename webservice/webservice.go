@@ -1,12 +1,16 @@
 package webservice
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
@@ -64,18 +68,48 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 	routes(ws.mux)
 
+	if !ws.Config.Insecure && (ws.Config.CertFile == "" || ws.Config.KeyFile == "") {
+		fmt.Println("Error: set CertFile and KeyFile in the config file, or set Insecure = true.")
+		fmt.Println("Exiting.")
+		return
+	}
+
+	srv := &http.Server{Addr: ws.Config.ListenOn, Handler: ws.mux}
+
+	// On SIGINT/SIGTERM, stop accepting connections and let in-flight handlers
+	// finish (so any write they enqueue is captured), THEN close the DB. Ordering
+	// matters: closing the DB before draining handlers could drop a request's
+	// write that had not yet reached the writer's queue.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-stop
+		fmt.Println("\nShutting down: draining requests and syncing DB...")
+		if err := srv.Shutdown(context.Background()); err != nil {
+			log.Println("tiedb: HTTP shutdown error:", err)
+		}
+		ws.Close()
+		os.Exit(0)
+	}()
+
 	if ws.Config.Insecure {
 		fmt.Println("Listening on http://" + ws.Config.ListenOn + "\n")
-		log.Fatal(http.ListenAndServe(ws.Config.ListenOn, ws.mux))
-	} else {
-		if ws.Config.CertFile == "" || ws.Config.KeyFile == "" {
-			fmt.Println("Error: set CertFile and KeyFile in the config file, or set Insecure = true.")
-			fmt.Println("Exiting.")
-			return
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
 		}
+	} else {
 		fmt.Println("Listening on https://" + ws.Config.ListenOn + "\n")
-		log.Fatal(http.ListenAndServeTLS(ws.Config.ListenOn, ws.Config.CertFile, ws.Config.KeyFile, ws.mux))
+		if err := srv.ListenAndServeTLS(ws.Config.CertFile, ws.Config.KeyFile); err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
 	}
+}
+
+// Close flushes and closes every collection's disk writer. Call it on shutdown
+// (e.g. from a SIGTERM handler) so the daemon durably persists its tail of
+// writes rather than relying on the kernel to flush the page cache after exit.
+func (ws *Webservice) Close() {
+	ws.db.Close()
 }
 
 func (ws *Webservice) BasicAuth(h http.HandlerFunc) http.HandlerFunc {

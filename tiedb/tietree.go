@@ -61,6 +61,23 @@ func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 	return col
 }
 
+// Close flushes and closes every live collection's disk writer, blocking until
+// each has drained its pending writes, synced, and closed its file handle. It is
+// the clean-shutdown counterpart to the periodic sync in dBWriter: call it from
+// a signal handler so a terminating daemon durably persists its tail of writes
+// instead of relying on the kernel to flush the page cache. A no-op in
+// memory-only mode (collections have no writer goroutine then).
+func (db *TieTree) Close() {
+	if !db.writeToDisk {
+		return
+	}
+	db.colMutex.Lock()
+	defer db.colMutex.Unlock()
+	db.collections.ForEach(func(_ CollectionKey, col *Collection) {
+		col.closeDB()
+	})
+}
+
 func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) *Collection {
 	ic := Collection{}
 
@@ -76,7 +93,6 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 		if err := os.MkdirAll(path, 0777); err != nil {
 			log.Fatal("Error creating DB directory ", path, ": ", err, "\nExiting")
 		}
-		ic.freespace = make(chan int64, MaxFreespace)
 		ic.cache = newTripleCache(defaultTripleCacheSize)
 		if clearExistingDB {
 			if err := os.Remove(ic.dBFullPath); err != nil && !os.IsNotExist(err) {

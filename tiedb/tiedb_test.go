@@ -238,6 +238,28 @@ func TestCacheInvalidationOnSlotReuse(t *testing.T) {
 	}
 }
 
+// TestDeleteBeforeFlush guards the writer against a delete that lands before the
+// matching Add is drained from the write queue. The tree then holds the -1
+// placeholder position, so the queued FILE_DELETE carries Position -1. The writer
+// must skip it silently, never write at a bogus offset or trip the byte-count
+// assertion. Add+Delete are issued back to back without a Sync in between to hit
+// the pre-flush window; the loop makes the race reliable.
+func TestDeleteBeforeFlush(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	for i := 0; i < 200; i++ {
+		v := "v" + strconv.Itoa(i)
+		col.Add("key", "rel", v)
+		col.Delete("key", "rel", v) // may run before the Add is flushed (pos == -1)
+	}
+	col.Sync() // must not panic in the writer
+
+	if got := getVal2s(t, col, "key", "rel"); len(got) != 0 {
+		t.Errorf("expected no surviving values after add+delete pairs, got %v", got)
+	}
+}
+
 // TestSortedPagination checks that GetPage returns triples in a stable order,
 // honors Offset/Limit, and reports the pre-pagination total.
 func TestSortedPagination(t *testing.T) {

@@ -19,8 +19,6 @@ const (
 	SIZE_PARENTID = SIZE_ID
 	SIZE_VALUE    = 24 // 6 * 8 - 3 * 8
 
-	MaxFreespace = 1000000
-
 	FILE_ADD    = 0
 	FILE_DELETE = 1
 
@@ -118,14 +116,22 @@ type Collection struct {
 	// arenaFree holds slots freed by Delete for reuse, mirroring disk freespace.
 	// arenaMutex guards both, since Add does not hold changeMutex for its whole
 	// duration and may run concurrently with other Adds.
-	arena     []Triple
-	arenaFree []int64
+	arena      []Triple
+	arenaFree  []int64
 	arenaMutex sync.Mutex
 
-	dBWriteQueue   chan FileMod
-	dBReadQueue    chan ReadRequest
-	dBCloseWriter  chan bool
-	freespace      chan int64
+	dBWriteQueue  chan FileMod
+	dBReadQueue   chan ReadRequest
+	dBCloseWriter chan bool
+
+	// freespace holds disk slot offsets freed by Delete, for reuse by later Adds
+	// (mirroring arenaFree in memory mode). Guarded by freespaceMutex: the load
+	// pass pushes from concurrent workers, and the writer goroutine both pushes
+	// (on delete) and pops (on add). There is no cap — every freed slot is
+	// reclaimable, so the file does not grow while holes exist.
+	freespace      []int64
+	freespaceMutex sync.Mutex
+
 	writeToDisk    bool
 	finished       sync.WaitGroup
 	finishedAdding sync.WaitGroup

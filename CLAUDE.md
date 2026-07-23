@@ -70,6 +70,37 @@ through a hashing `MultiWriter` and rejects a mismatch); use it when the filehos
 is untrusted. The flag threads through `NewTieFuse(..., verify bool)` to both the
 blob `download` and the directory-blob `listContent`.
 
+## DB write path & durability (tiedb)
+
+In disk mode each `Collection` runs one **writer goroutine** (`dBWriter`) that
+owns the `.tie` file handle for its whole lifetime. All writes and disk reads go
+through it via `dBWriteQueue`/`dBReadQueue`; producers never touch the fd.
+
+- **Slot allocation happens in the producer, not the writer.** `Add`/`insertValue`/
+  `insertHash` call `allocSlot()` to reserve the on-disk offset up front (a
+  reclaimed `freespace` slot, else the `db_size` append cursor), insert into the
+  in-memory tree at that real position, and pass the offset to the writer as
+  `FileMod.Position`. The writer only persists bytes — it must **never** re-insert
+  into the tree (doing so raced a concurrent `Delete` and resurrected deleted
+  triples).
+- **`freespace` is a mutex-guarded `[]int64`** (mirrors `arenaFree` in memory
+  mode), not a channel, and has **no cap** — every freed slot is reclaimable, so
+  the file does not grow while holes exist. Slots are freed by the writer *after*
+  the tombstone is written, so a reused slot is never handed out before its old
+  contents are overwritten.
+- **`db_size` has a single owner:** `initDBSize()` sets it once before the writer
+  starts (trimming any partial trailing record from a crash). `openDB` must not
+  reset it — `allocSlot` is the only mutator thereafter.
+- **Durability = a 10s `time.Ticker` `Sync()`** inside the writer loop (not an
+  idle-close; holding the fd open is free). `closeDB` signals the writer to drain
+  queued writes, `Sync()`, close, and exit — `TieTree.Close()` fans this across
+  all live collections.
+- **Graceful shutdown:** the daemon's `ListenAndServe` traps SIGINT/SIGTERM,
+  `srv.Shutdown()`s the HTTP server (so in-flight handlers finish enqueuing their
+  writes) **then** `ws.Close()` → `TieTree.Close()`. Ordering matters: draining
+  handlers before closing the DB guarantees no acknowledged write is lost.
+  `kill -9` can't run this — that tail falls back to the ticker + kernel flush.
+
 ## Conventions
 
 - tiedb diagnostic/log output goes to **stderr**, never stdout (stdout is data,

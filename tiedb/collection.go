@@ -78,6 +78,7 @@ func (ic *Collection) insertHash(raw [32]byte) uint64 {
 			Mode:      FILE_ADD,
 			EntryID:   id,
 			HashValue: raw,
+			Position:  ic.allocSlot(),
 		}
 	}
 	return id
@@ -136,12 +137,16 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 		return
 	}
 
-	// Insert immediately so duplicate Adds queued before the disk writer runs
-	// are deduplicated. In disk mode the stored value is the position -1; the
-	// writer overwrites it with the real position (and signals finishedAdding).
-	// In memory mode we allocate the arena slot now so it is the final position.
-	pos := int64(-1)
-	if !ic.writeToDisk {
+	// Reserve the final storage position now and insert at it, so a duplicate
+	// Add queued before the writer runs is deduplicated and a concurrent Delete
+	// sees the real position (never a placeholder that the writer would later
+	// overwrite, which used to resurrect deleted triples). In disk mode the
+	// writer only persists the bytes at this offset; in memory mode the position
+	// is the arena slot.
+	var pos int64
+	if ic.writeToDisk {
+		pos = ic.allocSlot()
+	} else {
 		pos = ic.arenaStore(&ass)
 	}
 	ic.insertAssociation(keyLevel, &ass, pos)
@@ -152,6 +157,7 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 			EntryType: TYPE_ASSOCIATION,
 			Level:     keyLevel,
 			Mode:      FILE_ADD,
+			Position:  pos,
 			Triple:    &ass,
 		}
 	}
@@ -398,6 +404,7 @@ func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]
 			Level:       level,
 			EntryID:     entryID,
 			UniqueValue: uv,
+			Position:    ic.allocSlot(),
 		}
 		ic.dBWriteQueue <- m
 	}
@@ -436,6 +443,37 @@ func (ic *Collection) arenaLoad(pos int64) (Triple, bool) {
 		return Triple{}, false
 	}
 	return ic.arena[pos], true
+}
+
+// freeSlot records a freed disk slot offset for reuse by a later allocSlot. It
+// must only be called by the writer goroutine after the slot's tombstone has
+// been written, so a reused slot is never handed out before its old contents are
+// overwritten on disk.
+func (ic *Collection) freeSlot(pos int64) {
+	if pos < 0 {
+		return
+	}
+	ic.freespaceMutex.Lock()
+	ic.freespace = append(ic.freespace, pos)
+	ic.freespaceMutex.Unlock()
+}
+
+// allocSlot reserves the disk offset for the next record: a reclaimed freespace
+// slot if one exists, otherwise a fresh slot appended at the end of the file.
+// Both the freespace stack and db_size are guarded here, so concurrent Adds
+// never hand out the same offset. Callers pass the returned offset to the writer
+// as FileMod.Position.
+func (ic *Collection) allocSlot() int64 {
+	ic.freespaceMutex.Lock()
+	defer ic.freespaceMutex.Unlock()
+	if n := len(ic.freespace); n > 0 {
+		pos := ic.freespace[n-1]
+		ic.freespace = ic.freespace[:n-1]
+		return pos
+	}
+	pos := ic.db_size
+	ic.db_size += ENTRY_SIZE
+	return pos
 }
 
 // arenaFreeSlot returns a memory-mode arena slot for reuse.
@@ -815,7 +853,11 @@ func (ic *Collection) ForEachTriple(do func(StringTriple)) {
 }
 
 func (ic *Collection) closeDB() {
-	ic.finished.Wait() // wait until finished writing
+	// Signal the writer to drain any queued writes, sync, and close the fd, then
+	// wait for it to exit (it calls finished.Done() on return). Do NOT close
+	// dBWriteQueue: nothing ranges over it, and a closed channel would make the
+	// writer's select case perpetually ready with a zero-value FileMod, racing
+	// the shutdown signal into the "Wrong EntryType" panic.
 	ic.dBCloseWriter <- true
-	close(ic.dBWriteQueue)
+	ic.finished.Wait()
 }
