@@ -133,6 +133,10 @@ func (request *GetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *GetRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewGetRequest("")
+}
+
 func (c CollectionInfo) NewGetRequest(key string) *GetRequest {
 	request := &GetRequest{}
 	request.Id = IdGet

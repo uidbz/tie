@@ -36,7 +36,9 @@ type DaemonConfig struct {
 	CertFile string
 	KeyFile  string
 	DbPath   string
-	Users    []User
+	// MaxConcurrentRequests caps how many requests run at once. 0 = unbounded.
+	MaxConcurrentRequests int
+	Users                 []User
 }
 
 func defaultConfig() DaemonConfig {
@@ -84,7 +86,8 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		// (filename, size, ...) from doubling association memory. The reverse index
 		// is rebuilt from forward triples on startup, so adding a relation here
 		// takes effect for existing data after one restart.
-		ReverseRelations: []string{"tag", "path", "parent", "tie-type"},
+		ReverseRelations:      []string{"tag", "path", "parent", "tie-type"},
+		MaxConcurrentRequests: cfg.MaxConcurrentRequests,
 	}
 
 	c := api.CollectionInfo{}

@@ -127,6 +127,10 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *BatchRequest) New() ws.RequestInterface {
+	return NewBatchRequest(&Batch{})
+}
+
 func NewBatchRequest(batch *Batch) *BatchRequest {
 	if batch == nil {
 		return nil

@@ -36,6 +36,10 @@ func (request *DummyRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *DummyRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewDummyRequest()
+}
+
 func (c CollectionInfo) NewDummyRequest() *DummyRequest {
 	request := &DummyRequest{}
 	request.Id = IdDummy

@@ -33,6 +33,10 @@ func (request *SyncRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *SyncRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewSyncRequest()
+}
+
 func (c CollectionInfo) NewSyncRequest() *SyncRequest {
 	request := &SyncRequest{}
 	request.Id = IdSync

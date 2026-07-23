@@ -12,6 +12,10 @@ type RequestInterface interface {
 	GetId() string
 	GetReplyStructPtr() interface{}
 	Reply(environment *Environment) (Reply, error)
+	// New returns a fresh, zero-valued instance of the same concrete request
+	// type. RequestHandler unmarshals each incoming request into its own New()
+	// instance so concurrent requests never share mutable state.
+	New() RequestInterface
 }
 
 type Environment struct {

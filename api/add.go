@@ -46,6 +46,10 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *AddRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewAddRequest("", "", "")
+}
+
 func (c CollectionInfo) NewAddRequest(key, value1, value2 string) *AddRequest {
 	request := &AddRequest{}
 	request.Id = IdAdd

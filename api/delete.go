@@ -45,6 +45,10 @@ func (request *DeleteRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *DeleteRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewDeleteRequest("", "", "")
+}
+
 func (c CollectionInfo) NewDeleteRequest(key, value1, value2 string) *DeleteRequest {
 	request := &DeleteRequest{}
 	request.Id = IdDelete

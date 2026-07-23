@@ -58,6 +58,10 @@ func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *AssociatedRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewAssociatedRequest("")
+}
+
 func (c CollectionInfo) NewAssociatedRequest(key string) *AssociatedRequest {
 	request := &AssociatedRequest{}
 	request.Id = IdAssociated

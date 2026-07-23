@@ -7,26 +7,19 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
-	"sync"
 
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
 )
 
 type Webservice struct {
-	Config           WebserviceConfig
-	mux              *http.ServeMux
-	requests         []RequestInterface
-	db               *tiedb.TieTree
-	requestsToAnswer chan *RequestToAnswer
-}
-
-type RequestToAnswer struct {
-	AnswerTo http.ResponseWriter
-	RawData  []byte
-	Request  RequestInterface
-	Username string
-	Wait     *sync.WaitGroup
+	Config   WebserviceConfig
+	mux      *http.ServeMux
+	requests []RequestInterface
+	db       *tiedb.TieTree
+	// sem bounds how many requests run concurrently. A nil channel means no
+	// ceiling. Each request acquires a slot before Reply and releases it after.
+	sem chan struct{}
 }
 
 type WebserviceConfig struct {
@@ -46,6 +39,11 @@ type WebserviceConfig struct {
 	// to just the relations queried in reverse to cut association memory roughly
 	// in half on metadata-heavy stores.
 	ReverseRelations []string
+
+	// MaxConcurrentRequests caps how many requests execute simultaneously.
+	// Zero or negative means unbounded. tiedb is concurrency-safe, so this is a
+	// load-shedding knob, not a correctness requirement.
+	MaxConcurrentRequests int
 }
 
 func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webservice {
@@ -56,8 +54,9 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	ws.db.SetBlobPolicy(metadata.HexHashBlobPolicy())
-	ws.requestsToAnswer = make(chan *RequestToAnswer, 10000)
-	ws.startRequestAnswerer()
+	if config.MaxConcurrentRequests > 0 {
+		ws.sem = make(chan struct{}, config.MaxConcurrentRequests)
+	}
 
 	return ws
 }
@@ -106,13 +105,13 @@ func (ws *Webservice) DbPath(namespace string) string {
 }
 
 func (ws *Webservice) GetAccount(account string) *tiedb.Collection {
-	key := tiedb.CollectionKey{ws.DbPath(ws.Config.UserNamespace), account}
+	key := tiedb.CollectionKey{Database: ws.DbPath(ws.Config.UserNamespace), Collection: account}
 
 	return ws.db.GetCollection(key)
 }
 
 func (ws *Webservice) GetCollection(namespace, collection string) *tiedb.Collection {
-	key := tiedb.CollectionKey{ws.DbPath(namespace), collection}
+	key := tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}
 
 	return ws.db.GetCollection(key)
 }
@@ -124,33 +123,21 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Request from " + r.RemoteAddr + ": " + reqName)
 	username, _, _ := r.BasicAuth() // Credentials already validated
 
-	req := &RequestToAnswer{
-		AnswerTo: w,
-		RawData:  raw_data,
-		Username: username,
-		Wait:     &sync.WaitGroup{},
-	}
-
 	for _, x := range ws.requests {
 		if reqName == x.GetId() {
-			req.Request = x
-			req.Wait.Add(1)
-			ws.requestsToAnswer <- req
-			req.Wait.Wait() // Wait until request is answered otherwise ResponseWriter will be closed
+			// Unmarshal into a fresh instance so concurrent requests never
+			// share the prototype's mutable fields. The HTTP server already
+			// runs each request on its own goroutine, so we answer inline.
+			if ws.sem != nil {
+				ws.sem <- struct{}{}
+				defer func() { <-ws.sem }()
+			}
+			ws.AnswerRequest(w, x.New(), raw_data, username)
 			return
 		}
 	}
 
 	log.Println("Unrecognized request from " + r.RemoteAddr + ": " + reqName)
-}
-
-func (ws *Webservice) startRequestAnswerer() {
-	go func() {
-		for req := range ws.requestsToAnswer {
-			ws.AnswerRequest(req)
-			req.Wait.Done()
-		}
-	}()
 }
 
 func ErrorToJsonString(prepend string, err error) string {
@@ -167,26 +154,26 @@ func ErrorToJsonString(prepend string, err error) string {
 	return string(json_reply)
 }
 
-func (ws *Webservice) AnswerRequest(req *RequestToAnswer) {
-	errRequest := json.Unmarshal(req.RawData, req.Request)
+func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterface, rawData []byte, username string) {
+	errRequest := json.Unmarshal(rawData, request)
 	if errRequest != nil {
 		log.Println(errRequest)
 		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
-		fmt.Fprint(req.AnswerTo, msg)
+		fmt.Fprint(w, msg)
 		return
 	}
 
-	reply, errReply := req.Request.Reply(&Environment{req.Username, ws.GetAccount, ws.GetCollection, ws})
+	reply, errReply := request.Reply(&Environment{username, ws.GetAccount, ws.GetCollection, ws})
 	if errReply != nil {
 		msg := ErrorToJsonString("Error:", errReply)
-		fmt.Fprint(req.AnswerTo, msg)
+		fmt.Fprint(w, msg)
 	} else {
 		json_reply, errMarshal := json.Marshal(reply.ReplyStructPtr)
 		if errMarshal != nil {
 			msg := ErrorToJsonString("Internal error:", errMarshal)
-			fmt.Fprint(req.AnswerTo, msg)
+			fmt.Fprint(w, msg)
 		} else {
-			fmt.Fprint(req.AnswerTo, string(json_reply))
+			fmt.Fprint(w, string(json_reply))
 		}
 	}
 }

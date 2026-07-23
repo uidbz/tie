@@ -56,6 +56,10 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *UpdateRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewUpdateRequest(Update{})
+}
+
 func (c CollectionInfo) NewUpdateRequest(update Update) *UpdateRequest {
 	request := &UpdateRequest{}
 	request.Id = IdUpdate

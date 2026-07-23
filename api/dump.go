@@ -31,6 +31,10 @@ func (request *DumpRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	return ws.Reply{request.Id, reply}, nil
 }
 
+func (request *DumpRequest) New() ws.RequestInterface {
+	return CollectionInfo{}.NewDumpRequest()
+}
+
 func (c CollectionInfo) NewDumpRequest() *DumpRequest {
 	request := &DumpRequest{}
 	request.Id = IdDump
