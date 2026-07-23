@@ -127,13 +127,16 @@ buggy, or reached over a tampered connection. `metadata` is the single source of
 the highwayhash content-address algorithm (`metadata.NewHash` / `HashReader`),
 so upload hashing and download verification cannot drift apart.
 
-- **Content is verified on receipt.** `io/getlib` and `io/fuselib` recompute the
-  hash of every downloaded blob and reject it (`getlib.ErrChecksum`) if it does
-  not match the address it was requested under. A tampered or truncated transfer
-  never reaches disk, the cache, or a FUSE reader as if it were genuine. Large
-  files stream through the hasher rather than being buffered whole, and cache
-  writes are atomic (temp file + rename) so a failed transfer leaves no corrupt
-  entry.
+- **Content is verified on receipt.** `io/getlib` recomputes the hash of every
+  downloaded blob and rejects it (`getlib.ErrChecksum`) if it does not match the
+  address it was requested under, so a tampered or truncated `download`/`import`
+  transfer never reaches disk as if it were genuine. Large files stream through
+  the hasher rather than being buffered whole.
+- **FUSE reads verify on request.** The `mount` cache in `io/fuselib` can hash
+  every downloaded blob the same way, but does **not** by default: for a trusted
+  personal filehost the per-read hash pass over multi-GB media is wasted work.
+  Pass `tie mount --verify` to turn it on (the blob then streams through the
+  hasher and a mismatch is rejected); use it when the filehost is untrusted.
 - **Manifests cannot smuggle traversal or SSRF payloads.** `metadata.ParseDirLine`
   accepts an entry only if its filename is a single safe path component (no
   separators, not `.`/`..`) and its hash is exactly 64 lowercase hex characters.
@@ -210,6 +213,15 @@ immutable `tiedir` snapshot. Names and tags attach to the content hash, so an
 edit is visible everywhere that content appears. See
 [docs/mount.md](docs/mount.md) for the full mount reference and the technical
 implementation of the write paths.
+
+Both mounts fetch bytes from the filehost on demand and keep them in an
+**on-disk, single-flight cache**: a blob is downloaded once (concurrent readers
+of the same file coalesce onto that one download), streamed to a temp file so
+memory stays bounded regardless of file size, and served from there. `--cache
+<GB>` sets the eviction budget (default 1); it is an LRU target, not a hard cap,
+so a file larger than the budget still reads. The cache is removed on unmount.
+`--verify` turns on content-hash verification of downloaded bytes (off by
+default — see *Transfer integrity* above).
 
 ### Backup / interop
 

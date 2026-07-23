@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/schollz/progressbar/v3"
 
@@ -167,6 +168,11 @@ func cmdUpload() *cli.Command {
 				progressbar.OptionShowBytes(true),
 				progressbar.OptionShowCount(),
 				progressbar.OptionClearOnFinish(),
+				// Without a throttle the bar re-renders the terminal line on
+				// every write it receives — one per streamed chunk — which for a
+				// multi-GB upload is millions of renders and throttles transfer
+				// to a few MB/s. Cap redraws to ~60fps; transfer stays wire-speed.
+				progressbar.OptionThrottle(16*time.Millisecond),
 			)
 			result, err := client.UploadToWithProgress(host, path, bar)
 			bar.Finish()
@@ -221,6 +227,9 @@ func cmdDownload() *cli.Command {
 				progressbar.OptionShowBytes(true),
 				progressbar.OptionShowCount(),
 				progressbar.OptionClearOnFinish(),
+				// See the upload bar: cap redraws so per-chunk writes don't
+				// throttle the transfer to terminal-render speed.
+				progressbar.OptionThrottle(16*time.Millisecond),
 			)
 			err = client.DownloadFromWithProgress(host, sourceHash, ctx.Args().Get(1), bar)
 			bar.Finish()
@@ -336,8 +345,9 @@ func cmdMount() *cli.Command {
 			"or the live tag-derived filesystem (mount --db [mountpoint])",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first DefaultFileHosts)"},
-			&cli.IntFlag{Name: "cache", Usage: "In-memory file cache size in GB", Value: 1},
+			&cli.IntFlag{Name: "cache", Usage: "On-disk file cache size in GB", Value: 1},
 			&cli.BoolFlag{Name: "db", Usage: "Mount the live tag-derived filesystem instead of a dir-hash"},
+			&cli.BoolFlag{Name: "verify", Usage: "Verify downloaded bytes against their content hash (default off; use for an untrusted filehost)"},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
@@ -356,7 +366,8 @@ func cmdMount() *cli.Command {
 					return errors.New("Need 1 arg: mountpoint")
 				}
 				mountpoint = ctx.Args().Get(0)
-				state := fuselib.NewTieDBFuse(tie, filehost.URL, filehost.Insecure, ctx.Int("cache"))
+				state := fuselib.NewTieDBFuse(tie, filehost.URL, filehost.Insecure, ctx.Int("cache"), ctx.Bool("verify"))
+				defer state.Close()
 				s, err := state.MountDB(mountpoint)
 				if err != nil {
 					return err
@@ -368,7 +379,8 @@ func cmdMount() *cli.Command {
 				}
 				hash := ctx.Args().Get(0)
 				mountpoint = ctx.Args().Get(1)
-				state := fuselib.NewTieFuse(filehost.URL, filehost.Insecure, ctx.Int("cache"))
+				state := fuselib.NewTieFuse(filehost.URL, filehost.Insecure, ctx.Int("cache"), ctx.Bool("verify"))
+				defer state.Close()
 				s, err := state.Mount(hash, mountpoint)
 				if err != nil {
 					return err

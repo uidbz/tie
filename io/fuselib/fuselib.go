@@ -5,11 +5,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	stdhash "hash"
 	"io"
 	"net/http"
-	"strconv"
+	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 
@@ -26,7 +29,16 @@ type TieFuse struct {
 	config      config
 }
 
-func NewTieFuse(filehost string, insecure bool, cacheSizeGB int) *TieFuse {
+// Close releases the on-disk blob cache. Call once after the mount is torn down.
+func (state *TieFuse) Close() error {
+	return state.cache.close()
+}
+
+// NewTieFuse builds a content-addressed FUSE state. verify controls whether
+// downloaded blob bytes are hashed and checked against their content address:
+// off by default, since for a trusted personal filehost the per-read hash pass
+// over multi-GB media is wasted work; turn it on when the filehost is untrusted.
+func NewTieFuse(filehost string, insecure bool, cacheSizeGB int, verify bool) *TieFuse {
 	httpClient := http.DefaultClient
 	if insecure {
 		httpClient = &http.Client{
@@ -34,59 +46,119 @@ func NewTieFuse(filehost string, insecure bool, cacheSizeGB int) *TieFuse {
 		}
 	}
 	return &TieFuse{
-		cache:       &cache{MaxSize: cacheSizeGB * 1024 * 1024 * 1024, filehost: filehost, client: httpClient},
+		cache:       newCache(filehost, httpClient, int64(cacheSizeGB)*1024*1024*1024, verify),
 		hashToInode: make(map[string]uint64),
-		config:      config{filehost: filehost, client: httpClient},
+		config:      config{filehost: filehost, client: httpClient, verify: verify},
 	}
 }
 
 type config struct {
 	filehost string
 	client   *http.Client
+	verify   bool
 }
 
+// cache is a disk-backed, single-flight blob cache. Blobs are streamed from the
+// filehost to files under dir (bounded by disk, not RAM), verified against their
+// content hash while streaming, and served to reads via ReadAt. Concurrent reads
+// of the same hash — go-fuse dispatches Read across goroutines — coalesce into a
+// single download.
 type cache struct {
 	filehost string
 	client   *http.Client
-	// mu guards CurrentSize and Entries: go-fuse dispatches Read concurrently
-	// across goroutines, so every cache mutation must be serialized.
-	mu          sync.Mutex
-	CurrentSize int
-	MaxSize     int
-	Entries     []*cacheEntry
+	dir      string
+	maxSize  int64
+	verify   bool // hash downloaded bytes and check against their content address
+
+	// mu guards entries and the LRU order slice. Downloads happen outside the
+	// lock; the per-blob entry carries its own readiness signal.
+	mu      sync.Mutex
+	entries map[string]*cacheEntry
+	order   []string // hashes in insertion order, for size-based eviction
+	curSize int64
 }
 
-func (c *cache) set(key string, data []byte) error {
-	if len(data) > c.MaxSize {
-		return errors.New("File bigger than cache")
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry := &cacheEntry{key, data}
-	c.Entries = append(c.Entries, entry)
-	c.CurrentSize += len(entry.Data)
-	for c.CurrentSize > c.MaxSize {
-		var x *cacheEntry
-		x, c.Entries = c.Entries[0], c.Entries[1:]
-		c.CurrentSize = c.CurrentSize - len(x.Data)
-	}
-	return nil
+// cacheEntry is one cached blob. ready is closed once the download finishes (or
+// fails); until then, readers block on it. On success, file is an open,
+// read-only handle to the on-disk blob and size is its length; on failure, err
+// is set. Keeping the fd open means an evicted-and-unlinked blob stays readable
+// for handles that already resolved it (unlink removes the name, not the inode).
+type cacheEntry struct {
+	ready chan struct{}
+	file  *os.File
+	size  int64
+	err   error
 }
 
-func (c *cache) get(key string) ([]byte, bool) {
+func newCache(filehost string, client *http.Client, maxSize int64, verify bool) *cache {
+	dir, err := os.MkdirTemp("", "tie-fuse-cache-")
+	if err != nil {
+		// Fall back to the OS temp root; download() will surface open errors.
+		dir = os.TempDir()
+	}
+	return &cache{
+		filehost: filehost,
+		client:   client,
+		dir:      dir,
+		maxSize:  maxSize,
+		verify:   verify,
+		entries:  make(map[string]*cacheEntry),
+	}
+}
+
+// close removes the on-disk cache directory and closes open blob handles. Safe
+// to call once at unmount.
+func (c *cache) close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, x := range c.Entries {
-		if x.Key == key {
-			return x.Data, true
+	for _, e := range c.entries {
+		if e.file != nil {
+			e.file.Close()
 		}
 	}
-	return nil, false
+	c.entries = make(map[string]*cacheEntry)
+	c.order = nil
+	c.curSize = 0
+	dir := c.dir
+	c.mu.Unlock()
+	if dir == "" || dir == os.TempDir() {
+		return nil
+	}
+	return os.RemoveAll(dir)
 }
 
-type cacheEntry struct {
-	Key  string
-	Data []byte
+// blobPath returns the on-disk path for a hash. The hash is validated as hex by
+// callers, so it is safe as a single path segment.
+func (c *cache) blobPath(hash string) string {
+	return filepath.Join(c.dir, hash)
+}
+
+// evictLocked drops least-recently-inserted blobs until curSize fits maxSize.
+// The open fd of an evicted entry is closed and its file unlinked; any reader
+// still holding a reference to that entry keeps reading through its own fd.
+// Must be called with c.mu held.
+func (c *cache) evictLocked(keep string) {
+	for c.curSize > c.maxSize && len(c.order) > 0 {
+		oldest := c.order[0]
+		if oldest == keep {
+			// Never evict the blob we just admitted; stop to avoid churn.
+			if len(c.order) == 1 {
+				break
+			}
+			c.order = append(c.order[1:], oldest)
+			continue
+		}
+		c.order = c.order[1:]
+		e, ok := c.entries[oldest]
+		if !ok {
+			continue
+		}
+		delete(c.entries, oldest)
+		c.curSize -= e.size
+		if e.file != nil {
+			e.file.Close()
+		}
+		os.Remove(c.blobPath(oldest))
+	}
 }
 
 func (state *TieFuse) inodeID(hash string) uint64 {
@@ -193,71 +265,127 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 	return fh, fuse.FOPEN_KEEP_CACHE, fs.OK
 }
 
-// bytesFileHandle is a file handle that carries separate content for
-// each Open call
+// bytesFileHandle is a file handle that serves one blob's bytes from the cache.
 type bytesFileHandle struct {
 	hash  string
 	cache *cache
 }
 
-func (c *cache) download(hash string) ([]byte, error) {
+// blob returns the ready cache entry for hash, downloading it on the first
+// request and coalescing concurrent requests for the same hash into that single
+// download. The returned entry's file is an open, read-only handle positioned by
+// ReadAt; entry.err is set if the download failed.
+func (c *cache) blob(hash string) (*cacheEntry, error) {
 	if !metadata.IsHexHash(hash) {
 		return nil, fmt.Errorf("fuselib: invalid content hash %q", hash)
 	}
+
+	c.mu.Lock()
+	if e, ok := c.entries[hash]; ok {
+		c.mu.Unlock()
+		<-e.ready
+		return e, e.err
+	}
+	e := &cacheEntry{ready: make(chan struct{})}
+	c.entries[hash] = e
+	c.mu.Unlock()
+
+	// This goroutine won the race to create the entry, so it owns the download.
+	e.file, e.size, e.err = c.download(hash)
+	if e.err != nil {
+		// Drop the failed entry so a later read can retry rather than caching
+		// the error forever.
+		c.mu.Lock()
+		delete(c.entries, hash)
+		c.mu.Unlock()
+		close(e.ready)
+		return nil, e.err
+	}
+
+	c.mu.Lock()
+	c.order = append(c.order, hash)
+	c.curSize += e.size
+	c.evictLocked(hash)
+	c.mu.Unlock()
+
+	close(e.ready)
+	return e, nil
+}
+
+// download streams the blob from the filehost to a file in the cache dir and
+// returns an open, read-only handle to it plus its size. Memory use is bounded
+// by the copy buffer, not the file size, so blobs larger than RAM (or the cache
+// budget) download and serve fine. When c.verify is set, the bytes are hashed as
+// they copy and checked against their content address (the filehost is treated
+// as untrusted); by default verification is skipped, since hashing every read of
+// multi-GB media on a trusted personal filehost is wasted work.
+func (c *cache) download(hash string) (*os.File, int64, error) {
 	resp, err := c.client.Get(c.filehost + "/" + hash)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.New("Bad status: " + strconv.Itoa(resp.StatusCode))
-	}
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	// Verify the filehost returned the bytes this hash addresses before caching
-	// or serving them; the filehost is untrusted.
-	got, err := metadata.HashReader(bytes.NewReader(b))
-	if err != nil {
-		return nil, err
-	}
-	if got != hash {
-		return nil, errors.New("fuselib: downloaded content does not match its hash")
-	}
-	if err := c.set(hash, b); err != nil {
-		return nil, err
+		return nil, 0, fmt.Errorf("fuselib: bad status %s", resp.Status)
 	}
 
-	return b, nil
+	path := c.blobPath(hash)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var dst io.Writer = f
+	var h stdhash.Hash
+	if c.verify {
+		h, err = metadata.NewHash()
+		if err != nil {
+			f.Close()
+			os.Remove(path)
+			return nil, 0, err
+		}
+		dst = io.MultiWriter(f, h)
+	}
+	size, err := io.Copy(dst, resp.Body)
+	if err != nil {
+		f.Close()
+		os.Remove(path)
+		return nil, 0, err
+	}
+	if c.verify {
+		if got := hex.EncodeToString(h.Sum(nil)); got != hash {
+			f.Close()
+			os.Remove(path)
+			return nil, 0, errors.New("fuselib: downloaded content does not match its hash")
+		}
+	}
+
+	// Unlink now: the open fd keeps the bytes reachable, and eviction/close no
+	// longer needs a second unlink. The dir is removed wholesale on cache close.
+	os.Remove(path)
+	return f, size, nil
 }
 
 // bytesFileHandle allows reads
 var _ = (fs.FileReader)((*bytesFileHandle)(nil))
 
 func (fh *bytesFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	b, ok := fh.cache.get(fh.hash)
-	if !ok {
-		var err error
-		b, err = fh.cache.download(fh.hash)
-		if err != nil {
-			return nil, syscall.EROFS
-		}
+	e, err := fh.cache.blob(fh.hash)
+	if err != nil {
+		return nil, syscall.EIO
 	}
-
+	if off < 0 || off > e.size {
+		return nil, syscall.EINVAL
+	}
 	end := off + int64(len(dest))
-	if end > int64(len(b)) {
-		end = int64(len(b))
+	if end > e.size {
+		end = e.size
 	}
-
-	if off > end {
-		return nil, syscall.EROFS
+	n, err := e.file.ReadAt(dest[:end-off], off)
+	if err != nil && err != io.EOF {
+		return nil, syscall.EIO
 	}
-
-	// We could copy to the `dest` buffer, but since we have a
-	// []byte already, return that.
-	return fuse.ReadResultData(b[off:end]), 0
+	return fuse.ReadResultData(dest[:n]), 0
 }
 
 type node struct {
@@ -296,13 +424,16 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Verify the blob before trusting its bytes; the filehost is untrusted.
-	got, err := metadata.HashReader(bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	if got != sourceHash {
-		return nil, errors.New("fuselib: content does not match its hash")
+	// When verification is enabled, check the blob against its hash before
+	// trusting its bytes (the filehost is untrusted). Off by default.
+	if state.config.verify {
+		got, err := metadata.HashReader(bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		if got != sourceHash {
+			return nil, errors.New("fuselib: content does not match its hash")
+		}
 	}
 
 	n := &node{

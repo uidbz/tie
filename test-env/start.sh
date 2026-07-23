@@ -46,11 +46,23 @@ if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
 	EOF
 fi
 
+# The filehost is likewise configured by a TOML file (not flags). DbPath is
+# relative to $TIE_ENV, matching start_one's cwd. ReapInterval = "0" disables
+# the expired-blob reaper for the sandbox.
+if [[ ! -f "$TIE_FILEHOST_CONFIG" ]]; then
+	cat >"$TIE_FILEHOST_CONFIG" <<-EOF
+		ListenOn = ":1162"
+		Insecure = true
+		DbPath = "data"
+		ReapInterval = "0"
+	EOF
+fi
+
 start_one "tie-daemon"   "$TIE_BIN/tie-daemon"   "$TIE_DAEMON_PID"   "$TIE_LOGS/daemon.log" \
 	-config "$(basename "$TIE_DAEMON_CONFIG")"
 
 start_one "tie-filehost" "$TIE_BIN/tie-filehost" "$TIE_FILEHOST_PID" "$TIE_LOGS/filehost.log" \
-	--insecure --listen ":1162" --path "$TIE_DATA_PATH"
+	-config "$(basename "$TIE_FILEHOST_CONFIG")"
 
 echo "Waiting for services to accept connections ..."
 for i in $(seq 1 30); do

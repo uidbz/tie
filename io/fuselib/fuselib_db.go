@@ -33,11 +33,16 @@ type TieDBFuse struct {
 	fuseTree *TieFuse // reused for content-addressed file/dir bytes + cache
 }
 
-func NewTieDBFuse(tie *client.TieClient, filehost string, insecure bool, cacheSizeGB int) *TieDBFuse {
+func NewTieDBFuse(tie *client.TieClient, filehost string, insecure bool, cacheSizeGB int, verify bool) *TieDBFuse {
 	return &TieDBFuse{
 		tie:      tie,
-		fuseTree: NewTieFuse(filehost, insecure, cacheSizeGB),
+		fuseTree: NewTieFuse(filehost, insecure, cacheSizeGB, verify),
 	}
+}
+
+// Close releases the on-disk blob cache. Call once after the mount is torn down.
+func (state *TieDBFuse) Close() error {
+	return state.fuseTree.Close()
 }
 
 const tagHelpText = `tie tag-query filesystem

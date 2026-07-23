@@ -16,10 +16,11 @@ The mount uses [`github.com/hanwen/go-fuse/v2`](https://github.com/hanwen/go-fus
 
 Read-only. Mounts a single immutable `tiedir` blob as a directory tree, fetching
 child blobs from the filehost by hash on demand. Implemented by `TieFuse` /
-`node` / `bytesFileHandle` in `io/fuselib/fuselib.go`. Every downloaded blob is
-verified against the hash it was requested under before it is cached or served
-(the filehost is untrusted — see the README's transfer-integrity section). This
-mount has no write path: `node.Open` returns `EROFS` for any write intent.
+`node` / `bytesFileHandle` in `io/fuselib/fuselib.go`. Downloaded blobs go
+through the on-disk cache (see [The read cache](#the-read-cache) below); with
+`--verify` they are checked against the hash they were requested under, which is
+off by default. This mount has no write path: `node.Open` returns `EROFS` for
+any write intent.
 
 ### `tie mount --db <mountpoint>` — live triple-store tree
 
@@ -41,6 +42,38 @@ from the triple store.
 
 `/query` and file-content nodes stay read-only. Everything below is about the two
 writable trees.
+
+## The read cache
+
+Both mounts fetch file bytes from the filehost on demand through one shared
+cache (`cache` in `io/fuselib/fuselib.go`), built by `NewTieFuse`. It has three
+properties worth knowing when reading that file:
+
+- **On-disk, memory-bounded.** A blob is streamed to a temp file with `io.Copy`
+  (`os.MkdirTemp` dir, one file per hash), not read into a `[]byte`. Reads are
+  served with `ReadAt` on the open fd, so memory use is independent of file size
+  — a multi-GB file reads fine. `--cache <GB>` (default 1) is the LRU eviction
+  budget, a *target* not a hard cap: `evictLocked` drops least-recently-admitted
+  blobs once the budget is exceeded, but a single file larger than the whole
+  budget still downloads and serves (the entry it just admitted is never
+  evicted). Evicted blobs are unlinked; because the fd stays open, a reader that
+  already resolved an entry keeps reading it after eviction.
+- **Single-flight.** `cache.blob` registers a `cacheEntry` with a `ready`
+  channel under the lock, then downloads outside the lock. Concurrent reads of
+  the same hash — go-fuse dispatches `Read` across goroutines — find the existing
+  entry and block on `ready`, so a file is downloaded exactly once no matter how
+  many readers open it. A failed download drops the entry so a later read retries
+  rather than caching the error.
+- **Verification is opt-in.** With `--verify` the download streams through a
+  `MultiWriter(file, highwayhash)` and rejects a hash mismatch; `listContent`
+  likewise checks directory blobs. Off by default (the `verify bool` on
+  `NewTieFuse` / `cache` / `config` is false), because hashing every read of a
+  trusted personal filehost's media is wasted work. See the README's
+  transfer-integrity section for the trust model.
+
+`TieFuse.Close()` / `TieDBFuse.Close()` remove the temp dir; `cmdMount` defers
+it, so a normal unmount (Ctrl-C → `server.Unmount()`) cleans up. A hard `kill
+-9` cannot run the defer and leaves a `/tmp/tie-fuse-cache-*` dir behind.
 
 ## The triples behind the trees
 
@@ -185,6 +218,8 @@ Against the local test environment (`test-env/`):
 ```sh
 cd test-env && ./build.sh && ./start.sh
 ./bin/tie -c config.toml mount --db mnt &     # or ./mount-db.sh
+#   add --cache <GB> to size the on-disk read cache (default 1)
+#   add --verify to hash downloaded bytes against their address (default off)
 ls mnt/                                        # query  files  tags
 
 # rename + move (writes filename / parent triples)
