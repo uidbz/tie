@@ -8,12 +8,11 @@
 ListenOn = ":1161"
 DbPath = "/data"
 
-# TLS: either point at a cert/key pair, enable certmagic, or run Insecure.
+# TLS is normally terminated by a reverse proxy: run Insecure and bind ListenOn
+# to localhost, or point CertFile/KeyFile at a cert pair to serve HTTPS directly.
 Insecure = false
 CertFile = ""
 KeyFile = ""
-UseCertmagic = false
-CertmagicHost = ""
 
 [[Users]]
 Username = "defaultuser"

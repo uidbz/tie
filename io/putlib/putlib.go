@@ -26,6 +26,14 @@ type PutConfig struct {
 	// body sent, so callers can render an upload progress bar. The total byte
 	// count equals the file/manifest length.
 	Progress io.Writer
+	// Retention, when non-empty, is sent as the Tie-Retention header on every
+	// upload: a Go duration (e.g. "72h") or "infinite". Empty means the server
+	// default (permanent).
+	Retention string
+	// OwnerToken, when non-empty, is sent as the Tie-Owner header so the owner
+	// can later change the blob's retention. It is a shared secret, not stored
+	// in plaintext on the server.
+	OwnerToken string
 }
 
 type Status struct {
@@ -100,6 +108,12 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 	}
 	req.Header.Add("Content-Type", contentType)
 	req.Header.Add("Content-Length", strconv.Itoa(length))
+	if pc.Retention != "" {
+		req.Header.Add("Tie-Retention", pc.Retention)
+	}
+	if pc.OwnerToken != "" {
+		req.Header.Add("Tie-Owner", pc.OwnerToken)
+	}
 
 	httpClient := pc.Client
 	if httpClient == nil {

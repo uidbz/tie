@@ -11,7 +11,6 @@ import (
 
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
-	"github.com/caddyserver/certmagic"
 )
 
 type Webservice struct {
@@ -35,8 +34,6 @@ type WebserviceConfig struct {
 	Insecure      bool
 	CertFile      string
 	KeyFile       string
-	UseCertmagic  bool
-	CertmagicHost string
 	UserNamespace string
 	DbPath        string
 
@@ -72,17 +69,13 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 		fmt.Println("Listening on http://" + ws.Config.ListenOn + "\n")
 		log.Fatal(http.ListenAndServe(ws.Config.ListenOn, ws.mux))
 	} else {
-		if ws.Config.UseCertmagic {
-			log.Fatal(certmagic.HTTPS([]string{ws.Config.CertmagicHost}, ws.mux))
-		} else {
-			if ws.Config.CertFile == "" || ws.Config.KeyFile == "" {
-				fmt.Println("Error: Please provide --tls-cert <file.crt> and --tls-key <file.key> or set --insecure.")
-				fmt.Println("Exiting.")
-				return
-			}
-			fmt.Println("Listening on https://" + ws.Config.ListenOn + "\n")
-			log.Fatal(http.ListenAndServeTLS(ws.Config.ListenOn, ws.Config.CertFile, ws.Config.KeyFile, ws.mux))
+		if ws.Config.CertFile == "" || ws.Config.KeyFile == "" {
+			fmt.Println("Error: set CertFile and KeyFile in the config file, or set Insecure = true.")
+			fmt.Println("Exiting.")
+			return
 		}
+		fmt.Println("Listening on https://" + ws.Config.ListenOn + "\n")
+		log.Fatal(http.ListenAndServeTLS(ws.Config.ListenOn, ws.Config.CertFile, ws.Config.KeyFile, ws.mux))
 	}
 }
 

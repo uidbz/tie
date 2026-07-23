@@ -15,9 +15,7 @@ func main() {
 	var insecure = flag.Bool("insecure", false, "Use HTTP instead of HTTPS.")
 	var certFile = flag.String("tls-cert", "", "Root certificate filename.")
 	var keyFile = flag.String("tls-key", "", "Private key filename.")
-	var addr = flag.String("listen", ":8080", "Listen on particular address/port (ignored if using certmagic).")
-	var useCertmagic = flag.Bool("certmagic", false, "Use Let's encrypt for TLS certificate")
-	var certmagicHost = flag.String("host", "", "Hostname for certmagic")
+	var addr = flag.String("listen", ":8080", "Listen on particular address/port.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -33,8 +31,6 @@ func main() {
 		Insecure:      *insecure,
 		CertFile:      *certFile,
 		KeyFile:       *keyFile,
-		UseCertmagic:  *useCertmagic,
-		CertmagicHost: *certmagicHost,
 		UserNamespace: "userdata",
 		Users:         map[string]string{"myuser": "mypassword"},
 	}

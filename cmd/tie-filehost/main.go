@@ -3,6 +3,7 @@ package main
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -10,8 +11,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
-	"github.com/caddyserver/certmagic"
+	"git.sr.ht/~uid/conf"
 	"github.com/minio/highwayhash"
 )
 
@@ -19,7 +21,47 @@ var (
 	key         []byte
 	listenOn    string = ":1162"
 	destination string = "/data"
+	retention   *retentionIndex
 )
+
+// FilehostConfig is the full tie-filehost configuration, loaded from TOML.
+// TLS is expected to be terminated by a reverse proxy in front of the filehost
+// (run Insecure on localhost); alternatively point CertFile/KeyFile at a cert
+// pair to serve HTTPS directly.
+type FilehostConfig struct {
+	ListenOn string
+	Insecure bool
+	CertFile string
+	KeyFile  string
+	// DbPath is the datastore root where content-addressed blobs are stored.
+	DbPath string
+	// ReapInterval is how often expired blobs are reaped, as a Go duration
+	// string (e.g. "1h"). Empty or "0" disables the reaper.
+	ReapInterval string
+}
+
+func defaultConfig() FilehostConfig {
+	return FilehostConfig{
+		ListenOn:     ":1162",
+		DbPath:       "/data",
+		ReapInterval: "1h",
+	}
+}
+
+// parseRetention reads the Tie-Retention header into an absolute unix expiry.
+// Absent or "infinite" means permanent (0). Otherwise the value is a Go
+// duration (e.g. "72h") added to now.
+func parseRetention(r *http.Request, now time.Time) (int64, error) {
+	v := r.Header.Get("Tie-Retention")
+	if v == "" || v == "infinite" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	return now.Add(d).Unix(), nil
+}
 
 const (
 	tieKey       = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
@@ -97,7 +139,18 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		dest = MakeDestinationPath(h)
 	}
 
+	now := time.Now()
+	expiresAt, errRet := parseRetention(r, now)
+	if errRet != nil {
+		http.Error(w, "Invalid Tie-Retention: "+errRet.Error(), http.StatusBadRequest)
+		return
+	}
+	token := r.Header.Get("Tie-Owner")
+
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		if err := retention.recordUpload(h, expiresAt, token, now.Unix(), true); err != nil {
+			log.Println("Error recording retention:", err)
+		}
 		fmt.Fprint(w, h)
 		return
 	}
@@ -124,6 +177,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			log.Println("Error deleting bad file:", dest, "Error message:", err.Error())
 		}
 	}
+	blobExisted := false
 	if h == "" {
 		h = hashHex
 		dest2 := MakeDestinationPath(h)
@@ -136,8 +190,12 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			os.RemoveAll(filepath.Dir(dest)) // file existed previously, delete tmp file
+			blobExisted = true
 		}
 		dest = dest2
+	}
+	if err := retention.recordUpload(hashHex, expiresAt, token, now.Unix(), blobExisted); err != nil {
+		log.Println("Error recording retention:", err)
 	}
 	log.Println("Calculated hash:", hashHex)
 	fmt.Fprint(w, hashHex)
@@ -178,48 +236,115 @@ func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filename, info.ModTime(), reader)
 }
 
+// SetRetentionHandler is the explicit owner action to change a blob's expiry.
+// It requires a matching Tie-Owner token when the blob is already owned; an
+// unowned blob is claimed by the first token presented. Unlike upload, it may
+// both shorten and extend the retention.
+func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	if len(hash) != 64 {
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
+		return
+	}
+	token := r.Header.Get("Tie-Owner")
+	if !retention.authorized(hash, token) {
+		http.Error(w, "Forbidden: owner token required", http.StatusForbidden)
+		return
+	}
+	now := time.Now()
+	expiresAt, err := parseRetention(r, now)
+	if err != nil {
+		http.Error(w, "Invalid Tie-Retention: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := retention.setRetention(hash, expiresAt, token, now.Unix()); err != nil {
+		http.Error(w, "Error saving retention: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	fmt.Fprintln(w, "ok")
+}
+
+// GetRetentionHandler reports a blob's current expiry. A blob absent from the
+// index is permanent. The owner token hash is never returned.
+func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	if len(hash) != 64 {
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
+		return
+	}
+	e, ok := retention.get(hash)
+	resp := struct {
+		ExpiresAt int64 `json:"expires_at"`
+		HasOwner  bool  `json:"has_owner"`
+	}{}
+	if ok {
+		resp.ExpiresAt = e.ExpiresAt
+		resp.HasOwner = e.OwnerTokenHash != ""
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Println("Error encoding retention response:", err)
+	}
+}
+
 func main() {
-	var insecure = flag.Bool("insecure", false, "Use HTTP instead of HTTPS.")
-	var certFile = flag.String("tls-cert", "", "Root certificate filename.")
-	var keyFile = flag.String("tls-key", "", "Private key filename.")
-	var path = flag.String("path", "/data", "Path to store data.")
-	var addr = flag.String("listen", ":1162", "Listen on particular address/port (ignored if using certmagic).")
-	var host = flag.String("host", "", "Hostname for certmagic")
-	var useCertmagic = flag.Bool("certmagic", false, "Use Let's encrypt for TLS certificate")
+	var configPath = flag.String("config", "tie-filehost.toml", "Path to TOML config file.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, `Content-addressed file server
 -----------------------------
+Configuration (data path, listen address, TLS) is read from a TOML file.
+TLS is normally terminated by a reverse proxy: run Insecure on localhost, or
+set CertFile/KeyFile to serve HTTPS directly.
 `)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
+	cfg := defaultConfig()
+	if err := conf.ReadConfig(*configPath, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
+		os.Exit(1)
+	}
+
+	if cfg.DbPath == "" {
+		fmt.Fprintln(os.Stderr, "Please provide a DbPath in the config file")
+		os.Exit(1)
+	}
+
+	var reapInterval time.Duration
+	if cfg.ReapInterval != "" {
+		var err error
+		if reapInterval, err = time.ParseDuration(cfg.ReapInterval); err != nil {
+			fmt.Fprintln(os.Stderr, "Invalid ReapInterval:", err)
+			os.Exit(1)
+		}
+	}
+
 	InitKey()
 	router := http.NewServeMux()
 	routes(router)
-	if *path == "" {
-		fmt.Println("Please provide a data-path")
-		return
-	}
-	destination = filepath.Clean(*path)
-	listenOn = *addr
 
-	if *insecure {
+	destination = filepath.Clean(cfg.DbPath)
+	listenOn = cfg.ListenOn
+
+	var err error
+	if retention, err = loadRetentionIndex(destination); err != nil {
+		fmt.Fprintln(os.Stderr, "Error loading retention index:", err)
+		os.Exit(1)
+	}
+	startReaper(reapInterval)
+
+	if cfg.Insecure {
 		fmt.Println("Listening on http://" + listenOn + "\n")
 		log.Fatal(http.ListenAndServe(listenOn, router))
 	} else {
-		if *useCertmagic {
-			log.Fatal(certmagic.HTTPS([]string{*host}, router))
-		} else {
-			if *certFile == "" || *keyFile == "" {
-				fmt.Println("Error: Please provide --tls-cert <file.crt> and --tls-key <file.key> or set --insecure.")
-				fmt.Println("Exiting.")
-				return
-			}
-			fmt.Println("Listening on https://" + listenOn + "\n")
-			log.Fatal(http.ListenAndServeTLS(listenOn, *certFile, *keyFile, router))
+		if cfg.CertFile == "" || cfg.KeyFile == "" {
+			fmt.Fprintln(os.Stderr, "Error: set CertFile and KeyFile in the config file, or set Insecure = true.")
+			os.Exit(1)
 		}
+		fmt.Println("Listening on https://" + listenOn + "\n")
+		log.Fatal(http.ListenAndServeTLS(listenOn, cfg.CertFile, cfg.KeyFile, router))
 	}
 }

@@ -31,14 +31,12 @@ type User struct {
 // both the server settings and the list of accounts allowed to authenticate.
 // Access management is done by editing this file, not through the wire protocol.
 type DaemonConfig struct {
-	ListenOn      string
-	Insecure      bool
-	CertFile      string
-	KeyFile       string
-	UseCertmagic  bool
-	CertmagicHost string
-	DbPath        string
-	Users         []User
+	ListenOn string
+	Insecure bool
+	CertFile string
+	KeyFile  string
+	DbPath   string
+	Users    []User
 }
 
 func defaultConfig() DaemonConfig {
@@ -61,7 +59,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 	flag.Parse()
 
 	cfg := defaultConfig()
-	if _, err := conf.LoadFromCurrentDir(*configPath, &cfg); err != nil {
+	if err := conf.ReadConfig(*configPath, &cfg); err != nil {
 		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
 		os.Exit(1)
 	}
@@ -76,8 +74,6 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		Insecure:      cfg.Insecure,
 		CertFile:      cfg.CertFile,
 		KeyFile:       cfg.KeyFile,
-		UseCertmagic:  cfg.UseCertmagic,
-		CertmagicHost: cfg.CertmagicHost,
 		UserNamespace: "userdata",
 		DbPath:        cfg.DbPath,
 		Users:         users,
