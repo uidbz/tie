@@ -61,6 +61,18 @@ HTTPS directly.
 - `install.sh` — the installer
 - `docker/entrypoint.sh` — used by the root `Dockerfile` to run both services
   in one container
+- `backup/btrfs-send-backup.sh` — incremental filehost backup via BTRFS
+  snapshot + send/receive to a remote BTRFS host
+- `backup/rsync-backup.sh` — filehost backup via rsync mirror, for non-BTRFS
+  hosts
+- `backup/daemon-db-backup.sh` — tie-daemon triple-store (`DbPath`) backup via
+  rsync; complements the logical `tie dump` path
+
+## Filehost storage and backup
+
+For multi-disk storage layout (BTRFS pooling, LVM, why not to bind-mount shard
+ranges) and the backup scripts above, see
+[`docs/filehost-storage-and-backup.md`](../docs/filehost-storage-and-backup.md).
 
 ## Docker
 
