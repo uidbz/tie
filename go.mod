@@ -7,9 +7,8 @@ require (
 	github.com/caddyserver/certmagic v0.20.0
 	github.com/dhowden/tag v0.0.0-20230630033851-978a0926ee25
 	github.com/go-resty/resty/v2 v2.12.0
-	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
-	github.com/hanwen/go-fuse/v2 v2.7.2
+	github.com/hanwen/go-fuse/v2 v2.11.0
 	github.com/minio/highwayhash v1.0.3
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/urfave/cli/v3 v3.10.1
@@ -29,7 +28,7 @@ require (
 	golang.org/x/crypto v0.22.0 // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.24.0 // indirect
-	golang.org/x/sync v0.7.0 // indirect
+	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/term v0.44.0 // indirect
 	golang.org/x/text v0.14.0 // indirect

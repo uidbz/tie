@@ -21,6 +21,8 @@ func TestingConfig() Config {
 	config := defaultConfig
 	config.Namespace = "testing"
 	config.Collection = "testing"
+	config.Webservice = "http://localhost:1161"
+	config.FileHosts = map[string]FileHost{"default": {URL: "http://localhost:1162"}}
 	return config
 }
 

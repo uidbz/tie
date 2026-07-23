@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -580,6 +581,175 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 	})
 
 	return dir, nil
+}
+
+// RenameFile renames and/or moves a file in the path tree. The file's identity
+// is its content hash, so the display name lives in the (hash,"filename") and
+// (hash,"name") triples; renaming updates both. A move swaps the (hash,"parent")
+// edge from oldParent to newParent.
+//
+// Because the name is a property of the content hash, renaming a file changes
+// its name everywhere the same content appears (other directories, every tag
+// query). This is inherent to the content-addressed model.
+func RenameFile(tie *TieClient, hash string, oldParent, newParent DirUID, newName string) error {
+	r, err := tie.SimpleGet(hash)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	var oldFilename, oldName string
+	if r.Result != nil {
+		entry := r.Result[hash]
+		oldFilename = entry[str(TieFilename)].ToString()
+		oldName = entry[str(TieName)].ToString()
+	}
+
+	batch := tie.NewBatch()
+	if newName != oldFilename {
+		newBase := strings.TrimSuffix(newName, filepath.Ext(newName))
+		// AddOnFailure so a file that never recorded a filename (the
+		// hash-fallback case in ReadTieDir) still gets one.
+		fn := tie.NewUpdate(hash, str(TieFilename), oldFilename, newName)
+		fn.AddOnFailure = true
+		batch.Update(fn)
+		nm := tie.NewUpdate(hash, str(TieName), oldName, newBase)
+		nm.AddOnFailure = true
+		batch.Update(nm)
+	}
+	if newParent != oldParent {
+		// parent is potentially multi-valued (same content in several dirs),
+		// so delete the specific old edge rather than blanket-updating.
+		batch.Delete(hash, str(TieParent), str(oldParent))
+		batch.Add(hash, str(TieParent), str(newParent))
+	}
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// RenameDir renames and/or moves a directory in the path tree. A directory's
+// identity in the path tree is its (uid,"path") triple, and every descendant
+// directory carries the renamed prefix in its own path, so the rename cascades
+// over all descendant dirs. Files need no path rewrite: they have no path
+// triple and their parent DirUID is unchanged. A move swaps the top dir's
+// (uid,"parent") edge.
+func RenameDir(tie *TieClient, uid DirUID, oldPath, newPath string, oldParent, newParent DirUID) error {
+	descendants, err := collectDescendantDirs(tie, uid)
+	if err != nil {
+		return err
+	}
+
+	batch := tie.NewBatch()
+	own := tie.NewUpdate(str(uid), str(TiePath), oldPath, newPath)
+	own.AddOnFailure = true
+	batch.Update(own)
+
+	for _, d := range descendants {
+		for _, p := range d.Paths {
+			if !strings.HasPrefix(p, oldPath) {
+				continue
+			}
+			np := newPath + strings.TrimPrefix(p, oldPath)
+			du := tie.NewUpdate(str(d.Uid), str(TiePath), p, np)
+			du.AddOnFailure = true
+			batch.Update(du)
+		}
+	}
+
+	if newParent != oldParent {
+		batch.Delete(str(uid), str(TieParent), str(oldParent))
+		batch.Add(str(uid), str(TieParent), str(newParent))
+	}
+
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// collectDescendantDirs walks the path tree under root (breadth-first via
+// ReadTieDir) and returns every descendant directory, excluding root itself.
+func collectDescendantDirs(tie *TieClient, root DirUID) ([]SubDirectory, error) {
+	var out []SubDirectory
+	queue := []DirUID{root}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		dir, err := ReadTieDir(tie, cur)
+		if err != nil {
+			return nil, err
+		}
+		for _, sub := range dir.SubDirs {
+			out = append(out, sub)
+			queue = append(queue, sub.Uid)
+		}
+	}
+	return out, nil
+}
+
+// GetTags returns the tags currently attached to a content hash, sorted. It
+// reads the (hash,"tag",<tag>) triples. A hash with no tags returns an empty
+// slice, not an error.
+func GetTags(tie *TieClient, hash string) ([]string, error) {
+	r, err := tie.SimpleGet(hash)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	tags := r.Result[hash][str(TieTag)].ToSlice()
+	sort.Strings(tags)
+	return tags, nil
+}
+
+// SetTags replaces the tags on a content hash with newTags, computing the
+// minimal diff against the current tags: tags in newTags but not stored are
+// added (along with the (tags,"all",<tag>) registry entry that Tag writes),
+// tags stored but absent from newTags are removed. Empty entries are ignored.
+// The change is committed and synced.
+//
+// Because tags attach to the content hash, this affects the tags everywhere the
+// same content appears and in every tag query view.
+func SetTags(tie *TieClient, hash string, newTags []string) error {
+	current, err := GetTags(tie, hash)
+	if err != nil {
+		return err
+	}
+
+	want := make(map[string]bool, len(newTags))
+	for _, t := range newTags {
+		if t = strings.TrimSpace(t); t != "" {
+			want[t] = true
+		}
+	}
+	have := make(map[string]bool, len(current))
+	for _, t := range current {
+		have[t] = true
+	}
+
+	batch := tie.NewBatch()
+	changed := false
+	for t := range want {
+		if !have[t] {
+			batch.Add(hash, str(TieTag), t)
+			batch.Add(str(TieTags), str(TieAll), t)
+			changed = true
+		}
+	}
+	for t := range have {
+		if !want[t] {
+			batch.Delete(hash, str(TieTag), t)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+	return tie.Sync()
 }
 
 // TaggedFile is one entry in a tag-derived virtual directory: its content hash
