@@ -41,13 +41,29 @@ type WebserviceConfig struct {
 	// ReverseRelations restricts which relations (value1) collections index in
 	// reverse. Empty/nil indexes every relation (the original behavior). Set it
 	// to just the relations queried in reverse to cut association memory roughly
-	// in half on metadata-heavy stores.
+	// in half on metadata-heavy stores. Acts as the default for collections with
+	// no CollectionReverseRelations override.
 	ReverseRelations []string
+
+	// CollectionReverseRelations pins the reverse-relation set for specific
+	// (namespace, collection) pairs, overriding ReverseRelations. A pair listed
+	// here indexes exactly its relations in reverse; unlisted collections use the
+	// default. Applied at collection load time, so changes require a restart.
+	CollectionReverseRelations []CollectionReverseRelations
 
 	// MaxConcurrentRequests caps how many requests execute simultaneously.
 	// Zero or negative means unbounded. tiedb is concurrency-safe, so this is a
 	// load-shedding knob, not a correctness requirement.
 	MaxConcurrentRequests int
+}
+
+// CollectionReverseRelations overrides the reverse-relation set for one
+// collection. Relations lists the value1 relations that collection indexes in
+// reverse (replacing the WebserviceConfig.ReverseRelations default for it).
+type CollectionReverseRelations struct {
+	Namespace  string
+	Collection string
+	Relations  []string
 }
 
 func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webservice {
@@ -57,6 +73,14 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	ws.requests = requests
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
+	if len(config.CollectionReverseRelations) > 0 {
+		overrides := make(map[tiedb.CollectionKey][]string, len(config.CollectionReverseRelations))
+		for _, o := range config.CollectionReverseRelations {
+			key := tiedb.CollectionKey{Database: ws.DbPath(o.Namespace), Collection: o.Collection}
+			overrides[key] = o.Relations
+		}
+		ws.db.SetReverseRelationsOverrides(overrides)
+	}
 	ws.db.SetBlobPolicy(metadata.HexHashBlobPolicy())
 	if config.MaxConcurrentRequests > 0 {
 		ws.sem = make(chan struct{}, config.MaxConcurrentRequests)

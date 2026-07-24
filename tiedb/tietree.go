@@ -16,9 +16,17 @@ type TieTree struct {
 	writeToDisk bool
 	colMutex    sync.Mutex
 
-	// defaultReverseRelations is applied to every Collection this DB creates.
-	// nil means "index all relations in reverse"; see Collection.reverseRelations.
+	// defaultReverseRelations is applied to every Collection this DB creates
+	// that has no entry in reverseOverrides. nil means "index all relations in
+	// reverse"; see Collection.reverseRelations.
 	defaultReverseRelations []string
+
+	// reverseOverrides pins the reverse-relation set for specific collections,
+	// overriding defaultReverseRelations. A collection present here uses its
+	// listed relations; absent collections fall back to the default. Set once
+	// before collections are created (collections load lazily and apply this at
+	// init time), so changes require a daemon restart.
+	reverseOverrides map[CollectionKey][]string
 
 	// blobPolicy is applied to every Collection this DB creates. nil keeps the
 	// trie-only behavior; see Collection.blobPolicy and [[BlobPolicy]].
@@ -39,6 +47,16 @@ func (tree *TieTree) SetBlobPolicy(p *BlobPolicy) {
 // Call before collections are created; existing collections are unaffected.
 func (tree *TieTree) SetDefaultReverseRelations(relations []string) {
 	tree.defaultReverseRelations = relations
+}
+
+// SetReverseRelationsOverrides pins the reverse-relation set for specific
+// collections, overriding the default set by SetDefaultReverseRelations. Each
+// keyed collection indexes exactly its listed relations in reverse; collections
+// with no entry use the default. Call before collections are created; existing
+// collections are unaffected. The reverse index is rebuilt from forward triples
+// at load time, so a changed override takes effect after one restart.
+func (tree *TieTree) SetReverseRelationsOverrides(overrides map[CollectionKey][]string) {
+	tree.reverseOverrides = overrides
 }
 
 func NewDB(writeToDisk bool) *TieTree {
@@ -85,7 +103,11 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.dBPath = path
 	ic.dBName = dbname
 	ic.dBFullPath = path + "/" + dbname + ".tie"
-	ic.SetReverseRelations(db.defaultReverseRelations)
+	reverse := db.defaultReverseRelations
+	if r, ok := db.reverseOverrides[CollectionKey{Database: path, Collection: dbname}]; ok {
+		reverse = r
+	}
+	ic.SetReverseRelations(reverse)
 	ic.SetBlobPolicy(db.blobPolicy)
 
 	if db.writeToDisk {

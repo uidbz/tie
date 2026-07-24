@@ -37,6 +37,17 @@ cd test-env
   gitignored runtime artifacts; only `config.toml` (the CLI config) is tracked.
 - Filehost config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
   `ReapInterval` (Go duration; `"0"` disables the expired-blob reaper).
+- Daemon config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
+  `MaxConcurrentRequests` (0 = unbounded), `[[Users]]` (Username/Password),
+  `ReverseRelations`, and `[[Collections]]` overrides — see below.
+- **Reverse-relation config.** `ReverseRelations` sets which relations (value1)
+  every collection indexes in reverse; omit it for the built-in default
+  (`tag`, `path`, `parent`, `tie-type`). Add a `[[Collections]]` block
+  (`Namespace`, `Collection`, `ReverseRelations`) to override the set for one
+  collection. The reverse index is rebuilt from forward triples at collection
+  load time, so a change needs a **daemon restart** to take effect for existing
+  data. Trimming the set cuts association memory on metadata-heavy stores; widen
+  it per-collection only for the relations a client actually queries in reverse.
 - The daemon's DB load can be slow on a large `db/`, so `start.sh`'s readiness
   loop may run for a while before both ports answer — that's expected.
 

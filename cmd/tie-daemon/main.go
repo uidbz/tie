@@ -39,7 +39,32 @@ type DaemonConfig struct {
 	// MaxConcurrentRequests caps how many requests run at once. 0 = unbounded.
 	MaxConcurrentRequests int
 	Users                 []User
+	// ReverseRelations is the default set of relations (value1) indexed in
+	// reverse for every collection. Empty falls back to defaultReverseRelations
+	// below. Restricting it cuts association memory on metadata-heavy stores.
+	ReverseRelations []string
+	// Collections holds per-collection overrides of ReverseRelations. A restart
+	// is required for a change to take effect (the reverse index is rebuilt from
+	// forward triples at load time).
+	Collections []CollectionConfig
 }
+
+// CollectionConfig overrides the reverse-relation set for a single collection,
+// keyed by its namespace and id.
+type CollectionConfig struct {
+	Namespace        string
+	Collection       string
+	ReverseRelations []string
+}
+
+// defaultReverseRelations is the built-in default when the config sets none.
+// Only these relations are ever queried in reverse: tag lookups, path->UID, UID
+// children via parent, and media-type set-scoping (all hashes of a tie-type, so
+// media queries can intersect a type with tag results). Restricting the reverse
+// index to them keeps the bulk of file metadata (filename, size, ...) from
+// doubling association memory. The reverse index is rebuilt from forward triples
+// on startup, so changing this takes effect for existing data after one restart.
+var defaultReverseRelations = []string{"tag", "path", "parent", "tie-type"}
 
 func defaultConfig() DaemonConfig {
 	return DaemonConfig{
@@ -71,23 +96,31 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		users[u.Username] = u.Password
 	}
 
+	reverseRelations := cfg.ReverseRelations
+	if len(reverseRelations) == 0 {
+		reverseRelations = defaultReverseRelations
+	}
+
+	overrides := make([]webservice.CollectionReverseRelations, 0, len(cfg.Collections))
+	for _, c := range cfg.Collections {
+		overrides = append(overrides, webservice.CollectionReverseRelations{
+			Namespace:  c.Namespace,
+			Collection: c.Collection,
+			Relations:  c.ReverseRelations,
+		})
+	}
+
 	config := webservice.WebserviceConfig{
-		ListenOn:      cfg.ListenOn,
-		Insecure:      cfg.Insecure,
-		CertFile:      cfg.CertFile,
-		KeyFile:       cfg.KeyFile,
-		UserNamespace: "userdata",
-		DbPath:        cfg.DbPath,
-		Users:         users,
-		// Only these relations are ever queried in reverse: tag lookups, path->UID,
-		// UID children via parent, and media-type set-scoping (all hashes of a
-		// tie-type, so media queries can intersect a type with tag results).
-		// Restricting the reverse index to them keeps the bulk of file metadata
-		// (filename, size, ...) from doubling association memory. The reverse index
-		// is rebuilt from forward triples on startup, so adding a relation here
-		// takes effect for existing data after one restart.
-		ReverseRelations:      []string{"tag", "path", "parent", "tie-type"},
-		MaxConcurrentRequests: cfg.MaxConcurrentRequests,
+		ListenOn:                   cfg.ListenOn,
+		Insecure:                   cfg.Insecure,
+		CertFile:                   cfg.CertFile,
+		KeyFile:                    cfg.KeyFile,
+		UserNamespace:              "userdata",
+		DbPath:                     cfg.DbPath,
+		Users:                      users,
+		ReverseRelations:           reverseRelations,
+		CollectionReverseRelations: overrides,
+		MaxConcurrentRequests:      cfg.MaxConcurrentRequests,
 	}
 
 	c := api.CollectionInfo{}

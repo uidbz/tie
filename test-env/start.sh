@@ -48,6 +48,16 @@ if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
 		[[Users]]
 		Username = "defaultuser"
 		Password = "defaultpassword"
+
+		# Default relations indexed in reverse for every collection. Omit to use
+		# the built-in default (tag, path, parent, tie-type).
+		# ReverseRelations = ["tag", "path", "parent", "tie-type"]
+
+		# Per-collection override of ReverseRelations (needs a daemon restart):
+		# [[Collections]]
+		# Namespace = "Collections"
+		# Collection = "Main"
+		# ReverseRelations = ["tag", "path", "parent", "tie-type", "filename"]
 	EOF
 fi
 
