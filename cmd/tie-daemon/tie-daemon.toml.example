@@ -14,6 +14,11 @@ Insecure = false
 CertFile = ""
 KeyFile = ""
 
+# Logging. Records are always pretty-printed to stderr; set LogFile to also
+# append structured JSON to a file. LogLevel is debug, info, warn, or error.
+LogFile = ""
+LogLevel = "info"
+
 [[Users]]
 Username = "defaultuser"
 Password = "defaultpassword"

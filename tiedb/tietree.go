@@ -1,8 +1,7 @@
 package tiedb
 
 import (
-	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 )
@@ -111,19 +110,22 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.SetBlobPolicy(db.blobPolicy)
 
 	if db.writeToDisk {
-		fmt.Fprintln(os.Stderr, "Initializing", ic.dBFullPath)
+		slog.Info("initializing collection", "path", ic.dBFullPath)
 		if err := os.MkdirAll(path, 0777); err != nil {
-			log.Fatal("Error creating DB directory ", path, ": ", err, "\nExiting")
+			slog.Error("creating DB directory; exiting", "path", path, "err", err)
+			os.Exit(1)
 		}
 		ic.cache = newTripleCache(defaultTripleCacheSize)
 		if clearExistingDB {
 			if err := os.Remove(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
-				log.Fatal("Error clearing DB ", ic.dBFullPath, ": ", err, "\nExiting")
+				slog.Error("clearing DB; exiting", "path", ic.dBFullPath, "err", err)
+				os.Exit(1)
 			}
 		}
 		err := ic.loadDB(ic.dBFullPath)
 		if err != nil && !os.IsNotExist(err) {
-			log.Fatal("Error loading DB:", err, "\nExiting")
+			slog.Error("loading DB; exiting", "err", err)
+			os.Exit(1)
 		}
 		ic.dBWriter()
 	}

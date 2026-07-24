@@ -54,6 +54,26 @@ terminated by a reverse proxy (nginx / Caddy) in front of them: run with
 certificates. Alternatively set `CertFile`/`KeyFile` in the config to serve
 HTTPS directly.
 
+## Logging
+
+Both services log to stderr, and under an init system that is all you need:
+
+- **systemd** captures stderr into the journal — `journalctl -u tie-daemon`
+  (or `-u tie-filehost`). Because stderr is not a terminal, the output is plain
+  `time=… level=INFO msg=…` text (no color escapes).
+- **OpenRC** sends stderr to `/var/log/tie/${RC_SVCNAME}.log` (see the service
+  scripts), again as plain text.
+
+So leave `LogFile` empty in the TOML: the init system already persists the log
+stream, and a second copy would be redundant.
+
+`LogFile` is available if you want structured JSON written to a specific file,
+but the systemd unit sandboxes writes to `/var/lib/tie` (`ProtectSystem=strict`
++ `ReadWritePaths`), so a `LogFile` outside that path is not writable — the
+service still starts and falls back to stderr-only, but no file appears. Point
+it under `/var/lib/tie` if you use it. (OpenRC runs unsandboxed, so any
+`tie`-writable path works there.)
+
 ## Files
 
 - `systemd/tie-daemon.service`, `systemd/tie-filehost.service`

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -93,8 +93,7 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 	routes(ws.mux)
 
 	if !ws.Config.Insecure && (ws.Config.CertFile == "" || ws.Config.KeyFile == "") {
-		fmt.Println("Error: set CertFile and KeyFile in the config file, or set Insecure = true.")
-		fmt.Println("Exiting.")
+		slog.Error("set CertFile and KeyFile in the config file, or set Insecure = true; exiting")
 		return
 	}
 
@@ -108,23 +107,25 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-stop
-		fmt.Println("\nShutting down: draining requests and syncing DB...")
+		slog.Info("shutting down: draining requests and syncing DB")
 		if err := srv.Shutdown(context.Background()); err != nil {
-			log.Println("tiedb: HTTP shutdown error:", err)
+			slog.Error("HTTP shutdown error", "err", err)
 		}
 		ws.Close()
 		os.Exit(0)
 	}()
 
 	if ws.Config.Insecure {
-		fmt.Println("Listening on http://" + ws.Config.ListenOn + "\n")
+		slog.Info("listening", "addr", "http://"+ws.Config.ListenOn)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			slog.Error("server error", "err", err)
+			os.Exit(1)
 		}
 	} else {
-		fmt.Println("Listening on https://" + ws.Config.ListenOn + "\n")
+		slog.Info("listening", "addr", "https://"+ws.Config.ListenOn)
 		if err := srv.ListenAndServeTLS(ws.Config.CertFile, ws.Config.KeyFile); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			slog.Error("server error", "err", err)
+			os.Exit(1)
 		}
 	}
 }
@@ -178,7 +179,7 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	raw_data, _ := io.ReadAll(r.Body)
 	r.Body.Close()
 	reqName := r.PathValue("request")
-	log.Println("Request from " + r.RemoteAddr + ": " + reqName)
+	slog.Info("request", "from", r.RemoteAddr, "request", reqName)
 	username, _, _ := r.BasicAuth() // Credentials already validated
 
 	for _, x := range ws.requests {
@@ -195,7 +196,7 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Println("Unrecognized request from " + r.RemoteAddr + ": " + reqName)
+	slog.Warn("unrecognized request", "from", r.RemoteAddr, "request", reqName)
 }
 
 func ErrorToJsonString(prepend string, err error) string {
@@ -215,7 +216,7 @@ func ErrorToJsonString(prepend string, err error) string {
 func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterface, rawData []byte, username string) {
 	errRequest := json.Unmarshal(rawData, request)
 	if errRequest != nil {
-		log.Println(errRequest)
+		slog.Error("unmarshalling request", "err", errRequest)
 		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
 		fmt.Fprint(w, msg)
 		return
@@ -231,7 +232,7 @@ func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterf
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		if err := s.StreamReply(env, w); err != nil {
 			// Status and headers are already committed; we can only log.
-			log.Println("stream reply error:", err)
+			slog.Error("stream reply error", "err", err)
 		}
 		return
 	}

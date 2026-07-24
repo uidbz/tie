@@ -7,13 +7,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"time"
 
 	"git.sr.ht/~uid/conf"
+	"git.sr.ht/~uid/tie/tielog"
 	"github.com/minio/highwayhash"
 )
 
@@ -38,6 +39,12 @@ type FilehostConfig struct {
 	// ReapInterval is how often expired blobs are reaped, as a Go duration
 	// string (e.g. "1h"). Empty or "0" disables the reaper.
 	ReapInterval string
+	// LogFile is the path structured JSON logs are appended to. Empty logs only
+	// to stderr (pretty).
+	LogFile string
+	// LogLevel is the minimum level emitted: debug, info, warn, error. Empty
+	// defaults to info.
+	LogLevel string
 }
 
 func defaultConfig() FilehostConfig {
@@ -73,7 +80,7 @@ const (
 func InitKey() {
 	k, err := hex.DecodeString(tieKey)
 	if err != nil {
-		fmt.Printf("Cannot decode hex key: %v", err) // add error handling
+		slog.Error("cannot decode hex key", "err", err)
 		return
 	}
 	key = k
@@ -120,7 +127,7 @@ func MakeDestinationPath(hash string) string {
 
 func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	h := r.PathValue("hash")
-	log.Println("Receiving file:", h)
+	slog.Info("receiving file", "hash", h)
 	var dest string
 	defer func() {
 		if r.Body != nil {
@@ -149,7 +156,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		if err := retention.recordUpload(h, expiresAt, token, now.Unix(), true); err != nil {
-			log.Println("Error recording retention:", err)
+			slog.Error("recording retention", "err", err)
 		}
 		fmt.Fprint(w, h)
 		return
@@ -157,24 +164,22 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		log.Println(err)
+		slog.Error("opening destination file", "dest", dest, "err", err)
 		if err := os.Remove(dest); err != nil {
-			log.Println("Error deleting bad file:", dest, "Error message:", err.Error())
+			slog.Error("deleting bad file", "dest", dest, "err", err)
 		}
 	}
 	defer out.Close()
 
 	_, errCopy := io.Copy(out, r.Body)
 	if errCopy != nil {
-		log.Println(err)
-
+		slog.Error("copying upload body", "dest", dest, "err", errCopy)
 	}
 	hashHex, _ := AddressOfFile(key, dest)
 	if h != "" && hashHex != h {
-		log.Println("Checksum error! Expected:", h, "Calculated:", hashHex)
-		log.Println("Deleting file:", dest)
+		slog.Warn("checksum mismatch; deleting file", "expected", h, "calculated", hashHex, "dest", dest)
 		if err := os.Remove(dest); err != nil {
-			log.Println("Error deleting bad file:", dest, "Error message:", err.Error())
+			slog.Error("deleting bad file", "dest", dest, "err", err)
 		}
 	}
 	blobExisted := false
@@ -182,7 +187,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		h = hashHex
 		dest2 := MakeDestinationPath(h)
 		if _, err := os.Stat(dest2); os.IsNotExist(err) {
-			fmt.Println("Moving ", dest, "to", dest2)
+			slog.Debug("moving file", "from", dest, "to", dest2)
 			if errMove := os.Rename(dest, dest2); errMove != nil {
 				fmt.Fprint(w, "Error saving file on server:", err)
 				os.RemoveAll(filepath.Dir(dest))
@@ -195,21 +200,21 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		dest = dest2
 	}
 	if err := retention.recordUpload(hashHex, expiresAt, token, now.Unix(), blobExisted); err != nil {
-		log.Println("Error recording retention:", err)
+		slog.Error("recording retention", "err", err)
 	}
-	log.Println("Calculated hash:", hashHex)
+	slog.Info("stored blob", "hash", hashHex)
 	fmt.Fprint(w, hashHex)
 }
 
 func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
 	if len(hash) != 64 {
-		fmt.Println("Invalid hash:", hash)
+		slog.Warn("invalid hash requested", "hash", hash)
 		fmt.Fprint(w, "Invalid hash:", hash)
 		return
 	}
 	path := PathFromHash(destination, hash)
-	fmt.Println("Client want:", hash)
+	slog.Info("serving blob", "hash", hash)
 	http.ServeFile(w, r, path)
 }
 
@@ -217,12 +222,12 @@ func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
 	filename := r.PathValue("filename")
 	if len(hash) != 64 {
-		fmt.Println("Invalid hash:", hash)
+		slog.Warn("invalid hash requested", "hash", hash)
 		fmt.Fprint(w, "Invalid hash:", hash)
 		return
 	}
 	path := PathFromHash(destination, hash)
-	fmt.Println("Client want:", hash)
+	slog.Info("serving blob", "hash", hash, "filename", filename)
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprint(w, "Error happened")
@@ -283,7 +288,7 @@ func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.Println("Error encoding retention response:", err)
+		slog.Error("encoding retention response", "err", err)
 	}
 }
 
@@ -308,16 +313,21 @@ set CertFile/KeyFile to serve HTTPS directly.
 		os.Exit(1)
 	}
 
+	cleanup, err := tielog.Setup(tielog.Config{File: cfg.LogFile, Level: cfg.LogLevel})
+	if err != nil {
+		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
+	}
+	defer cleanup()
+
 	if cfg.DbPath == "" {
-		fmt.Fprintln(os.Stderr, "Please provide a DbPath in the config file")
+		slog.Error("please provide a DbPath in the config file")
 		os.Exit(1)
 	}
 
 	var reapInterval time.Duration
 	if cfg.ReapInterval != "" {
-		var err error
 		if reapInterval, err = time.ParseDuration(cfg.ReapInterval); err != nil {
-			fmt.Fprintln(os.Stderr, "Invalid ReapInterval:", err)
+			slog.Error("invalid ReapInterval", "err", err)
 			os.Exit(1)
 		}
 	}
@@ -329,22 +339,27 @@ set CertFile/KeyFile to serve HTTPS directly.
 	destination = filepath.Clean(cfg.DbPath)
 	listenOn = cfg.ListenOn
 
-	var err error
 	if retention, err = loadRetentionIndex(destination); err != nil {
-		fmt.Fprintln(os.Stderr, "Error loading retention index:", err)
+		slog.Error("loading retention index", "err", err)
 		os.Exit(1)
 	}
 	startReaper(reapInterval)
 
 	if cfg.Insecure {
-		fmt.Println("Listening on http://" + listenOn + "\n")
-		log.Fatal(http.ListenAndServe(listenOn, router))
-	} else {
-		if cfg.CertFile == "" || cfg.KeyFile == "" {
-			fmt.Fprintln(os.Stderr, "Error: set CertFile and KeyFile in the config file, or set Insecure = true.")
+		slog.Info("listening", "addr", "http://"+listenOn)
+		if err := http.ListenAndServe(listenOn, router); err != nil {
+			slog.Error("server error", "err", err)
 			os.Exit(1)
 		}
-		fmt.Println("Listening on https://" + listenOn + "\n")
-		log.Fatal(http.ListenAndServeTLS(listenOn, cfg.CertFile, cfg.KeyFile, router))
+	} else {
+		if cfg.CertFile == "" || cfg.KeyFile == "" {
+			slog.Error("set CertFile and KeyFile in the config file, or set Insecure = true")
+			os.Exit(1)
+		}
+		slog.Info("listening", "addr", "https://"+listenOn)
+		if err := http.ListenAndServeTLS(listenOn, cfg.CertFile, cfg.KeyFile, router); err != nil {
+			slog.Error("server error", "err", err)
+			os.Exit(1)
+		}
 	}
 }

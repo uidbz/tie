@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"runtime/debug"
 	"strconv"
@@ -117,7 +117,7 @@ func (ic *Collection) loadAssociations(rawDataToLoad chan RawDataEntry, wg *sync
 		if int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) == TYPE_ASSOCIATION {
 			a, err := ic.bufToAssociation(entry.Data)
 			if err != nil {
-				log.Println("Skipping corrupt association at", entry.Position, ":", err)
+				slog.Warn("skipping corrupt association", "position", entry.Position, "err", err)
 				continue
 			}
 			ic.insertAssociation(a.Level, &a, entry.Position)
@@ -132,7 +132,7 @@ func (t *Collection) loadDB(filename string) error {
 		return err
 	}
 	dbname := "(" + fi.Name() + ") "
-	fmt.Fprintln(os.Stderr, dbname+"DB size:", (fi.Size() / 1024), "KiB")
+	slog.Info("DB size", "db", fi.Name(), "kib", fi.Size()/1024)
 
 	db, err := os.Open(filename)
 	if err != nil {
@@ -237,8 +237,8 @@ func (t *Collection) initDBSize() {
 		return
 	}
 	trimmed := t.db_size - rem
-	log.Printf("tiedb: %s has a %d-byte partial trailing record; truncating to %d bytes",
-		t.dBFullPath, rem, trimmed)
+	slog.Warn("partial trailing record; truncating",
+		"path", t.dBFullPath, "partialBytes", rem, "trimTo", trimmed)
 	f, err := os.OpenFile(t.dBFullPath, os.O_RDWR, 0600)
 	if err != nil {
 		panic("tiedb: failed to open for truncation: " + err.Error())
@@ -332,12 +332,12 @@ func (ic *Collection) dBWriter() {
 				b := make([]byte, ENTRY_SIZE)
 				n, err := db.ReadAt(b, req.Position)
 				if err != nil {
-					log.Println("Read error:", err, "bytes read,", n, "expected", ENTRY_SIZE)
+					slog.Error("read error", "err", err, "bytesRead", n, "expected", ENTRY_SIZE)
 					close(req.ReplyChan) // signal failure to readTripleAt
 				} else {
 					a, decodeErr := ic.bufToAssociation([ENTRY_SIZE]byte(b))
 					if decodeErr != nil {
-						log.Println("Decode error at", req.Position, ":", decodeErr)
+						slog.Error("decode error", "position", req.Position, "err", decodeErr)
 						close(req.ReplyChan)
 					} else {
 						req.ReplyChan <- a
@@ -349,7 +349,7 @@ func (ic *Collection) dBWriter() {
 
 			case <-syncTicker.C:
 				if err := db.Sync(); err != nil {
-					log.Println("tiedb: periodic DB sync error:", err)
+					slog.Error("periodic DB sync error", "err", err)
 				}
 
 			case <-ic.dBCloseWriter:
@@ -364,10 +364,10 @@ func (ic *Collection) dBWriter() {
 					}
 				}
 				if err := db.Sync(); err != nil {
-					log.Println("tiedb: DB sync error on close:", err)
+					slog.Error("DB sync error on close", "err", err)
 				}
 				if err := db.Close(); err != nil {
-					log.Println("tiedb: DB close error on close:", err)
+					slog.Error("DB close error on close", "err", err)
 				}
 				return
 			}

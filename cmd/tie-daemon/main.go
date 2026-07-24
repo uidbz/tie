@@ -3,19 +3,18 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
 	"git.sr.ht/~uid/conf"
 	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/tiedb"
+	"git.sr.ht/~uid/tie/tielog"
 	"git.sr.ht/~uid/tie/webservice"
 )
 
 var (
-	__VERBOSE bool = true
-	__DEBUG   bool = true
-
 	db     *tiedb.TieTree
 	dbPath string
 )
@@ -36,6 +35,12 @@ type DaemonConfig struct {
 	CertFile string
 	KeyFile  string
 	DbPath   string
+	// LogFile is the path structured JSON logs are appended to. Empty logs only
+	// to stderr (pretty).
+	LogFile string
+	// LogLevel is the minimum level emitted: debug, info, warn, error. Empty
+	// defaults to info.
+	LogLevel string
 	// MaxConcurrentRequests caps how many requests run at once. 0 = unbounded.
 	MaxConcurrentRequests int
 	Users                 []User
@@ -90,6 +95,12 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
 		os.Exit(1)
 	}
+
+	cleanup, err := tielog.Setup(tielog.Config{File: cfg.LogFile, Level: cfg.LogLevel})
+	if err != nil {
+		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
+	}
+	defer cleanup()
 
 	users := make(map[string]string, len(cfg.Users))
 	for _, u := range cfg.Users {

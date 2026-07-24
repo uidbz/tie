@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,7 +23,7 @@ func startReaper(interval time.Duration) {
 		defer ticker.Stop()
 		for range ticker.C {
 			deleted, kept := reapOnce(time.Now().Unix())
-			fmt.Fprintf(os.Stderr, "reaper: removed %d expired blob(s), kept %d still referenced\n", deleted, kept)
+			slog.Info("reaper pass complete", "removed", deleted, "keptReferenced", kept)
 		}
 	}()
 }
@@ -63,7 +63,7 @@ func reapOnce(now int64) (deleted, kept int) {
 		}
 		path := PathFromHash(destination, h)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintln(os.Stderr, "reaper: error removing", path, ":", err)
+			slog.Error("reaper: error removing blob", "path", path, "err", err)
 			continue
 		}
 		pruneShardDirs(path)
@@ -73,7 +73,7 @@ func reapOnce(now int64) (deleted, kept int) {
 	}
 	if changed {
 		if err := retention.save(); err != nil {
-			fmt.Fprintln(os.Stderr, "reaper: error saving index:", err)
+			slog.Error("reaper: error saving index", "err", err)
 		}
 	}
 	return deleted, kept

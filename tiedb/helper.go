@@ -1,28 +1,20 @@
 package tiedb
 
 import (
+	"log/slog"
 	"sync/atomic"
 
 	"fmt"
 	"math/rand"
-	"os"
 	"time"
 )
 
-var __DEBUG bool = true
-var __VERBOSE bool = true
+// Debug and Info are thin wrappers kept for existing call sites; they forward
+// to the process slog logger (which tie-daemon/tie-filehost point at a log file
+// plus pretty stderr). Diagnostics stay off stdout — stdout is data.
+func Debug(value string) { slog.Debug(value) }
 
-func Debug(value string) {
-	if __DEBUG {
-		fmt.Fprintln(os.Stderr, value)
-	}
-}
-
-func Info(value string) {
-	if __VERBOSE || __DEBUG {
-		fmt.Fprintln(os.Stderr, value)
-	}
-}
+func Info(value string) { slog.Info(value) }
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
