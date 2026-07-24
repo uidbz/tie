@@ -327,14 +327,24 @@ func dumpLocalFile(path string, w *csv.Writer) error {
 
 func cmdRestore() *cli.Command {
 	return &cli.Command{
-		Name:  "restore",
-		Usage: "Restore triples from TSV (key<TAB>value1<TAB>value2) on stdin into the current collection (additive)",
+		Name:      "restore",
+		Usage:     "Restore triples from a TSV file (key<TAB>value1<TAB>value2) into the current collection (additive); reads stdin if no file is given",
+		ArgsUsage: "[file]",
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
+			var src io.Reader = os.Stdin
+			if path := ctx.Args().Get(0); path != "" {
+				f, err := os.Open(path)
+				if err != nil {
+					return errors.New("Error opening file: " + err.Error())
+				}
+				defer f.Close()
+				src = f
+			}
 			var triples [][3]string
-			r := csv.NewReader(bufio.NewReader(os.Stdin))
+			r := csv.NewReader(bufio.NewReader(src))
 			r.Comma = '\t'
 			r.FieldsPerRecord = 3
 			line := 0
