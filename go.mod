@@ -11,6 +11,7 @@ require (
 	github.com/minio/highwayhash v1.0.3
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/urfave/cli/v3 v3.10.1
+	golang.org/x/term v0.44.0
 )
 
 require (
@@ -19,5 +20,4 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	golang.org/x/net v0.24.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
-	golang.org/x/term v0.44.0 // indirect
 )

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
 	"os"
 	"strings"
 
@@ -19,8 +19,7 @@ func main() {
 	// at this point, so peek it out of os.Args directly.
 	config, err := client.LoadConfig(configArg(os.Args))
 	if err != nil {
-		log.Println(err)
-		log.Println("Error opening config file!")
+		fmt.Fprintln(os.Stderr, "Error opening config file:", err)
 	} else {
 		tie = client.NewTieClient(config)
 	}
@@ -35,7 +34,6 @@ func main() {
 		EnableShellCompletion: true,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load", Value: "config.toml"},
-			&cli.StringFlag{Name: "table", Aliases: []string{"t"}, Usage: "Output as table"},
 		},
 		Commands: []*cli.Command{
 			cmdAdd(),
@@ -51,7 +49,8 @@ func main() {
 		},
 	}
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, "tie:", err)
+		os.Exit(1)
 	}
 }
 

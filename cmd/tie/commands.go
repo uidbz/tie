@@ -13,9 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
+	"golang.org/x/term"
 
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
@@ -109,13 +111,31 @@ func cmdGet() *cli.Command {
 			if err != nil {
 				return errors.New("Get Error: " + err.Error())
 			}
-			for _, t := range reply.SortedResult {
-				fmt.Println(t.Key + "\t" + t.Value1 + "\t" + t.Value2)
-			}
+			printTriples(reply.SortedResult)
 
 			return nil
 		},
 	}
+}
+
+// printTriples writes get results to stdout. When stdout is an interactive
+// terminal it renders aligned, headered columns for readability; when stdout is
+// piped or redirected it emits plain tab-separated lines (one triple per line)
+// so downstream tools like cut/awk/sort keep working unchanged.
+func printTriples(triples []tiedb.StringTriple) {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		for _, t := range triples {
+			fmt.Println(t.Key + "\t" + t.Value1 + "\t" + t.Value2)
+		}
+		return
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "KEY\tVALUE1\tVALUE2")
+	for _, t := range triples {
+		fmt.Fprintln(tw, t.Key+"\t"+t.Value1+"\t"+t.Value2)
+	}
+	tw.Flush()
 }
 
 // resolveFileHost picks the filehost for a file command. A raw --server address
