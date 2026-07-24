@@ -197,7 +197,22 @@ func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterf
 		return
 	}
 
-	reply, errReply := request.Reply(&Environment{username, ws.GetAccount, ws.GetCollection, ws})
+	env := &Environment{username, ws.GetAccount, ws.GetCollection, ws}
+
+	// Streaming requests write their reply directly to w (NDJSON) so the whole
+	// reply is never held in memory. The caller's semaphore slot (see
+	// RequestHandler) is held for the full stream — that is the intended
+	// MaxConcurrentRequests load-shedding behavior for a large dump.
+	if s, ok := request.(StreamingRequestInterface); ok {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		if err := s.StreamReply(env, w); err != nil {
+			// Status and headers are already committed; we can only log.
+			log.Println("stream reply error:", err)
+		}
+		return
+	}
+
+	reply, errReply := request.Reply(env)
 	if errReply != nil {
 		msg := ErrorToJsonString("Error:", errReply)
 		fmt.Fprint(w, msg)

@@ -2,10 +2,13 @@ package client
 
 import (
 	"crypto/tls"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"git.sr.ht/~uid/tie/api"
+	"git.sr.ht/~uid/tie/tiedb"
 	ws "git.sr.ht/~uid/tie/webservice"
 )
 
@@ -265,17 +268,44 @@ func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 	return reply, replyError(reply.ReplyStatus)
 }
 
-// Dump returns every forward triple in the current collection, for backup or
-// interop. Order is unspecified.
-func (tc *TieClient) Dump() (DumpReply, error) {
+// DumpStream streams every forward triple in the current collection to fn, one
+// at a time, without ever buffering the whole collection on the client. Order
+// is unspecified. If fn returns an error, streaming stops and that error is
+// returned.
+func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
 	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
 	request := col.NewDumpRequest()
 
-	reply, err := run[api.DumpReply](tc, request)
+	return tc.client.RunStream(request, func(r io.Reader) error {
+		dec := json.NewDecoder(r)
+		for dec.More() {
+			var t tiedb.StringTriple
+			if err := dec.Decode(&t); err != nil {
+				return err
+			}
+			if err := fn(t); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Dump returns every forward triple in the current collection, for backup or
+// interop. Order is unspecified. It collects the streamed dump into a slice;
+// callers that must not hold the whole collection in memory should use
+// DumpStream instead.
+func (tc *TieClient) Dump() (DumpReply, error) {
+	reply := &api.DumpReply{}
+	err := tc.DumpStream(func(t tiedb.StringTriple) error {
+		reply.Triples = append(reply.Triples, t)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	return reply, replyError(reply.ReplyStatus)
+	reply.Success = true
+	return reply, nil
 }
 
 // Restore adds every (key, value1, value2) triple into the current collection

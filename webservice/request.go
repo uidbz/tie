@@ -1,6 +1,8 @@
 package webservice
 
 import (
+	"io"
+
 	"git.sr.ht/~uid/tie/tiedb"
 )
 
@@ -16,6 +18,17 @@ type RequestInterface interface {
 	// type. RequestHandler unmarshals each incoming request into its own New()
 	// instance so concurrent requests never share mutable state.
 	New() RequestInterface
+}
+
+// StreamingRequestInterface is an optional interface a request may implement to
+// write its reply directly to the response writer (e.g. NDJSON, one record per
+// line) instead of returning a fully-buffered Reply. AnswerRequest prefers this
+// path when present, so neither the daemon nor the client materializes the whole
+// reply in memory. Once the first byte is written the HTTP status is committed,
+// so a mid-stream error cannot change it (it can only be logged).
+type StreamingRequestInterface interface {
+	RequestInterface
+	StreamReply(environment *Environment, w io.Writer) error
 }
 
 type Environment struct {

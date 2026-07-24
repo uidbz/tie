@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -250,53 +252,57 @@ func cmdDump() *cli.Command {
 			},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
-			var triples []tiedb.StringTriple
+			bw := bufio.NewWriter(os.Stdout)
+			defer bw.Flush()
+			w := csv.NewWriter(bw)
+			w.Comma = '\t'
+			defer w.Flush()
+
 			if path := ctx.String("file"); path != "" {
-				var err error
-				triples, err = dumpLocalFile(path)
-				if err != nil {
+				if err := dumpLocalFile(path, w); err != nil {
 					return errors.New("Dump Error: " + err.Error())
 				}
 			} else {
 				if tie == nil {
 					return errors.New("Error: Config not loaded")
 				}
-				reply, err := tie.Dump()
+				err := tie.DumpStream(func(t tiedb.StringTriple) error {
+					return w.Write([]string{t.Key, t.Value1, t.Value2})
+				})
 				if err != nil {
 					return errors.New("Dump Error: " + err.Error())
 				}
-				triples = reply.Triples
 			}
-			w := bufio.NewWriter(os.Stdout)
-			defer w.Flush()
-			for _, t := range triples {
-				fmt.Fprintln(w, t.Key+"\t"+t.Value1+"\t"+t.Value2)
-			}
-			return nil
+			w.Flush()
+			return w.Error()
 		},
 	}
 }
 
 // dumpLocalFile reads every forward triple straight from an on-disk .tie file,
-// bypassing the server. It reflects flushed on-disk state only, so it is meant
-// for offline export when no daemon holds the file open.
-func dumpLocalFile(path string) ([]tiedb.StringTriple, error) {
+// bypassing the server, and streams each as a TSV record to w (no in-memory
+// buffering of the whole collection). It reflects flushed on-disk state only,
+// so it is meant for offline export when no daemon holds the file open.
+func dumpLocalFile(path string, w *csv.Writer) error {
 	if !strings.HasSuffix(path, ".tie") {
-		return nil, fmt.Errorf("not a .tie file: %q", path)
+		return fmt.Errorf("not a .tie file: %q", path)
 	}
 	if _, err := os.Stat(path); err != nil {
-		return nil, err
+		return err
 	}
 	dir := filepath.Dir(path)
 	name := strings.TrimSuffix(filepath.Base(path), ".tie")
 	db := tiedb.NewDB(true)
 	db.SetBlobPolicy(metadata.HexHashBlobPolicy())
 	col := db.GetCollection(tiedb.CollectionKey{Database: dir, Collection: name})
-	var triples []tiedb.StringTriple
+	var writeErr error
 	col.ForEachTriple(func(t tiedb.StringTriple) {
-		triples = append(triples, t)
+		if writeErr != nil {
+			return
+		}
+		writeErr = w.Write([]string{t.Key, t.Value1, t.Value2})
 	})
-	return triples, nil
+	return writeErr
 }
 
 func cmdRestore() *cli.Command {
@@ -308,23 +314,20 @@ func cmdRestore() *cli.Command {
 				return errors.New("Error: Config not loaded")
 			}
 			var triples [][3]string
-			scanner := bufio.NewScanner(os.Stdin)
-			scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+			r := csv.NewReader(bufio.NewReader(os.Stdin))
+			r.Comma = '\t'
+			r.FieldsPerRecord = 3
 			line := 0
-			for scanner.Scan() {
+			for {
 				line++
-				text := scanner.Text()
-				if text == "" {
-					continue
+				rec, err := r.Read()
+				if err == io.EOF {
+					break
 				}
-				parts := strings.SplitN(text, "\t", 3)
-				if len(parts) != 3 {
-					return fmt.Errorf("Malformed line %d (need 3 tab-separated fields): %q", line, text)
+				if err != nil {
+					return fmt.Errorf("Malformed line %d: %v", line, err)
 				}
-				triples = append(triples, [3]string{parts[0], parts[1], parts[2]})
-			}
-			if err := scanner.Err(); err != nil {
-				return errors.New("Read Error: " + err.Error())
+				triples = append(triples, [3]string{rec[0], rec[1], rec[2]})
 			}
 			if err := tie.Restore(triples); err != nil {
 				return errors.New("Restore Error: " + err.Error())
