@@ -268,7 +268,11 @@ Common tasks are wrapped in a `Makefile`:
 | `make release VERSION=<tag>` | Tag `<tag>` and push it (e.g. `make release VERSION=v0.4.0`). |
 
 `push` and `release` require their argument and abort with a usage message if
-it is missing.
+it is missing. `make build` embeds the version (from `git describe`, or an
+explicit `VERSION=`) into the binaries, reported by `tie --version`,
+`tie-daemon -version`, and `tie-filehost -version`.
+
+Release notes are kept in [CHANGELOG.md](CHANGELOG.md).
 
 ## Deployment
 

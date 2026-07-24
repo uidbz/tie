@@ -15,6 +15,7 @@ import (
 
 	"git.sr.ht/~uid/conf"
 	"git.sr.ht/~uid/tie/tielog"
+	"git.sr.ht/~uid/tie/version"
 	"github.com/minio/highwayhash"
 )
 
@@ -294,6 +295,7 @@ func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	var configPath = flag.String("config", "tie-filehost.toml", "Path to TOML config file.")
+	var showVersion = flag.Bool("version", false, "Print version and exit.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -306,6 +308,11 @@ set CertFile/KeyFile to serve HTTPS directly.
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("tie-filehost", version.String())
+		return
+	}
 
 	cfg := defaultConfig()
 	if err := conf.ReadConfig(*configPath, &cfg); err != nil {

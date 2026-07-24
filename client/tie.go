@@ -170,7 +170,7 @@ func replyError(status ws.ReplyStatus) error {
 
 // Add a triple to the collection
 func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewAddRequest(key, value1, value2)
 
 	reply, err := run[api.AddReply](tc, request)
@@ -182,7 +182,7 @@ func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
 
 // Wait until all changes has been committed to the collection
 func (tc *TieClient) Sync() error {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewSyncRequest()
 
 	if _, err := tc.client.Run(request); err != nil {
@@ -194,7 +194,7 @@ func (tc *TieClient) Sync() error {
 // Get a TripleSet with all triples that are associated with 'key'.
 // Returns ErrNotFound if nothing is associated with the key.
 func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewAssociatedRequest(key)
 
 	reply, err := run[api.AssociatedReply](tc, request)
@@ -207,7 +207,7 @@ func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 // Get a TripleSet from a key.
 // Returns ErrNotFound if the key has no associated values.
 func (tc *TieClient) SimpleGet(key string) (GetReply, error) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewGetRequest(key)
 
 	reply, err := run[api.GetReply](tc, request)
@@ -220,7 +220,7 @@ func (tc *TieClient) SimpleGet(key string) (GetReply, error) {
 // Get a TripleSet from a key with options.
 // Returns ErrNotFound if the key has no associated values.
 func (tc *TieClient) Get(key string, o GetOptions) (GetReply, error) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewGetRequest(key)
 	request.Options = o
 
@@ -233,7 +233,7 @@ func (tc *TieClient) Get(key string, o GetOptions) (GetReply, error) {
 
 // Delete a triple from the collection
 func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewDeleteRequest(key, value1, value2)
 
 	reply, err := run[api.DeleteReply](tc, request)
@@ -245,7 +245,7 @@ func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
 
 // Update a triple in the collection
 func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewUpdateRequest(update)
 
 	reply, err := run[api.UpdateReply](tc, request)
@@ -273,7 +273,7 @@ func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 // is unspecified. If fn returns an error, streaming stops and that error is
 // returned.
 func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
-	col := api.CollectionInfo{tc.Config.Namespace, tc.Config.Collection}
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
 	request := col.NewDumpRequest()
 
 	return tc.client.RunStream(request, func(r io.Reader) error {

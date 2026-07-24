@@ -31,7 +31,7 @@ func (request *DummyRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply.Hello = "Hello, I got your data: " + request.SomeData
 	reply.Success = true
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *DummyRequest) New() ws.RequestInterface {

@@ -2,15 +2,20 @@ ROOT    := $(CURDIR)
 DIST    := $(ROOT)/dist
 CMDS    := tie tie-daemon tie-filehost
 
+# Version embedded in the binaries. Defaults to the current git description
+# (nearest tag + commits-since), overridable with `make build VERSION=v0.4.0`.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X git.sr.ht/~uid/tie/version.Version=$(VERSION)
+
 .PHONY: build install tls-keys push release clean
 
-# Build all commands into dist/.
+# Build all commands into dist/, embedding the version via ldflags.
 build:
-	@echo "Build directory: $(DIST)"
+	@echo "Build directory: $(DIST) (version $(VERSION))"
 	@mkdir -p $(DIST)
 	@for cmd in $(CMDS); do \
 		echo "Building $$cmd..."; \
-		go build -o $(DIST)/ ./cmd/$$cmd || exit 1; \
+		go build -ldflags "$(LDFLAGS)" -o $(DIST)/ ./cmd/$$cmd || exit 1; \
 	done
 
 # Install tie as system services (systemd/OpenRC). Requires root, so run as

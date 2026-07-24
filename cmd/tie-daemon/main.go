@@ -11,6 +11,7 @@ import (
 	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/tiedb"
 	"git.sr.ht/~uid/tie/tielog"
+	"git.sr.ht/~uid/tie/version"
 	"git.sr.ht/~uid/tie/webservice"
 )
 
@@ -79,6 +80,7 @@ func defaultConfig() DaemonConfig {
 
 func main() {
 	var configPath = flag.String("config", "tie-daemon.toml", "Path to TOML config file.")
+	var showVersion = flag.Bool("version", false, "Print version and exit.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
@@ -89,6 +91,11 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("tie-daemon", version.String())
+		return
+	}
 
 	cfg := defaultConfig()
 	if err := conf.ReadConfig(*configPath, &cfg); err != nil {

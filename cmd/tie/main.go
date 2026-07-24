@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"git.sr.ht/~uid/tie/client"
+	"git.sr.ht/~uid/tie/version"
 
 	"github.com/urfave/cli/v3"
 )
@@ -25,8 +26,9 @@ func main() {
 	}
 
 	cmd := &cli.Command{
-		Name:  "tie",
-		Usage: "Manage a tie triple-store and its content-addressed filehost",
+		Name:    "tie",
+		Version: version.String(),
+		Usage:   "Manage a tie triple-store and its content-addressed filehost",
 		Description: "tie is the command-line client for the tie triple-store. It stores and\n" +
 			"queries triples (key/value1/value2), uploads and downloads files to and\n" +
 			"from a content-addressed filehost, imports and tags directory trees, and\n" +
