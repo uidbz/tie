@@ -27,6 +27,8 @@ type TieFuse struct {
 	inodeLock   sync.RWMutex
 	cache       *cache
 	config      config
+	uid         uint32 // owner uid for all files
+	gid         uint32 // owner gid for all files
 }
 
 // Close releases the on-disk blob cache. Call once after the mount is torn down.
@@ -49,6 +51,8 @@ func NewTieFuse(filehost string, insecure bool, cacheSizeGB int, verify bool) *T
 		cache:       newCache(filehost, httpClient, int64(cacheSizeGB)*1024*1024*1024, verify),
 		hashToInode: make(map[string]uint64),
 		config:      config{filehost: filehost, client: httpClient, verify: verify},
+		uid:         uint32(os.Getuid()),
+		gid:         uint32(os.Getgid()),
 	}
 }
 
@@ -253,6 +257,8 @@ func (n *node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) 
 	} else {
 		out.Mode = 0444 | fuse.S_IFREG
 	}
+	out.Uid = n.State.uid
+	out.Gid = n.State.gid
 	return 0
 }
 

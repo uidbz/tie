@@ -2,6 +2,7 @@ package fuselib
 
 import (
 	"context"
+	"os"
 	"strings"
 	"syscall"
 
@@ -34,12 +35,16 @@ import (
 type TieDBFuse struct {
 	tie      *client.TieClient
 	fuseTree *TieFuse // reused for content-addressed file/dir bytes + cache
+	uid      uint32   // owner uid for all files
+	gid      uint32   // owner gid for all files
 }
 
 func NewTieDBFuse(tie *client.TieClient, filehost string, insecure bool, cacheSizeGB int, verify bool) *TieDBFuse {
 	return &TieDBFuse{
 		tie:      tie,
 		fuseTree: NewTieFuse(filehost, insecure, cacheSizeGB, verify),
+		uid:      uint32(os.Getuid()),
+		gid:      uint32(os.Getgid()),
 	}
 }
 
@@ -208,6 +213,8 @@ func (f *tagListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.A
 	}
 	out.Size = uint64(len(data))
 	out.Mode = 0444 // Readonly regular file
+	out.Uid = f.state.uid
+	out.Gid = f.state.gid
 	return 0
 }
 
@@ -256,6 +263,8 @@ func (f *typeListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.
 	}
 	out.Size = uint64(len(data))
 	out.Mode = 0444 // Readonly regular file
+	out.Uid = f.state.uid
+	out.Gid = f.state.gid
 	return 0
 }
 
@@ -362,6 +371,8 @@ var (
 func (f *staticFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Size = uint64(len(f.data))
 	out.Mode = 0444 // Readonly regular file
+	// staticFile doesn't have access to state, but it's only used for the README
+	// which is a synthetic file. Leave it as root:root since it's truly virtual.
 	return 0
 }
 
@@ -773,6 +784,7 @@ func (d *tagsDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 // (newTypeFile) — so the two share this one truncate-safe write path.
 type metaFile struct {
 	fs.Inode
+	state *TieDBFuse
 	load  func() ([]string, error)
 	store func([]string) error
 }
@@ -786,6 +798,7 @@ var (
 // newTagFile builds a metaFile backing one content hash's tags.
 func newTagFile(state *TieDBFuse, hash string) *metaFile {
 	return &metaFile{
+		state: state,
 		load:  func() ([]string, error) { return client.GetTags(state.tie, hash) },
 		store: func(v []string) error { return client.SetTags(state.tie, hash, v) },
 	}
@@ -796,6 +809,7 @@ func newTagFile(state *TieDBFuse, hash string) *metaFile {
 // surfaced by GetDirType, so editing this file can't break navigation).
 func newTypeFile(state *TieDBFuse, uid client.DirUID) *metaFile {
 	return &metaFile{
+		state: state,
 		load:  func() ([]string, error) { return client.GetDirType(state.tie, uid) },
 		store: func(v []string) error { return client.SetDirTypes(state.tie, uid, v) },
 	}
@@ -815,6 +829,8 @@ func (f *metaFile) render() []byte {
 func (f *metaFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Size = uint64(len(f.render()))
 	out.Mode = 0644 // Writable regular file
+	out.Uid = f.state.uid
+	out.Gid = f.state.gid
 	return 0
 }
 
