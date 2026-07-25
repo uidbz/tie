@@ -41,8 +41,8 @@ log "init system: ${INIT:-none}"
 
 # --- Build --------------------------------------------------------------
 log "building binaries (static)"
-( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -o "$SCRIPT_DIR/tie-daemon" ./cmd/tie-daemon )
-( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -o "$SCRIPT_DIR/tie-filehost" ./cmd/tie-filehost )
+( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-daemon" ./cmd/tie-daemon )
+( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-filehost" ./cmd/tie-filehost )
 
 # --- User ---------------------------------------------------------------
 if ! id "$TIE_USER" >/dev/null 2>&1; then
