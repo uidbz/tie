@@ -246,6 +246,13 @@ var _ = (fs.NodeGetattrer)((*node)(nil))
 
 func (n *node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Size = uint64(n.Size)
+	// Content-addressed nodes are immutable: directories get 0555 (r-xr-xr-x),
+	// files get 0444 (r--r--r--).
+	if n.Mode&fuse.S_IFDIR != 0 {
+		out.Mode = 0555 | fuse.S_IFDIR
+	} else {
+		out.Mode = 0444 | fuse.S_IFREG
+	}
 	return 0
 }
 

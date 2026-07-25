@@ -27,11 +27,13 @@ func _() {
 	_ = x[TieAlbum-16]
 	_ = x[TieYear-17]
 	_ = x[TieTrack-18]
+	_ = x[TieTiedirHash-19]
+	_ = x[TieDirUID-20]
 }
 
-const _TieProperty_name = "tie-uidfilenamefilesizenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typealltitleartistalbumyeartrack"
+const _TieProperty_name = "tie-uidfilenamefilesizenamemedia-typefilehosttagpathparenttagstag-datecollectiontie-typealltitleartistalbumyeartracktiedir-hashdir-uid"
 
-var _TieProperty_index = [...]uint8{0, 7, 15, 23, 27, 37, 45, 48, 52, 58, 62, 70, 80, 88, 91, 96, 102, 107, 111, 116}
+var _TieProperty_index = [...]uint8{0, 7, 15, 23, 27, 37, 45, 48, 52, 58, 62, 70, 80, 88, 91, 96, 102, 107, 111, 116, 127, 134}
 
 func (i TieProperty) String() string {
 	idx := int(i) - 0

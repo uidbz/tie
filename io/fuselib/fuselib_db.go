@@ -207,6 +207,7 @@ func (f *tagListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.A
 		return errno
 	}
 	out.Size = uint64(len(data))
+	out.Mode = 0444 // Readonly regular file
 	return 0
 }
 
@@ -254,6 +255,7 @@ func (f *typeListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.
 		return errno
 	}
 	out.Size = uint64(len(data))
+	out.Mode = 0444 // Readonly regular file
 	return 0
 }
 
@@ -359,6 +361,7 @@ var (
 
 func (f *staticFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Size = uint64(len(f.data))
+	out.Mode = 0444 // Readonly regular file
 	return 0
 }
 
@@ -811,6 +814,7 @@ func (f *metaFile) render() []byte {
 
 func (f *metaFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	out.Size = uint64(len(f.render()))
+	out.Mode = 0644 // Writable regular file
 	return 0
 }
 

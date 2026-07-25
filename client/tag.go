@@ -64,6 +64,8 @@ const (
 	TieAlbum                           // album
 	TieYear                            // year
 	TieTrack                           // track
+	TieTiedirHash                      // tiedir-hash
+	TieDirUID                          // dir-uid
 )
 
 const (
@@ -355,7 +357,35 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if x.MediaType == "inode/directory" {
 			// Ensure the directory (and its ancestors) exist as DirUID entities,
 			// so even childless directories are browsable.
-			if _, err := dirUID(rel); err != nil {
+			uid, err := dirUID(rel)
+			if err != nil {
+				return err
+			}
+			// Tag the directory's tiedir content hash so it appears in type/tag
+			// queries. The directory's TieType is already set via MkTieDir and
+			// SetDirType, but the tiedir blob itself needs to be tagged with the
+			// directory's tags so it's discoverable and expandable.
+			info := TagInfo{
+				Hash:      x.Hash,
+				File:      x.Filename,
+				Size:      x.Size,
+				MediaType: x.MediaType,
+				Directory: uid, // The tiedir blob's parent is itself (self-reference).
+				TieType:   TieDirectory,
+				Tags:      tags,
+				Metadata:  metadata.Media{}, // Directories don't have embedded metadata.
+			}
+			if err := Tag(tie, info, collection); err != nil {
+				return err
+			}
+			// Link the tiedir content hash to the DirUID so the directory is
+			// expandable in content-addressed contexts (e.g. tag query results).
+			// This bidirectional association lets the FUSE layer resolve a DirUID
+			// to its tiedir blob when entering a directory from a type query.
+			batch := tie.NewBatchIn(collection)
+			batch.Add(string(uid), str(TieTiedirHash), x.Hash)
+			batch.Add(x.Hash, str(TieDirUID), string(uid))
+			if _, err := tie.Batch(batch); err != nil {
 				return err
 			}
 			continue
@@ -851,13 +881,32 @@ func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile
 
 // taggedFileFrom builds a TaggedFile from a hash and its next-level metadata,
 // falling back to the hash as the display name when no filename is recorded.
+// For directories, the display name is extracted from TiePath (the directory's
+// slash path) by taking the last segment.
 func taggedFileFrom(hash string, meta tiedb.Value1) TaggedFile {
+	isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
 	filename := meta[str(TieFilename)].ToString()
 	if filename == "" {
-		filename = hash
+		// Directories use TiePath instead of TieFilename; extract the basename.
+		if isDir {
+			if paths := meta[str(TiePath)].ToSlice(); len(paths) > 0 {
+				// Use the first path's basename as the display name.
+				p := paths[0]
+				p = strings.TrimPrefix(p, FileURIScheme)
+				p = strings.TrimRight(p, "/")
+				if i := strings.LastIndex(p, "/"); i >= 0 {
+					filename = p[i+1:]
+				} else {
+					filename = p
+				}
+			}
+		}
+		// Final fallback: use the hash/UID as the display name.
+		if filename == "" {
+			filename = hash
+		}
 	}
 	size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
-	isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
 	return TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir}
 }
 
