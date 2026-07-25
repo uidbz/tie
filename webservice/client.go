@@ -111,6 +111,9 @@ func NewClient(server, username, password string, insecure bool) *Client {
 		t := tls.Config{InsecureSkipVerify: insecure}
 		c.r = resty.New().SetTLSClientConfig(&t)
 		c.hc = &http.Client{Transport: &http.Transport{TLSClientConfig: &t}}
+		if insecure {
+			c.r.SetDisableWarn(true)
+		}
 	} else {
 		c.r = resty.New()
 		c.hc = &http.Client{}
