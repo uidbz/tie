@@ -365,9 +365,15 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			// queries. The directory's TieType is already set via MkTieDir and
 			// SetDirType, but the tiedir blob itself needs to be tagged with the
 			// directory's tags so it's discoverable and expandable.
+			// Use filepath.Base to get just the directory name, not the full path.
+			dirname := filepath.Base(rel)
+			if dirname == "." {
+				// Root directory of the import; use the last segment of the virtual path.
+				dirname = filepath.Base(strings.TrimPrefix(rootPath, FileURIScheme))
+			}
 			info := TagInfo{
 				Hash:      x.Hash,
-				File:      x.Filename,
+				File:      dirname, // Just the directory name for display
 				Size:      x.Size,
 				MediaType: x.MediaType,
 				Directory: uid, // The tiedir blob's parent is itself (self-reference).
@@ -881,31 +887,38 @@ func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile
 
 // taggedFileFrom builds a TaggedFile from a hash and its next-level metadata,
 // falling back to the hash as the display name when no filename is recorded.
-// For directories, the display name is extracted from TiePath (the directory's
-// slash path) by taking the last segment.
+// For directories, tries TieFilename first, then TiePath (for DirUIDs), extracting
+// the basename from either.
 func taggedFileFrom(hash string, meta tiedb.Value1) TaggedFile {
 	isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
 	filename := meta[str(TieFilename)].ToString()
-	if filename == "" {
-		// Directories use TiePath instead of TieFilename; extract the basename.
-		if isDir {
-			if paths := meta[str(TiePath)].ToSlice(); len(paths) > 0 {
-				// Use the first path's basename as the display name.
-				p := paths[0]
-				p = strings.TrimPrefix(p, FileURIScheme)
-				p = strings.TrimRight(p, "/")
-				if i := strings.LastIndex(p, "/"); i >= 0 {
-					filename = p[i+1:]
-				} else {
-					filename = p
-				}
+	
+	// If filename contains a path separator, extract just the basename.
+	// This handles both old imports (full paths) and ensures consistency.
+	if filename != "" && strings.ContainsAny(filename, "/\\") {
+		filename = filepath.Base(filename)
+	}
+	
+	if filename == "" && isDir {
+		// Directories (especially DirUIDs) might use TiePath; extract the basename.
+		if paths := meta[str(TiePath)].ToSlice(); len(paths) > 0 {
+			// Use the first path's basename as the display name.
+			p := paths[0]
+			p = strings.TrimPrefix(p, FileURIScheme)
+			p = strings.TrimRight(p, "/")
+			if i := strings.LastIndex(p, "/"); i >= 0 {
+				filename = p[i+1:]
+			} else {
+				filename = p
 			}
 		}
-		// Final fallback: use the hash/UID as the display name.
-		if filename == "" {
-			filename = hash
-		}
 	}
+	
+	// Final fallback: use the hash/UID as the display name.
+	if filename == "" {
+		filename = hash
+	}
+	
 	size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
 	return TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir}
 }
