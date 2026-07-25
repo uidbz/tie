@@ -876,6 +876,7 @@ var (
 	_ = (fs.FileReader)((*metaFileHandle)(nil))
 	_ = (fs.FileWriter)((*metaFileHandle)(nil))
 	_ = (fs.FileFlusher)((*metaFileHandle)(nil))
+	_ = (fs.FileFsyncer)((*metaFileHandle)(nil))
 )
 
 func (h *metaFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
@@ -906,6 +907,14 @@ func (h *metaFileHandle) Flush(ctx context.Context) syscall.Errno {
 	if err := h.file.store(parseLines(h.buf)); err != nil {
 		return syscall.EIO
 	}
+	return 0
+}
+
+// Fsync is called by editors (e.g. vim) to ensure data is persisted. Since Flush
+// already commits the buffered text to the triple store, Fsync is a no-op: the
+// backing store (tie-daemon) handles its own durability. Returning success lets
+// editors save without E667: Fsync failed errors.
+func (h *metaFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	return 0
 }
 
