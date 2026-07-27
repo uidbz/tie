@@ -17,8 +17,7 @@ respawn_delay=5
 respawn_max=0
 
 depend() {
-	need net
-	after firewall
+	after net firewall
 }
 
 start_pre() {
