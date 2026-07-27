@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"git.sr.ht/~uid/tie/metadata"
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -259,6 +260,9 @@ func (n *node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) 
 	}
 	out.Uid = n.State.uid
 	out.Gid = n.State.gid
+	if !n.Mtime.IsZero() {
+		out.SetTimes(nil, &n.Mtime, &n.Mtime)
+	}
 	return 0
 }
 
@@ -411,6 +415,9 @@ type node struct {
 	Children []*node // for directories
 	Size     int
 	State    *TieFuse
+	// Mtime is the file's modification time, surfaced from its import date
+	// (tag-date). Zero leaves the mount's default (unset) timestamp.
+	Mtime time.Time
 }
 
 func (n *node) AddChild(child *node) {

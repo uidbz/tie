@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **Versioned re-import.** Re-importing a directory tree is now a true sync:
+  when a file's content changes (a new hash under the same name) or a file is
+  renamed/deleted on disk, its superseded content is moved into a per-file
+  `<filename>_prev` history directory instead of lingering as a stale duplicate.
+  A new client-config `PrevVersions` (default 3) bounds how many versions are
+  kept per file, oldest dropped first; `0` disables history and deletes the old
+  edge outright (garbage-collecting content no longer referenced anywhere).
+  Reconciliation keys on the content hash, so shared content (the same hash in
+  another directory) is never disturbed.
+- **File modification times in the `--db` mount.** Files now report their import
+  date as `mtime`, surfaced from the `tag-date` triple.
+
+### Changed
+
+- **`tag-date` is single-valued and microsecond-precision.** Re-tagging a hash
+  no longer accumulates multiple `tag-date` values; it records only the last
+  import time. The finer precision keeps version retention ordered correctly for
+  re-imports within the same second. Legacy second-resolution values still parse.
+
 ## [v0.4.0] - 2026-07-24
 
 The largest release so far: a hardened, crash-safe write path in tiedb, a

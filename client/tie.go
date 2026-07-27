@@ -26,6 +26,7 @@ var defaultConfig = Config{
 	Collection:       "Main",
 	DefaultFileHosts: []string{"default"},
 	FileHosts:        map[string]FileHost{"default": {URL: "https://localhost:1162"}},
+	PrevVersions:     3,
 	key:              InitKey(),
 }
 
@@ -68,6 +69,15 @@ type Config struct {
 	// absolute on-disk path. Supported variables: artist, album, year, title,
 	// track.
 	ImportDest map[string]string
+	// PrevVersions bounds how many superseded versions of a file are kept when a
+	// directory is re-imported. When re-import replaces a file (same name, new
+	// bytes) or drops one (renamed/deleted on disk), the old content's edge is
+	// moved into a "<filename>_prev" history directory instead of being deleted;
+	// only the newest PrevVersions are retained there, oldest dropped first. A
+	// value of 0 keeps no history (the old edge is removed directly). NOTE:
+	// LoadConfig fills a zero-value Config from TOML, so a config file that omits
+	// this key gets 0 (no history), not the defaultConfig value.
+	PrevVersions int
 	// Queries maps a friendly name to a saved tag query, e.g.
 	// "chill-jazz" = "jazz mellow -live". Each entry appears as a directory
 	// under the mount's query/ tree, so "ls query/chill-jazz" runs the stored

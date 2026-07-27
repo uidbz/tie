@@ -72,6 +72,13 @@ const (
 	FileURIScheme string = "file:"
 )
 
+// tagDateFormat is the layout for the single-valued tag-date (last import time).
+// It carries microsecond precision so several re-imports within the same wall
+// second still order correctly for version retention; older second-resolution
+// values (written before this) still parse, since the fractional part is
+// optional in time.Parse.
+const tagDateFormat = "2006-01-02 15:04:05.000000"
+
 func (d DirUID) String() string {
 	return string(d)
 }
@@ -331,6 +338,13 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		return err
 	}
 	dirCache := make(map[string]DirUID)
+	// want records, per directory DirUID, the set of content hashes this import
+	// placed there. It is the source of truth for reconciliation: any existing file
+	// child of a touched directory whose hash is not in this set is superseded
+	// (content changed → new hash) or orphaned (removed/renamed on disk). Keying on
+	// the hash (not the filename) is correct even when one hash has several names or
+	// parents, since identical bytes collapse to a single content address.
+	want := make(map[DirUID]map[string]bool)
 	// dirUID resolves (creating on demand, with ancestors) the virtual DirUID for
 	// a directory given by its path relative to the import root ("." = the root).
 	dirUID := func(relDir string) (DirUID, error) {
@@ -408,13 +422,304 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if err := Tag(tie, info, collection); err != nil {
 			return err
 		}
+		if want[parent] == nil {
+			want[parent] = make(map[string]bool)
+		}
+		want[parent][x.Hash] = true
 	}
 
 	rootUID, err := dirUID(".")
 	if err != nil {
 		return err
 	}
+
+	// Reconcile every directory this import touched: move superseded/orphaned file
+	// children into per-file "_prev" history dirs (or delete them when history is
+	// disabled), honoring the configured retention count. A directory that had no
+	// files (only subdirs) is still reconciled with an empty want set so a file
+	// deleted down to zero is handled.
+	for relDir := range dirCache {
+		uid := dirCache[relDir]
+		if err := reconcileDir(tie, collection, uid, want[uid], tie.Config.PrevVersions); err != nil {
+			return err
+		}
+	}
+
 	return tie.SetDirType(rootUID, dirType)
+}
+
+// prevDirSuffix is appended to a file's name to form its per-file version-history
+// directory, e.g. "file1.txt" -> "file1.txt_prev".
+const prevDirSuffix = "_prev"
+
+// childEntry is one file child of a directory during reconciliation: its content
+// hash, recorded display filename, and last-import date (for retention ordering).
+type childEntry struct {
+	Hash     string
+	Filename string
+	TagDate  time.Time
+}
+
+// supersededChildren returns the file children whose content hash this import did
+// not place in the directory: a changed file uploads new bytes (a new hash, so the
+// old hash is absent from want), and a removed/renamed file leaves its hash absent
+// too. want is the set of content hashes this import placed in the directory.
+//
+// Reconciliation keys on the content hash, not the filename, because a hash can
+// carry several filenames (identical bytes collapse to one content address) and be
+// parented under several directories — the only unambiguous question is "did this
+// import place this content here?".
+func supersededChildren(children []childEntry, want map[string]bool) []childEntry {
+	var out []childEntry
+	for _, c := range children {
+		if !want[c.Hash] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// retentionDrops returns the oldest versions to remove so that at most keep
+// remain, ordered by TagDate then Hash (ascending = oldest first). It returns
+// nil when keep <= 0 (that case is handled by the no-history path) or when the
+// count is already within the cap.
+func retentionDrops(versions []childEntry, keep int) []childEntry {
+	if keep <= 0 || len(versions) <= keep {
+		return nil
+	}
+	sorted := make([]childEntry, len(versions))
+	copy(sorted, versions)
+	sort.Slice(sorted, func(i, j int) bool {
+		if !sorted[i].TagDate.Equal(sorted[j].TagDate) {
+			return sorted[i].TagDate.Before(sorted[j].TagDate)
+		}
+		return sorted[i].Hash < sorted[j].Hash
+	})
+	return sorted[:len(sorted)-keep]
+}
+
+// fileChildren reads the file children of a directory DirUID via a reverse
+// parent-edge lookup. Unlike ReadTieDir it does NOT filter by media tie-type, so
+// plain "file"/"unknown-file" children are included (they must be, or a
+// superseded .txt would be invisible to reconciliation). Directory-marked
+// children (subdirs, including _prev dirs) and children with no recorded filename
+// are skipped.
+func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
+	o := GetOptions{Reverse: true, Filter: str(TieParent), GetNextLevel: true}
+	r, err := tie.Get(string(uid), o)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []childEntry
+	r.Result.ForEachKey(func(key string) {
+		meta := r.NextLevelResult[key]
+		if meta[str(TieTypeProperty)].Has(str(TieDirectory)) {
+			return // subdir, not a file
+		}
+		// A hash can carry several filenames (identical bytes shared under
+		// different names). Pick one deterministically for display/history-dir
+		// naming; reconciliation itself keys on the hash, so the choice only
+		// affects the _prev directory name.
+		names := meta[str(TieFilename)].ToSlice()
+		if len(names) == 0 {
+			return // cannot reconcile a child with no recorded name
+		}
+		sort.Strings(names)
+		out = append(out, childEntry{
+			Hash:     key,
+			Filename: names[0],
+			TagDate:  parseTagDate(meta[str(TieTagDate)].ToString()),
+		})
+	})
+	return out, nil
+}
+
+// dirPath returns the (uid,"path") value of a directory DirUID, or "" if none.
+func dirPath(tie *TieClient, uid DirUID) (string, error) {
+	r, err := tie.SimpleGet(string(uid))
+	if errors.Is(err, ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return r.Result[string(uid)][str(TiePath)].ToString(), nil
+}
+
+// parentCount returns how many (hash,"parent",*) edges hash currently has.
+func parentCount(tie *TieClient, hash string) (int, error) {
+	r, err := tie.SimpleGet(hash)
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return len(r.Result[hash][str(TieParent)].ToSlice()), nil
+}
+
+// detachChild removes the (hash,"parent",fromDir) edge. If that was the hash's
+// last parent, its per-hash metadata (filename/name/tie-type/... and the tags it
+// carries) is also deleted, since the content is no longer reachable from any
+// directory. Shared content (still parented elsewhere) keeps its metadata.
+func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID) error {
+	b := tie.NewBatchIn(collection)
+	b.Delete(hash, str(TieParent), str(fromDir))
+	if _, err := tie.Batch(b); err != nil {
+		return err
+	}
+	if err := tie.Sync(); err != nil {
+		return err
+	}
+	n, err := parentCount(tie, hash)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil // still reachable from another directory; keep shared metadata
+	}
+	r, err := tie.SimpleGet(hash)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	meta := tie.NewBatchIn(collection)
+	r.Result.ForEachValue2(func(key, value1, value2 string) {
+		meta.Delete(key, value1, value2)
+	})
+	if _, err := tie.Batch(meta); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// moveChildToPrev swaps a superseded file's parent edge from its directory into
+// that file's _prev history DirUID. The content hash and its shared metadata are
+// untouched — only the edge for this directory moves.
+func moveChildToPrev(tie *TieClient, collection string, hash string, fromDir, prevUID DirUID) error {
+	b := tie.NewBatchIn(collection)
+	b.Delete(hash, str(TieParent), str(fromDir))
+	b.Add(hash, str(TieParent), str(prevUID))
+	if _, err := tie.Batch(b); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// removeEmptyPrevDir deletes a _prev directory's own structural triples once it
+// holds no file children, so an empty history dir stops appearing in listings.
+func removeEmptyPrevDir(tie *TieClient, collection string, uid DirUID, path string) error {
+	children, err := fileChildren(tie, uid)
+	if err != nil {
+		return err
+	}
+	if len(children) > 0 {
+		return nil
+	}
+	parents, err := existingValues(tie, str(uid), str(TieParent))
+	if err != nil {
+		return err
+	}
+	b := tie.NewBatchIn(collection)
+	for _, p := range parents {
+		b.Delete(str(uid), str(TieParent), p)
+	}
+	if path != "" {
+		b.Delete(str(uid), str(TiePath), path)
+	}
+	b.Delete(str(uid), str(TieTypeProperty), str(TieDirectory))
+	if _, err := tie.Batch(b); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// reconcileDir makes dir's file children match what this import placed there
+// (want: the set of content hashes placed in this directory). Superseded/orphaned
+// children are moved into a per-file "<name>_prev" history directory, keeping at
+// most prevVersions of each (oldest dropped first); when prevVersions is 0 the old
+// edge is removed outright and the content is garbage-collected if no directory
+// still references it. Diagnostics go to stderr so stdout stays clean.
+func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string]bool, prevVersions int) error {
+	children, err := fileChildren(tie, uid)
+	if err != nil {
+		return err
+	}
+	superseded := supersededChildren(children, want)
+	if len(superseded) == 0 {
+		return nil
+	}
+
+	basePath, err := dirPath(tie, uid)
+	if err != nil {
+		return err
+	}
+
+	// Group superseded children by their filename: all versions of one logical
+	// file share a single _prev directory.
+	byName := make(map[string][]childEntry)
+	for _, c := range superseded {
+		byName[c.Filename] = append(byName[c.Filename], c)
+	}
+
+	for name, olds := range byName {
+		if prevVersions <= 0 {
+			for _, c := range olds {
+				fmt.Fprintf(os.Stderr, "reconcile: removing superseded %s (%s) from %s\n", name, c.Hash, uid)
+				if err := detachChild(tie, collection, c.Hash, uid); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
+		prevPath := basePath + "/" + name + prevDirSuffix
+		prevUID, err := tie.MkTieDirAll(prevPath)
+		if err != nil {
+			return err
+		}
+		for _, c := range olds {
+			fmt.Fprintf(os.Stderr, "reconcile: versioning superseded %s (%s) into %s\n", name, c.Hash, prevPath)
+			if err := moveChildToPrev(tie, collection, c.Hash, uid, prevUID); err != nil {
+				return err
+			}
+		}
+
+		versions, err := fileChildren(tie, prevUID)
+		if err != nil {
+			return err
+		}
+		for _, drop := range retentionDrops(versions, prevVersions) {
+			fmt.Fprintf(os.Stderr, "reconcile: retention dropping %s (%s) from %s\n", drop.Filename, drop.Hash, prevPath)
+			if err := detachChild(tie, collection, drop.Hash, prevUID); err != nil {
+				return err
+			}
+		}
+		if err := removeEmptyPrevDir(tie, collection, prevUID, prevPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// existingValues returns the value2s currently stored for (key, relation). It is
+// used to make a scalar field single-valued: delete every existing value in a
+// batch before adding the new one (a batch runs deletes before adds). A missing
+// key yields no values and no error.
+func existingValues(tie *TieClient, key, relation string) ([]string, error) {
+	r, err := tie.SimpleGet(key)
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return r.Result[key][relation].ToSlice(), nil
 }
 
 func Tag(tie *TieClient, info TagInfo, collection string) error {
@@ -428,7 +733,17 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 	batch.Add(hash, str(TieMediaType), info.MediaType)
 	batch.Add(hash, str(TieTypeProperty), str(info.TieType))
 	batch.Add(hash, str(TieFilesize), strconv.Itoa(info.Size))
-	batch.Add(hash, str(TieTagDate), time.Now().Format(time.DateTime))
+	// tag-date is single-valued (the last import time). Re-tagging the same hash
+	// must not accumulate dates, so drop any existing value(s) first; the batch
+	// applies deletes before adds.
+	oldDates, err := existingValues(tie, hash, str(TieTagDate))
+	if err != nil {
+		return err
+	}
+	for _, d := range oldDates {
+		batch.Delete(hash, str(TieTagDate), d)
+	}
+	batch.Add(hash, str(TieTagDate), time.Now().Format(tagDateFormat))
 	for _, tag := range info.Tags {
 		if len(tag) > 0 {
 			if tag[0] == '-' {
@@ -487,7 +802,16 @@ func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string,
 	batch.Add(str(uid), str(TieFilename), dirname)
 	batch.Add(str(uid), str(TieName), dirname)
 	batch.Add(str(uid), str(TieFilesize), strconv.Itoa(size))
-	batch.Add(str(uid), str(TieTagDate), time.Now().Format(time.DateTime))
+	// tag-date is single-valued; drop prior value(s) before adding the new one so
+	// re-import does not accumulate dates on the DirUID.
+	oldDates, err := existingValues(tie, str(uid), str(TieTagDate))
+	if err != nil {
+		return err
+	}
+	for _, d := range oldDates {
+		batch.Delete(str(uid), str(TieTagDate), d)
+	}
+	batch.Add(str(uid), str(TieTagDate), time.Now().Format(tagDateFormat))
 	for _, tag := range tags {
 		if len(tag) > 0 {
 			if tag[0] == '-' {
@@ -576,6 +900,10 @@ type File struct {
 	TieType   TieType
 	MediaType string
 	Size      int
+	// TagDate is the file's last import time, parsed from its (hash,"tag-date")
+	// triple. Zero when no date is recorded. The FUSE mount surfaces it as the
+	// file's mtime.
+	TagDate time.Time
 }
 
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
@@ -635,13 +963,41 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 				TieType:   StringToTieType(types.ToString()),
 				MediaType: meta[str(TieMediaType)].ToString(),
 				Size:      size,
+				TagDate:   parseTagDate(meta[str(TieTagDate)].ToString()),
 			}
 			dir.Files = append(dir.Files, f)
 
 		}
 	})
 
+	// dir.Files comes from a map iteration, so its order is nondeterministic.
+	// Sort it stably (filename, then hash) so callers that disambiguate colliding
+	// names produce the same result on every readdir and matching lookup.
+	sort.Slice(dir.Files, func(i, j int) bool {
+		if dir.Files[i].Filename != dir.Files[j].Filename {
+			return dir.Files[i].Filename < dir.Files[j].Filename
+		}
+		return dir.Files[i].Uid < dir.Files[j].Uid
+	})
+
 	return dir, nil
+}
+
+// parseTagDate parses a stored tag-date value. Current values carry microsecond
+// precision (tagDateFormat); values written before that used second resolution
+// (time.DateTime). Both are accepted. A blank or malformed value yields the zero
+// Time.
+func parseTagDate(s string) time.Time {
+	if s == "" {
+		return time.Time{}
+	}
+	if t, err := time.ParseInLocation(tagDateFormat, s, time.Local); err == nil {
+		return t
+	}
+	if t, err := time.ParseInLocation(time.DateTime, s, time.Local); err == nil {
+		return t
+	}
+	return time.Time{}
 }
 
 // RenameFile renames and/or moves a file in the path tree. The file's identity

@@ -4,6 +4,7 @@ Namespace = 'Collections'
 Collection = 'Main'
 Webservice = 'http://localhost:1161'
 DefaultFileHosts = ['default']
+PrevVersions = 3
 
 [FileHosts.default]
 URL = 'http://localhost:1162'

@@ -83,7 +83,7 @@ extension), and records — keyed by the file's content hash:
 <hash>  tie-type    audio-file      (detected: image/audio/video/document/archive)
 <hash>  tie-type    file
 <hash>  filesize    <bytes>
-<hash>  tag-date    <timestamp>
+<hash>  tag-date    <timestamp>     (single-valued last-import time, µs precision)
 <hash>  tag         favorite
 <hash>  tag         chill
 tags    all         favorite        (registry of known tags)
@@ -192,6 +192,48 @@ Because content is addressed by hash, re-importing an unchanged tree re-uploads
 nothing new and re-tags idempotently, so imports are safe to repeat — and since
 the tree is just `parent`/`path` triples over content-addressed files, a tree can
 later be re-placed by rewriting those triples without re-uploading a byte.
+
+### Re-import is a sync: superseded files are versioned
+
+Re-importing a tree whose contents *changed* is a true sync, not just an additive
+re-tag. When a file's bytes change (a new content hash under the same name), or a
+file is renamed/deleted on disk, `import` reconciles each directory against what
+the current upload actually placed there and moves the superseded content out of
+the directory instead of leaving a stale duplicate alongside the new version.
+
+Reconciliation keys on the **content hash**, not the filename: an existing
+`(hash, parent, <dir>)` edge is kept only if this import placed that hash in the
+directory. Because identical bytes collapse to one content address, a single hash
+can carry several filenames and live under several directories — the hash is the
+only unambiguous identity.
+
+A superseded file's old content is moved into a per-file **history directory**
+named `<filename>_prev` (a real `DirUID` subdirectory of the same parent), so:
+
+```
+Album/
+  cover.jpg              ← current content
+  cover.jpg_prev/        ← version history for cover.jpg
+    cover.jpg            ← the previous content, still browsable
+```
+
+How many versions are kept is set by the client config's `PrevVersions` (default
+`3`; the oldest is dropped once the cap is exceeded). Setting `PrevVersions = 0`
+disables history: the old edge is removed directly, and if that content is no
+longer referenced by any directory its per-hash metadata is deleted too. Only the
+`(hash, parent, <thisDir>)` edge is ever moved or deleted — content shared into
+another directory (the same hash parented elsewhere) keeps its metadata and is
+never touched. An unchanged file is left exactly as-is, and a `_prev` directory
+that ends up empty removes itself from listings.
+
+> **Note — `_prev` visibility in the mount.** Version retention orders by each
+> file's `tag-date` (its last import time), which is stored with microsecond
+> precision so rapid re-imports still order correctly. The db mount surfaces
+> `tag-date` as the file's modification time (`mtime`). A `_prev` directory is
+> only *visible* under the mount for recognized media types
+> (image/audio/video/document), because `ReadTieDir` drops plain
+> `file`/`unknown-file` children from listings; reconciliation itself works for
+> any type.
 
 > **Note — absolute-path rooting is machine-specific.** The default root (rule 3)
 > is keyed on the importing machine's absolute path, which means the same logical

@@ -367,6 +367,39 @@ func disambiguate(files []client.TaggedFile) []client.TaggedFile {
 	return files
 }
 
+// disambiguateFiles uniquifies colliding filenames in a ReadTieDir file listing
+// the same way disambiguate does for TaggedFiles: the first occurrence keeps the
+// bare name, later collisions get a "~<hash8>" suffix. This matters for a "_prev"
+// history directory, which can hold several versions of one file all recorded
+// under the same filename. ReadTieDir returns dir.Files in a stable order, so the
+// suffixing is deterministic across Readdir/Lookup. The input slice is mutated and
+// returned.
+func disambiguateFiles(files []client.File) []client.File {
+	seen := make(map[string]int, len(files))
+	for i := range files {
+		name := files[i].Filename
+		if seen[name] == 0 {
+			seen[name]++
+			continue
+		}
+		seen[name]++
+		files[i].Filename = suffixName(name, files[i].Uid)
+	}
+	return files
+}
+
+// fileNode builds a content-addressed file node for a directory child, carrying
+// its import date so Getattr can report it as the file's mtime.
+func fileNode(state *TieDBFuse, f client.File) *node {
+	return &node{
+		Hash:  f.Uid,
+		Size:  f.Size,
+		Mode:  fuse.S_IFREG,
+		State: state.fuseTree,
+		Mtime: f.TagDate,
+	}
+}
+
 // suffixName inserts a "~<short>" disambiguator into name, before the final
 // extension if there is one, using the first 8 characters of subject (a DirUID or
 // content hash). "SomeDir" -> "SomeDir~42e55dcf"; "a.jpg" -> "a~0f4098fb.jpg".
@@ -526,7 +559,7 @@ func (d *taggedDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			}
 		}
 	}
-	for _, f := range dir.Files {
+	for _, f := range disambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
 			Name: f.Filename,
 			Mode: fuse.S_IFREG,
@@ -551,11 +584,11 @@ func (d *taggedDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 			return d.NewInode(ctx, child, stable), 0
 		}
 	}
-	for _, f := range dir.Files {
+	for _, f := range disambiguateFiles(dir.Files) {
 		if f.Filename != name {
 			continue
 		}
-		child := &node{Hash: f.Uid, Size: f.Size, Mode: fuse.S_IFREG, State: d.state.fuseTree}
+		child := fileNode(d.state, f)
 		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(f.Uid)}
 		out.Size = uint64(f.Size)
 		return d.NewInode(ctx, child, stable), 0
@@ -617,7 +650,7 @@ func (d *pathDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			}
 		}
 	}
-	for _, f := range dir.Files {
+	for _, f := range disambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
 			Name: f.Filename,
 			Mode: fuse.S_IFREG,
@@ -641,11 +674,11 @@ func (d *pathDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 			return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 		}
 	}
-	for _, f := range dir.Files {
+	for _, f := range disambiguateFiles(dir.Files) {
 		if f.Filename != name {
 			continue
 		}
-		child := &node{Hash: f.Uid, Size: f.Size, Mode: fuse.S_IFREG, State: d.state.fuseTree}
+		child := fileNode(d.state, f)
 		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(f.Uid)}
 		out.Size = uint64(f.Size)
 		return d.NewInode(ctx, child, stable), 0
@@ -840,7 +873,7 @@ func (d *tagsDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			}
 		}
 	}
-	for _, f := range dir.Files {
+	for _, f := range disambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
 			Name: f.Filename,
 			Mode: fuse.S_IFREG,
@@ -876,7 +909,7 @@ func (d *tagsDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 			return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 		}
 	}
-	for _, f := range dir.Files {
+	for _, f := range disambiguateFiles(dir.Files) {
 		if f.Filename != name {
 			continue
 		}

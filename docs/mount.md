@@ -125,6 +125,20 @@ tagged directories, `query/jazz type:file` lists the tagged files, and a bare
 go on its `DirUID`; a file's tags go on its content hash. To retag a single
 directory or file, edit its `.tags` control file under `/tags`.
 
+Re-importing a changed tree **versions** superseded files rather than leaving
+stale duplicates: `client.ImportDir` reconciles each directory (keyed on content
+hash, not filename) and moves a superseded file's `parent` edge into a per-file
+`<filename>_prev` history `DirUID`, keeping up to `Config.PrevVersions` of each
+(oldest dropped first; `0` deletes outright and garbage-collects unreferenced
+content). Only the edge for *this* directory moves, so content shared into another
+directory is never disturbed. A `_prev` dir appears in these trees like any other
+subdirectory (`taggedDir`/`pathDir`); files sharing a name within it are made
+unique by `disambiguateFiles`, the `client.File` analogue of `disambiguate`. Files
+carry an `mtime` from their `tag-date` (last import time, microsecond precision):
+`ReadTieDir` fills `File.TagDate`, which `fileNode` threads into `node.Mtime`, and
+`node.Getattr` reports via `SetTimes`. See
+[`media-database.md`](media-database.md#re-import-is-a-sync-superseded-files-are-versioned).
+
 Because a flat query result can gather two entries that legitimately share a
 name (e.g. `rootA/SomeDir` and `rootB/SomeDir`, or a `track1.jpg` in two albums),
 `disambiguate` makes the names within one result unique: the first keeps the bare
@@ -337,3 +351,8 @@ writes (`mv` there returns "Operation not supported").
 - **Creating files through the mount.** `mkdir` creates directory nodes, but
   there is no `Create`/`Write` path for new *files* — that needs a filehost
   upload plus tagging, a larger change. `touch`/copy-in are unsupported.
+- **Deleting through the mount.** No node implements `Unlink`/`Rmdir`, so `rm`
+  inside the mount fails. Superseded versions are pruned automatically by import's
+  `PrevVersions` retention; deleting a single version (or an empty `_prev` dir) by
+  hand from the mount would need an `Unlink`/`Rmdir` path wired to a client
+  triple-delete helper.

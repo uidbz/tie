@@ -75,6 +75,34 @@ func TestDisambiguate(t *testing.T) {
 	}
 }
 
+func TestDisambiguateFiles(t *testing.T) {
+	// A _prev history dir can hold several versions of one file, all recorded
+	// under the same filename; disambiguateFiles must uniquify them by hash.
+	in := []client.File{
+		{Uid: "0f4098fbf4a52ae8cccccccccccccccc", Filename: "file1.txt"},
+		{Uid: "d39f1cac0b7accc6dddddddddddddddd", Filename: "file1.txt"},
+		{Uid: "eeee0000eeee0000eeee0000eeee0000", Filename: "unique.txt"},
+	}
+	got := disambiguateFiles(in)
+	want := []string{
+		"file1.txt",           // first keeps the bare name
+		"file1~d39f1cac.txt",  // collision suffixed before the extension
+		"unique.txt",          // no collision, untouched
+	}
+	for i, w := range want {
+		if got[i].Filename != w {
+			t.Errorf("entry %d: got %q, want %q", i, got[i].Filename, w)
+		}
+	}
+	seen := map[string]bool{}
+	for _, f := range got {
+		if seen[f.Filename] {
+			t.Errorf("duplicate name after disambiguation: %q", f.Filename)
+		}
+		seen[f.Filename] = true
+	}
+}
+
 func TestBaseName(t *testing.T) {
 	tests := []struct{ in, want string }{
 		{"file:/music", "music"},
