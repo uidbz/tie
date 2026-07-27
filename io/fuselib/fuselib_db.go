@@ -431,22 +431,94 @@ func taggedFileStream(state *TieDBFuse, files []client.TaggedFile) fs.DirStream 
 	return fs.NewListDirStream(entries)
 }
 
-// lookupTaggedFile resolves one filename within a set of tagged files to a
-// content-addressed node (a file serves its bytes, a tagged directory expands as
-// an immutable tiedir tree).
+// lookupTaggedFile resolves one filename within a set of tagged files. A file
+// result becomes a content-addressed node serving its bytes; a directory result's
+// hash is a DirUID, so it expands live via ReadTieDir (a taggedDir), reflecting
+// the directory's current contents rather than an import-time snapshot.
 func lookupTaggedFile(ctx context.Context, parent *fs.Inode, state *TieDBFuse, files []client.TaggedFile, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	for _, f := range files {
 		if f.Filename != name {
 			continue
 		}
-		mode := uint32(fuse.S_IFREG)
 		if f.IsDir {
-			mode = fuse.S_IFDIR
+			child := &taggedDir{state: state, uid: client.DirUID(f.Hash)}
+			stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: state.fuseTree.inodeID(f.Hash)}
+			return parent.NewInode(ctx, child, stable), 0
 		}
-		child := &node{Hash: f.Hash, Size: f.Size, Mode: mode, State: state.fuseTree}
-		stable := fs.StableAttr{Mode: mode, Ino: state.fuseTree.inodeID(f.Hash)}
+		child := &node{Hash: f.Hash, Size: f.Size, Mode: fuse.S_IFREG, State: state.fuseTree}
+		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: state.fuseTree.inodeID(f.Hash)}
 		out.Size = uint64(f.Size)
 		return parent.NewInode(ctx, child, stable), 0
+	}
+	return nil, syscall.ENOENT
+}
+
+// taggedDir expands a directory that appeared in a tag/type query result. It is
+// keyed on the directory's DirUID and lists the DirUID's current children via
+// ReadTieDir — the same live path-tree navigation used by /files and /tags — so
+// entering a query-result directory reflects its present contents. Subdirectories
+// recurse as taggedDirs; files resolve to content-addressed nodes.
+type taggedDir struct {
+	fs.Inode
+	state *TieDBFuse
+	uid   client.DirUID
+}
+
+var (
+	_ = (fs.NodeReaddirer)((*taggedDir)(nil))
+	_ = (fs.NodeLookuper)((*taggedDir)(nil))
+)
+
+func (d *taggedDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	dir, err := client.ReadTieDir(d.state.tie, d.uid)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files))
+	for _, sub := range dir.SubDirs {
+		for _, p := range sub.Paths {
+			if name := baseName(p); name != "" {
+				entries = append(entries, fuse.DirEntry{
+					Name: name,
+					Mode: fuse.S_IFDIR,
+					Ino:  d.state.fuseTree.inodeID(string(sub.Uid)),
+				})
+			}
+		}
+	}
+	for _, f := range dir.Files {
+		entries = append(entries, fuse.DirEntry{
+			Name: f.Filename,
+			Mode: fuse.S_IFREG,
+			Ino:  d.state.fuseTree.inodeID(f.Uid),
+		})
+	}
+	return fs.NewListDirStream(entries), 0
+}
+
+func (d *taggedDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	dir, err := client.ReadTieDir(d.state.tie, d.uid)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+	for _, sub := range dir.SubDirs {
+		for _, p := range sub.Paths {
+			if baseName(p) != name {
+				continue
+			}
+			child := &taggedDir{state: d.state, uid: sub.Uid}
+			stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: d.state.fuseTree.inodeID(string(sub.Uid))}
+			return d.NewInode(ctx, child, stable), 0
+		}
+	}
+	for _, f := range dir.Files {
+		if f.Filename != name {
+			continue
+		}
+		child := &node{Hash: f.Uid, Size: f.Size, Mode: fuse.S_IFREG, State: d.state.fuseTree}
+		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(f.Uid)}
+		out.Size = uint64(f.Size)
+		return d.NewInode(ctx, child, stable), 0
 	}
 	return nil, syscall.ENOENT
 }

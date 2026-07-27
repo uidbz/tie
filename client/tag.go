@@ -361,36 +361,29 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			if err != nil {
 				return err
 			}
-			// Tag the directory's tiedir content hash so it appears in type/tag
-			// queries. The directory's TieType is already set via MkTieDir and
-			// SetDirType, but the tiedir blob itself needs to be tagged with the
-			// directory's tags so it's discoverable and expandable.
+			// A directory's tags, name, and size live on its DirUID (the stable
+			// path-tree node), NOT on the immutable tiedir snapshot blob. This is
+			// the single canonical identity for a directory in tag/type queries,
+			// matching the .tags/.type control files, which also write the DirUID.
+			// Only the import root carries the given tags: subdirectories stay
+			// untagged so a tag query lists one entry (the root) that expands into
+			// the tree, rather than every nested directory as a flat sibling.
 			// Use filepath.Base to get just the directory name, not the full path.
 			dirname := filepath.Base(rel)
-			if dirname == "." {
-				// Root directory of the import; use the last segment of the virtual path.
+			var dirTags []string
+			if rel == "." {
+				// Root directory of the import; use the last segment of the virtual
+				// path for the name and apply the caller's tags here.
 				dirname = filepath.Base(strings.TrimPrefix(rootPath, FileURIScheme))
+				dirTags = tags
 			}
-			info := TagInfo{
-				Hash:      x.Hash,
-				File:      dirname, // Just the directory name for display
-				Size:      x.Size,
-				MediaType: x.MediaType,
-				Directory: uid, // The tiedir blob's parent is itself (self-reference).
-				TieType:   TieDirectory,
-				Tags:      tags,
-				Metadata:  metadata.Media{}, // Directories don't have embedded metadata.
-			}
-			if err := Tag(tie, info, collection); err != nil {
+			if err := tagDir(tie, uid, dirname, x.Size, dirTags, collection); err != nil {
 				return err
 			}
-			// Link the tiedir content hash to the DirUID so the directory is
-			// expandable in content-addressed contexts (e.g. tag query results).
-			// This bidirectional association lets the FUSE layer resolve a DirUID
-			// to its tiedir blob when entering a directory from a type query.
+			// Link the DirUID to its immutable tiedir snapshot blob so the
+			// content-addressed snapshot remains reachable from the live node.
 			batch := tie.NewBatchIn(collection)
 			batch.Add(string(uid), str(TieTiedirHash), x.Hash)
-			batch.Add(x.Hash, str(TieDirUID), string(uid))
 			if _, err := tie.Batch(batch); err != nil {
 				return err
 			}
@@ -404,6 +397,9 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if err != nil {
 			return err
 		}
+		// Files carry their own metadata but not the import's tags: the tags
+		// belong to the root directory, and a tag query reaches the files by
+		// expanding that directory rather than listing every file flat.
 		info := TagInfo{
 			Hash:      x.Hash,
 			File:      x.Filename,
@@ -411,7 +407,6 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			MediaType: x.MediaType,
 			Directory: parent,
 			TieType:   fileType,
-			Tags:      tags,
 			Metadata:  fileMeta[x.Filename],
 		}
 		if err := Tag(tie, info, collection); err != nil {
@@ -482,6 +477,40 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 		}
 	}
 
+	return nil
+}
+
+// tagDir writes a directory's queryable metadata onto its DirUID: display name,
+// size, tag date, and its tags (each tag also registered in the (tags,"all",<tag>)
+// table, mirroring Tag/SetTags). A leading "-" on a tag deletes it. The structural
+// (uid,"tie-type","directory") marker and the (uid,"path",...) triple are already
+// written by MkTieDir, so they are not repeated here. Unlike Tag, this does not
+// touch the tiedir content hash — a directory's identity for tagging is its DirUID.
+func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string, collection string) error {
+	batch := tie.NewBatchIn(collection)
+	batch.Add(str(uid), str(TieFilename), dirname)
+	batch.Add(str(uid), str(TieName), dirname)
+	batch.Add(str(uid), str(TieFilesize), strconv.Itoa(size))
+	batch.Add(str(uid), str(TieTagDate), time.Now().Format(time.DateTime))
+	for _, tag := range tags {
+		if len(tag) > 0 {
+			if tag[0] == '-' {
+				batch.Delete(str(uid), str(TieTag), tag[1:])
+			} else {
+				batch.Add(str(uid), str(TieTag), tag)
+				batch.Add(str(TieTags), str(TieAll), tag)
+			}
+		}
+	}
+	r, err := tie.Batch(batch)
+	if err != nil {
+		return err
+	}
+	for _, a := range r.AddReplys {
+		if !a.Success {
+			return errors.New("Error tagging directory: " + a.OrigKey + " First error message: " + a.Message)
+		}
+	}
 	return nil
 }
 

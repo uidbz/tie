@@ -89,7 +89,14 @@ written originally by `client.Tag` and `client.MkTieDir`:
   stripped), `(hash, "parent", <DirUID>)`, plus `(hash, "tag", <tag>)` per tag.
 - **Directory** — subject is a random 64-hex `DirUID`:
   `(uid, "parent", <parentUID>)`, `(uid, "path", "file:/a/b")`,
-  `(uid, "tie-type", "directory")`.
+  `(uid, "tie-type", "directory")`. When imported with tags/a dir-type, the
+  `DirUID` also carries `(uid, "filename", "<name>")`, `(uid, "name", ...)`,
+  `(uid, "tag", <tag>)` per tag, and its classification labels via
+  `(uid, "tie-type", "audio-dir")`. A directory's tags, name, and tie-type are
+  **always** properties of its `DirUID` — the stable path-tree node — never of the
+  immutable `tiedir` snapshot blob. Import links the two with a single
+  `(uid, "tiedir-hash", <hash>)` edge so the content-addressed snapshot stays
+  reachable, but the snapshot blob itself carries no tagging triples.
 - **Membership** is the `parent` edge on the child; a directory's children are
   found by a *reverse* lookup on `parent = <uid>` (`client.ReadTieDir`). There is
   no child-list triple.
@@ -101,6 +108,23 @@ hash**, not of a directory slot. If the same content appears in two directories,
 they share one `filename` triple and one tag set. Renaming a file or editing its
 tags in one place changes it everywhere that content appears, and in every
 `/query` view. This is inherent to the content-addressed model, not a bug.
+
+A tag/type query returns one entry per subject carrying the tag, so a directory
+appears exactly once (its `DirUID`) rather than twice — the snapshot blob is no
+longer tagged. Entering a query-result directory (`taggedDir`) lists the
+`DirUID`'s **current** children via `client.ReadTieDir`, the same live navigation
+`/files` and `/tags` use, so it reflects present contents and stays enterable —
+not the import-time snapshot. Directories imported before this change may still
+carry tags on their snapshot blob (showing a duplicate/empty entry); re-import
+them to move the tags onto the `DirUID`.
+
+`import` applies the given tags to the **import root directory only** — nested
+subdirectories and the individual files are created (so the whole tree is
+browsable) but left untagged. A query for the tag therefore lists a single
+directory that expands into the full tree (`query/jazz` → `album` →
+`cd1`/`cd2` → tracks), instead of every nested directory and file appearing as a
+flat sibling. To tag a subdirectory or a file individually, edit its `.tags`
+control file under `/tags`.
 
 ## Rename and move (`/files`)
 
