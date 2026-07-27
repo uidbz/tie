@@ -18,10 +18,14 @@ func main() {
 	// Load config before building the command tree so `import` can generate a
 	// subcommand per configured dir-type. The -c/--config flag isn't parsed yet
 	// at this point, so peek it out of os.Args directly.
-	config, err := client.LoadConfig(configArg(os.Args))
+	configName := configArg(os.Args)
+	config, created, err := client.LoadOrCreateConfig(configName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error opening config file:", err)
 	} else {
+		if created {
+			fmt.Fprintf(os.Stderr, "No config found; created a default at %s\n", config.Path())
+		}
 		tie = client.NewTieClient(config)
 	}
 

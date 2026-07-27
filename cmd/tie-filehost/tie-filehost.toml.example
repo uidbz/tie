@@ -9,10 +9,11 @@ DbPath = "/data"
 # Empty or "0" disables the reaper (all blobs kept forever).
 ReapInterval = "1h"
 
-# TLS is normally terminated by a reverse proxy in front of the filehost:
-# run Insecure and bind ListenOn to localhost (e.g. "127.0.0.1:1162").
-# Alternatively, set CertFile/KeyFile to serve HTTPS directly.
-Insecure = false
+# Plain HTTP by default: the expected setup is a personal library on a single
+# PC or a small trusted LAN, bound to localhost. To serve HTTPS directly, set
+# Insecure = false and point CertFile/KeyFile at a cert pair; otherwise put a
+# TLS-terminating reverse proxy in front and keep Insecure = true on localhost.
+Insecure = true
 CertFile = ""
 KeyFile = ""
 

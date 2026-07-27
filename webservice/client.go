@@ -8,18 +8,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/go-resty/resty/v2"
 )
 
 type Client struct {
 	server      string
 	credentials Credentials
-	r           *resty.Client
-	// hc serves the streaming path (RunStream). Plain net/http gives clean,
-	// incremental access to an unparsed response body, which resty's buffered
-	// Run does not.
-	hc *http.Client
+	hc          *http.Client
 }
 
 type Credentials struct {
@@ -33,27 +27,30 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 		e := Reply{ReplyTypeEmpty, nil}
 		return &e, errMarshal
 	}
-	resp, err := c.r.R().
-		SetHeader("Content-Type", "application/json").
-		SetBody(body).
-		SetBasicAuth(c.credentials.Username, c.credentials.Password).
-		Post(c.server + "/" + request.GetId())
-
-	defer func() {
-		if body := resp.RawBody(); body != nil {
-			body.Close()
-		}
-	}()
-
+	req, err := http.NewRequest(http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode() == http.StatusUnauthorized {
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(c.credentials.Username, c.credentials.Password)
+
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
 		return nil, errors.New("Unauthorized")
 	}
 
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
 	replyStructPtr := request.GetReplyStructPtr()
-	errUnmarshal := json.Unmarshal(resp.Body(), replyStructPtr)
+	errUnmarshal := json.Unmarshal(respBody, replyStructPtr)
 	if errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
@@ -63,7 +60,7 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 		ReplyStructPtr: replyStructPtr,
 	}
 
-	return &reply, err
+	return &reply, nil
 }
 
 // RunStream POSTs the request and hands the raw, unparsed response body to
@@ -109,17 +106,9 @@ func NewClient(server, username, password string, insecure bool) *Client {
 
 	if strings.HasPrefix(c.server, "https") {
 		t := tls.Config{InsecureSkipVerify: insecure}
-		c.r = resty.New().SetTLSClientConfig(&t)
 		c.hc = &http.Client{Transport: &http.Transport{TLSClientConfig: &t}}
-		if insecure {
-			c.r.SetDisableWarn(true)
-		}
 	} else {
-		c.r = resty.New()
 		c.hc = &http.Client{}
-		if strings.HasPrefix(c.server, "http://localhost") {
-			c.r.SetDisableWarn(true)
-		}
 	}
 
 	return c

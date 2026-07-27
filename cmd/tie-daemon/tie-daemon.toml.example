@@ -8,9 +8,11 @@
 ListenOn = ":1161"
 DbPath = "/data"
 
-# TLS is normally terminated by a reverse proxy: run Insecure and bind ListenOn
-# to localhost, or point CertFile/KeyFile at a cert pair to serve HTTPS directly.
-Insecure = false
+# Plain HTTP by default: the expected setup is a personal library on a single
+# PC or a small trusted LAN, bound to localhost. To serve HTTPS directly, set
+# Insecure = false and point CertFile/KeyFile at a cert pair; otherwise put a
+# TLS-terminating reverse proxy in front and keep Insecure = true on localhost.
+Insecure = true
 CertFile = ""
 KeyFile = ""
 

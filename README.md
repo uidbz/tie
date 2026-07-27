@@ -171,13 +171,18 @@ first). Run `tie conf create` to generate one.
 `tie-filehost` servers. Filehosts are named in config:
 
 ```toml
-Webservice = 'https://localhost:1161'
+Webservice = 'http://localhost:1161'
 DefaultFileHosts = ['default']
 
 [FileHosts.default]
-URL = 'https://localhost:1162'
+URL = 'http://localhost:1162'
 Insecure = false   # true skips TLS certificate verification (self-signed certs)
 ```
+
+The default config uses plain `http://localhost`, matching the servers' default
+of `Insecure = true`. This suits a personal library on a single PC or a small
+trusted LAN. To use TLS, switch the URLs to `https://` and configure the servers
+with `CertFile`/`KeyFile` (or a reverse proxy) — see the deployment notes below.
 
 `upload`, `download`, `import`, and `mount` select a filehost with `--host
 <name>` (defaulting to the first `DefaultFileHosts` entry). `upload`/`download`
@@ -277,10 +282,16 @@ Release notes are kept in [CHANGELOG.md](CHANGELOG.md).
 ## Deployment
 
 `tie-daemon` (triple store, port 1161) and `tie-filehost` (blob store, port
-1162) are two separate services. TLS is normally terminated by a reverse proxy
-(nginx / Caddy) in front of them: run with `Insecure = true` bound to
-localhost, and let the proxy handle certificates. Alternatively set
-`CertFile`/`KeyFile` in each config to serve HTTPS directly.
+1162) are two separate services. They default to plain HTTP (`Insecure = true`)
+with `ListenOn = ":116x"`, which binds **all interfaces** (`0.0.0.0`) — every
+host on your LAN can reach them, unencrypted, over HTTP basic auth. This is
+intended for a personal library on a trusted home network. Bind `ListenOn` to
+`127.0.0.1` for local-only access, and do not expose these ports to an
+untrusted network as-is.
+
+For TLS, either set `CertFile`/`KeyFile` in each config to serve HTTPS directly,
+or put a reverse proxy (nginx / Caddy) in front, keep `Insecure = true`, and
+bind `ListenOn` to localhost so only the proxy reaches the service.
 
 ### Running as system services
 

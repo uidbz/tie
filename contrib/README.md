@@ -46,13 +46,24 @@ upgrade binaries is safe.
 | `/var/lib/tie/db`           | daemon triple-store data                 |
 | `/var/lib/tie/data`         | filehost content-addressed blobs         |
 
-## TLS
+## Network exposure and TLS
 
-The service files run the daemons as configured in their TOML. TLS is normally
-terminated by a reverse proxy (nginx / Caddy) in front of them: run with
-`Insecure = true` and bind `ListenOn` to localhost, and let the proxy handle
-certificates. Alternatively set `CertFile`/`KeyFile` in the config to serve
-HTTPS directly.
+The example configs default to plain HTTP (`Insecure = true`) with
+`ListenOn = ":1161"` / `":1162"`. The intended setup is a personal media
+library on a single PC or a small trusted LAN, so this works out of the box with
+no certificate setup.
+
+Note that `:1161` / `:1162` bind **all interfaces** (`0.0.0.0`), so the services
+are reachable — unencrypted, with only HTTP basic auth — from every host on your
+network. That is deliberate: it lets other machines on the LAN reach the library
+without extra configuration. If you only want local access, change `ListenOn` to
+`127.0.0.1:1161` / `127.0.0.1:1162`. Do not expose these ports to an untrusted
+network or the public internet as-is.
+
+To serve HTTPS directly, set `Insecure = false` and point `CertFile`/`KeyFile`
+at a cert pair. Alternatively put a TLS-terminating reverse proxy (nginx /
+Caddy) in front, keep `Insecure = true`, and bind `ListenOn` to localhost so
+only the proxy reaches the service.
 
 ## Logging
 

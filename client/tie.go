@@ -21,11 +21,11 @@ var ErrNotFound = errors.New("key has no associated values")
 var defaultConfig = Config{
 	Username:         "defaultuser",
 	Password:         "defaultpassword",
-	Webservice:       "https://localhost:1161",
+	Webservice:       "http://localhost:1161",
 	Namespace:        "Collections",
 	Collection:       "Main",
 	DefaultFileHosts: []string{"default"},
-	FileHosts:        map[string]FileHost{"default": {URL: "https://localhost:1162"}},
+	FileHosts:        map[string]FileHost{"default": {URL: "http://localhost:1162"}},
 	PrevVersions:     3,
 	key:              InitKey(),
 }
@@ -86,6 +86,12 @@ type Config struct {
 	Queries map[string]string
 	key        []byte
 	verbose    bool
+}
+
+// Path returns the filesystem path the config was loaded from (empty for a
+// default config that was never read from disk).
+func (c Config) Path() string {
+	return c.configPath
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify

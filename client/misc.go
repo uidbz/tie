@@ -3,6 +3,7 @@ package client
 import (
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -36,11 +37,41 @@ func LoadConfig(configName string) (Config, error) {
 	c := Config{}
 	loadPath, err := conf.LoadConfig("tie", configName, &c)
 	if err != nil {
+		// Preserve os.IsNotExist detection for callers, but name the file on a
+		// parse error so a stale/legacy config is easy to find and fix.
+		if !os.IsNotExist(err) {
+			err = fmt.Errorf("parsing %s: %w", loadPath, err)
+		}
 		return defaultConfig, err
 	}
 	c.configPath = loadPath
 
 	return c, nil
+}
+
+// LoadOrCreateConfig loads configName like LoadConfig, but when no config file
+// exists in any of the searched locations it writes a default one to the user
+// config dir and loads that instead. A file that exists but fails to parse is
+// still reported as an error (so a stale/broken config is never overwritten).
+// The returned bool reports whether a new default was created.
+func LoadOrCreateConfig(configName string) (Config, bool, error) {
+	c, err := LoadConfig(configName)
+	if err == nil {
+		return c, false, nil
+	}
+	// Only auto-create when the file is genuinely absent everywhere; a parse
+	// error means a config exists and must not be clobbered.
+	if !os.IsNotExist(err) {
+		return c, false, err
+	}
+	if err := SaveConfig(configName, defaultConfig); err != nil {
+		return defaultConfig, false, err
+	}
+	created, err := LoadConfig(configName)
+	if err != nil {
+		return defaultConfig, false, err
+	}
+	return created, true, nil
 }
 
 func SaveConfig(name string, config Config) error {
