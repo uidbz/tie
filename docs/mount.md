@@ -118,13 +118,12 @@ not the import-time snapshot. Directories imported before this change may still
 carry tags on their snapshot blob (showing a duplicate/empty entry); re-import
 them to move the tags onto the `DirUID`.
 
-`import` applies the given tags to the **import root directory only** — nested
-subdirectories and the individual files are created (so the whole tree is
-browsable) but left untagged. A query for the tag therefore lists a single
-directory that expands into the full tree (`query/jazz` → `album` →
-`cd1`/`cd2` → tracks), instead of every nested directory and file appearing as a
-flat sibling. To tag a subdirectory or a file individually, edit its `.tags`
-control file under `/tags`.
+`import` applies the given tags to **every directory and file** in the tree, so
+the `type:` token can filter one tagged set: `query/jazz type:directory` lists the
+tagged directories, `query/jazz type:file` lists the tagged files, and a bare
+`query/jazz` lists everything (dirs and files together, flat). A directory's tags
+go on its `DirUID`; a file's tags go on its content hash. To retag a single
+directory or file, edit its `.tags` control file under `/tags`.
 
 Because a flat query result can gather two entries that legitimately share a
 name (e.g. `rootA/SomeDir` and `rootB/SomeDir`, or a `track1.jpg` in two albums),

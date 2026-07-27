@@ -365,19 +365,17 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			// path-tree node), NOT on the immutable tiedir snapshot blob. This is
 			// the single canonical identity for a directory in tag/type queries,
 			// matching the .tags/.type control files, which also write the DirUID.
-			// Only the import root carries the given tags: subdirectories stay
-			// untagged so a tag query lists one entry (the root) that expands into
-			// the tree, rather than every nested directory as a flat sibling.
+			// Every directory in the tree (and every file below) carries the given
+			// tags, so "query/<tag> type:directory" and "query/<tag> type:file"
+			// filter the same tagged set down to dirs or files respectively.
 			// Use filepath.Base to get just the directory name, not the full path.
 			dirname := filepath.Base(rel)
-			var dirTags []string
 			if rel == "." {
 				// Root directory of the import; use the last segment of the virtual
-				// path for the name and apply the caller's tags here.
+				// path for the name.
 				dirname = filepath.Base(strings.TrimPrefix(rootPath, FileURIScheme))
-				dirTags = tags
 			}
-			if err := tagDir(tie, uid, dirname, x.Size, dirTags, collection); err != nil {
+			if err := tagDir(tie, uid, dirname, x.Size, tags, collection); err != nil {
 				return err
 			}
 			// Link the DirUID to its immutable tiedir snapshot blob so the
@@ -397,9 +395,6 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if err != nil {
 			return err
 		}
-		// Files carry their own metadata but not the import's tags: the tags
-		// belong to the root directory, and a tag query reaches the files by
-		// expanding that directory rather than listing every file flat.
 		info := TagInfo{
 			Hash:      x.Hash,
 			File:      x.Filename,
@@ -407,6 +402,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			MediaType: x.MediaType,
 			Directory: parent,
 			TieType:   fileType,
+			Tags:      tags,
 			Metadata:  fileMeta[x.Filename],
 		}
 		if err := Tag(tie, info, collection); err != nil {
