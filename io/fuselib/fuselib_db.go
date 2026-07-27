@@ -3,6 +3,7 @@ package fuselib
 import (
 	"context"
 	"os"
+	"path"
 	"strings"
 	"syscall"
 
@@ -337,7 +338,46 @@ var (
 
 func (d *tagQueryDir) query() ([]client.TaggedFile, error) {
 	files, _, err := d.state.tie.FilesWithTags(d.scope, d.include, d.exclude, 0, 0)
-	return files, err
+	if err != nil {
+		return nil, err
+	}
+	return disambiguate(files), nil
+}
+
+// disambiguate makes the display names within one flat query result unique so
+// every match is reachable by name, not just the first. Two directories or files
+// can legitimately share a name (e.g. rootA/SomeDir and rootB/SomeDir, or a
+// track1.jpg in two albums); without this, Lookup would resolve the name to the
+// first match and shadow the rest. The first occurrence of a name keeps it; each
+// later collision gets a "~<short subject>" suffix derived from the entry's DirUID
+// or content hash — stable across calls (the query order is server-sorted) and
+// inserted before the file extension so "track1.jpg" becomes "track1~0f4098fb.jpg".
+// Readdir and Lookup both call query(), so they always agree on the final names.
+func disambiguate(files []client.TaggedFile) []client.TaggedFile {
+	seen := make(map[string]int, len(files))
+	for i := range files {
+		name := files[i].Filename
+		if seen[name] == 0 {
+			seen[name]++
+			continue
+		}
+		seen[name]++
+		files[i].Filename = suffixName(name, files[i].Hash)
+	}
+	return files
+}
+
+// suffixName inserts a "~<short>" disambiguator into name, before the final
+// extension if there is one, using the first 8 characters of subject (a DirUID or
+// content hash). "SomeDir" -> "SomeDir~42e55dcf"; "a.jpg" -> "a~0f4098fb.jpg".
+func suffixName(name, subject string) string {
+	short := subject
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	ext := path.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	return base + "~" + short + ext
 }
 
 func (d *tagQueryDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {

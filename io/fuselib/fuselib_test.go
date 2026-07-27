@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/metadata"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -40,6 +41,37 @@ func TestParseTagQuery(t *testing.T) {
 		if !reflect.DeepEqual(gotExc, tt.wantExc) {
 			t.Errorf("parseTagQuery(%q) exclude = %v, want %v", tt.query, gotExc, tt.wantExc)
 		}
+	}
+}
+
+func TestDisambiguate(t *testing.T) {
+	in := []client.TaggedFile{
+		{Hash: "5075cc466d7a3f83aaaaaaaaaaaaaaaa", Filename: "SomeDir", IsDir: true},
+		{Hash: "42e55dcfce802245bbbbbbbbbbbbbbbb", Filename: "SomeDir", IsDir: true},
+		{Hash: "0f4098fbf4a52ae8cccccccccccccccc", Filename: "track1.jpg"},
+		{Hash: "d39f1cac0b7accc6dddddddddddddddd", Filename: "track1.jpg"},
+		{Hash: "eeee0000eeee0000eeee0000eeee0000", Filename: "unique.txt"},
+	}
+	got := disambiguate(in)
+	want := []string{
+		"SomeDir",              // first keeps the bare name
+		"SomeDir~42e55dcf",     // collision suffixed with short hash
+		"track1.jpg",           // first keeps the bare name
+		"track1~d39f1cac.jpg",  // suffix inserted before the extension
+		"unique.txt",           // no collision, untouched
+	}
+	for i, w := range want {
+		if got[i].Filename != w {
+			t.Errorf("entry %d: got %q, want %q", i, got[i].Filename, w)
+		}
+	}
+	// Every resulting name must be unique so each match is reachable by Lookup.
+	seen := map[string]bool{}
+	for _, f := range got {
+		if seen[f.Filename] {
+			t.Errorf("duplicate name after disambiguation: %q", f.Filename)
+		}
+		seen[f.Filename] = true
 	}
 }
 

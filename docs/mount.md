@@ -126,6 +126,15 @@ directory that expands into the full tree (`query/jazz` → `album` →
 flat sibling. To tag a subdirectory or a file individually, edit its `.tags`
 control file under `/tags`.
 
+Because a flat query result can gather two entries that legitimately share a
+name (e.g. `rootA/SomeDir` and `rootB/SomeDir`, or a `track1.jpg` in two albums),
+`disambiguate` makes the names within one result unique: the first keeps the bare
+name, each later collision gets a `~<short-subject>` suffix (the first 8 chars of
+its `DirUID`/content hash), inserted before the extension — `SomeDir` /
+`SomeDir~42e55dcf`, `track1.jpg` / `track1~0f4098fb.jpg`. Without it `Lookup`
+would resolve the name to the first match and shadow the rest. `Readdir` and
+`Lookup` both go through `tagQueryDir.query()`, so they always agree on the names.
+
 ## Rename and move (`/files`)
 
 `pathDir` implements `fs.NodeRenamer`. The kernel calls `Rename` on the *source*
