@@ -4,6 +4,9 @@
 1162) are two separate services. This directory has everything to install them
 as long-running services.
 
+On Gentoo, prefer the ebuilds in [`gentoo/`](gentoo/README.md), which install
+tie as a normal package (Portage-managed binaries, config, and service files).
+
 ## Quick install (systemd or OpenRC)
 
 From a checkout of this repo:
@@ -90,6 +93,8 @@ it under `/var/lib/tie` if you use it. (OpenRC runs unsandboxed, so any
 - `systemd/tie-daemon.service`, `systemd/tie-filehost.service`
 - `openrc/tie-daemon`, `openrc/tie-filehost`
 - `install.sh` — the installer
+- `gentoo/` — Gentoo ebuilds (`net-misc/tie`, `acct-user/tie`,
+  `acct-group/tie`) and install instructions
 - `docker/entrypoint.sh` — used by the root `Dockerfile` to run both services
   in one container
 - `backup/btrfs-send-backup.sh` — incremental filehost backup via BTRFS

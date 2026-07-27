@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person" proxied="yes">
+		<email>j@uid.bz</email>
+		<name>Johan Straarup</name>
+	</maintainer>
+	<maintainer type="project" proxied="proxy">
+		<email>proxy-maint@gentoo.org</email>
+		<name>Proxy Maintainers</name>
+	</maintainer>
+	<longdescription lang="en">
+		tie is a client for a triple-store (tie-daemon) plus a content-addressed
+		blob store (tie-filehost). The CLI uploads and downloads files, tags
+		them, imports directory trees, and mounts collections as a FUSE
+		filesystem. This package installs the tie CLI along with the tie-daemon
+		and tie-filehost servers and their service files.
+	</longdescription>
+	<use>
+		<flag name="fuse">
+			Build support for mounting collections as a FUSE filesystem
+			(the <pkg>sys-fs/fuse</pkg> backed "tie mount" command).
+		</flag>
+	</use>
+	<upstream>
+		<maintainer status="active">
+			<email>j@uid.bz</email>
+			<name>Johan Straarup</name>
+		</maintainer>
+		<bugs-to>https://todo.sr.ht/~uid/tie</bugs-to>
+		<doc>https://sr.ht/~uid/tie</doc>
+	</upstream>
+</pkgmetadata>
