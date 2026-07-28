@@ -202,8 +202,6 @@ func RowsFromSorted(sorted []StringTriple) []Row {
 	return rows
 }
 
-type Set map[string]map[string]map[string]bool
-
 type Unit struct{}
 type Value2 map[string]Unit
 type Value1 map[string]Value2
