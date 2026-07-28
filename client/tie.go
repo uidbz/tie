@@ -67,16 +67,6 @@ func RowValues(r Row, relation string) []string {
 	return r.Attributes[relation]
 }
 
-// RowOne returns the single value under relation and true, or ("", false) when
-// the relation is absent or holds a different count than one.
-func RowOne(r Row, relation string) (string, bool) {
-	v := r.Attributes[relation]
-	if len(v) != 1 {
-		return "", false
-	}
-	return v[0], true
-}
-
 // RowFirst returns the first value under relation, or "" when absent.
 func RowFirst(r Row, relation string) string {
 	if v := r.Attributes[relation]; len(v) > 0 {
@@ -294,9 +284,10 @@ func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 	return reply.Rows, reply.TotalCount, nil
 }
 
-// Attrs fetches the forward attributes of a single key. Returns ErrNotFound if
-// the key has no associated values. It is Expand for one key.
-func (tc *TieClient) Attrs(key string) (Row, error) {
+// Get fetches the forward attributes of a single key. Returns ErrNotFound if
+// the key has no associated values. It is Expand for one key; use Query to
+// search for keys by their associations.
+func (tc *TieClient) Get(key string) (Row, error) {
 	rows, err := tc.Expand([]string{key})
 	if err != nil {
 		return Row{}, err
@@ -432,6 +423,6 @@ func (tc *TieClient) Restore(triples [][3]string) error {
 
 // Check if the key exists
 func (tc *TieClient) Exists(key string) bool {
-	_, err := tc.Attrs(key)
+	_, err := tc.Get(key)
 	return err == nil
 }

@@ -537,7 +537,7 @@ func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 
 // dirPath returns the (uid,"path") value of a directory DirUID, or "" if none.
 func dirPath(tie *TieClient, uid DirUID) (string, error) {
-	row, err := tie.Attrs(string(uid))
+	row, err := tie.Get(string(uid))
 	if errors.Is(err, ErrNotFound) {
 		return "", nil
 	}
@@ -549,7 +549,7 @@ func dirPath(tie *TieClient, uid DirUID) (string, error) {
 
 // parentCount returns how many (hash,"parent",*) edges hash currently has.
 func parentCount(tie *TieClient, hash string) (int, error) {
-	row, err := tie.Attrs(hash)
+	row, err := tie.Get(hash)
 	if errors.Is(err, ErrNotFound) {
 		return 0, nil
 	}
@@ -579,7 +579,7 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 	if n > 0 {
 		return nil // still reachable from another directory; keep shared metadata
 	}
-	row, err := tie.Attrs(hash)
+	row, err := tie.Get(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -712,7 +712,7 @@ func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string
 // batch before adding the new one (a batch runs deletes before adds). A missing
 // key yields no values and no error.
 func existingValues(tie *TieClient, key, relation string) ([]string, error) {
-	row, err := tie.Attrs(key)
+	row, err := tie.Get(key)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -877,7 +877,7 @@ type File struct {
 
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 	var dir Directory
-	self, err := tie.Attrs(string(uid))
+	self, err := tie.Get(string(uid))
 	if err != nil {
 		return dir, errors.New("error:'" + err.Error() + "'")
 	}
@@ -970,7 +970,7 @@ func parseTagDate(s string) time.Time {
 // its name everywhere the same content appears (other directories, every tag
 // query). This is inherent to the content-addressed model.
 func RenameFile(tie *TieClient, hash string, oldParent, newParent DirUID, newName string) error {
-	row, err := tie.Attrs(hash)
+	row, err := tie.Get(hash)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
@@ -1065,7 +1065,7 @@ func collectDescendantDirs(tie *TieClient, root DirUID) ([]SubDirectory, error) 
 // reads the (hash,"tag",<tag>) triples. A hash with no tags returns an empty
 // slice, not an error.
 func GetTags(tie *TieClient, hash string) ([]string, error) {
-	row, err := tie.Attrs(hash)
+	row, err := tie.Get(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -1307,7 +1307,7 @@ func (tie *TieClient) RelateFiles(fromHash, relation, toHash string) error {
 // is itself a content hash are returned, so file metadata (filename, tag, ...) is
 // excluded.
 func (tie *TieClient) RelationsFrom(hash string) ([]MediaRelation, error) {
-	row, err := tie.Attrs(hash)
+	row, err := tie.Get(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -1427,7 +1427,7 @@ func (tie *TieClient) SetDirType(uid DirUID, dirType string) error {
 // is never surfaced here. A directory with no extra labels returns an empty
 // slice, not an error.
 func GetDirType(tie *TieClient, uid DirUID) ([]string, error) {
-	row, err := tie.Attrs(string(uid))
+	row, err := tie.Get(string(uid))
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}

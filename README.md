@@ -81,8 +81,8 @@ func main() {
 	add("pizza", "baking-temperature", "250 °C")
 	tie.Sync()
 
-	// Attrs fetches one key's attributes as a flat Row (relation -> values).
-	row, err := tie.Attrs("pizza")
+	// Get fetches one key's attributes as a flat Row (relation -> values).
+	row, err := tie.Get("pizza")
 	if err != nil {
 		fmt.Println("Error getting result:", err)
 		return
@@ -93,17 +93,16 @@ func main() {
 		fmt.Println(value2)
 	}
 
-	// A single expected value.
-	if value2, ok := client.RowOne(row, "baking-temperature"); ok {
-		fmt.Println(value2)
-	}
+	// The first value under a relation ("" if absent).
+	fmt.Println(client.RowFirst(row, "baking-temperature"))
 }
 ```
 
 Queries return flat, ordered `client.Row`s — `row.Attributes["topping"]` is a
 `[]string`, the same JSON shape (`{"key":...,"attributes":{...}}`) a non-Go
-client parses. Use `tie.Query` for tag/association searches, `tie.Expand` to
-fetch many keys at once, and `tie.Set` to replace a relation's values in one op.
+client parses. Use `tie.Get` to fetch one key's attributes, `tie.Query` for
+tag/association searches, `tie.Expand` to fetch many keys at once, and
+`tie.Set` to replace a relation's values in one op.
 
 Client methods return `(reply, error)`; `error` is non-nil for both transport
 failures and API-level failures. `client.ErrNotFound` distinguishes "no such

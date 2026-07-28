@@ -23,8 +23,8 @@ func main() {
 	add("pizza", "baking-temperature", "250 °C")
 	tie.Sync()
 
-	// Attrs fetches a single key's forward attributes as one flat Row.
-	row, err := tie.Attrs("pizza")
+	// Get fetches a single key's forward attributes as one flat Row.
+	row, err := tie.Get("pizza")
 	if err != nil {
 		fmt.Println("Error getting result:", err)
 		return
@@ -40,9 +40,7 @@ func main() {
 		fmt.Println(value2)
 	}
 	// Read a relation known to hold a single value.
-	if value2, ok := client.RowOne(row, "baking-time"); ok {
-		fmt.Println(value2)
-	}
+	fmt.Println(client.RowFirst(row, "baking-time"))
 	// RowFirst returns the first value (or "" if absent).
 	fmt.Println(client.RowFirst(row, "baking-temperature"))
 }

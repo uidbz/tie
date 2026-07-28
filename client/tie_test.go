@@ -51,7 +51,7 @@ func TestQuery(t *testing.T) {
 	}
 }
 
-func TestAttrs(t *testing.T) {
+func TestGet(t *testing.T) {
 	tie := NewTieClient(TestingConfig())
 	requireServer(t, tie)
 	if _, err := tie.Add("attrskey", "color", "blue"); err != nil {
@@ -60,12 +60,12 @@ func TestAttrs(t *testing.T) {
 	if e := tie.Sync(); e != nil {
 		t.Error(e)
 	}
-	row, err := tie.Attrs("attrskey")
+	row, err := tie.Get("attrskey")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := RowOne(row, "color"); !ok || got != "blue" {
-		t.Errorf("RowOne(color) = %q,%v, want blue,true", got, ok)
+	if got := RowValues(row, "color"); len(got) != 1 || got[0] != "blue" {
+		t.Errorf("RowValues(color) = %v, want [blue]", got)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestDelete(t *testing.T) {
 	if e := tie.Sync(); e != nil {
 		t.Error(e)
 	}
-	row, err := tie.Attrs("heyhey")
+	row, err := tie.Get("heyhey")
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		t.Error(err)
 	}
@@ -112,7 +112,7 @@ func TestUpdate(t *testing.T) {
 		t.Error(e)
 	}
 
-	row, err := tie.Attrs("Heyhey")
+	row, err := tie.Get("Heyhey")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestSet(t *testing.T) {
 		t.Error(e)
 	}
 
-	row, err := tie.Attrs("setkey")
+	row, err := tie.Get("setkey")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestSet(t *testing.T) {
 	if e := tie.Sync(); e != nil {
 		t.Error(e)
 	}
-	row, err = tie.Attrs("setkey")
+	row, err = tie.Get("setkey")
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
@@ -202,11 +202,11 @@ func TestExpand(t *testing.T) {
 	if _, ok := byKey["exp-missing"]; ok {
 		t.Error("missing key should be omitted from Expand result")
 	}
-	if v, ok := RowOne(byKey["exp1"], "n"); !ok || v != "1" {
-		t.Errorf("exp1.n = %q,%v, want 1,true", v, ok)
+	if v := RowFirst(byKey["exp1"], "n"); v != "1" {
+		t.Errorf("exp1.n = %q, want 1", v)
 	}
-	if v, ok := RowOne(byKey["exp2"], "n"); !ok || v != "2" {
-		t.Errorf("exp2.n = %q,%v, want 2,true", v, ok)
+	if v := RowFirst(byKey["exp2"], "n"); v != "2" {
+		t.Errorf("exp2.n = %q, want 2", v)
 	}
 }
 
@@ -223,7 +223,7 @@ func TestBatchArrayOrder(t *testing.T) {
 	if _, err := tie.Batch(b); err != nil {
 		t.Fatal(err)
 	}
-	row, err := tie.Attrs("orderkey")
+	row, err := tie.Get("orderkey")
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestBatchArrayOrder(t *testing.T) {
 	if _, err := tie.Batch(b); err != nil {
 		t.Fatal(err)
 	}
-	row, err = tie.Attrs("orderkey")
+	row, err = tie.Get("orderkey")
 	if err != nil {
 		t.Fatal(err)
 	}

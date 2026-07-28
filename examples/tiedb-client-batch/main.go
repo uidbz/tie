@@ -47,8 +47,8 @@ func main() {
 	}
 	// Print each key's single age value, if it has exactly one.
 	for _, row := range rows {
-		if age, ok := client.RowOne(row, "age"); ok {
-			fmt.Println(row.Key, "is", age)
+		if ages := client.RowValues(row, "age"); len(ages) == 1 {
+			fmt.Println(row.Key, "is", ages[0])
 		}
 	}
 }

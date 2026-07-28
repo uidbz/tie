@@ -22,6 +22,14 @@ to follow semantic versioning.
 
 ### Changed
 
+- **Flat-`Row` client API.** Queries and lookups now return flat, ordered
+  `client.Row`s (`{key, attributes: {relation -> []value}}`) — the same JSON
+  shape a non-Go client parses. The client surface is `Get` (one key's
+  attributes), `Query` (tag/association search with ordering and
+  `Offset`/`Limit` pagination), `Expand` (many keys in one round trip), and
+  `Set` (replace a relation's values in one op). This replaces the old
+  `Get(key, GetOptions)` / `SimpleGet` triple-set API. The single-value row
+  helper `RowOne` is gone; use `RowValues`/`RowFirst`.
 - **`tag-date` is single-valued and microsecond-precision.** Re-tagging a hash
   no longer accumulates multiple `tag-date` values; it records only the last
   import time. The finer precision keeps version retention ordered correctly for
