@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,7 +16,6 @@ import (
 
 	"git.sr.ht/~uid/tie/io/putlib"
 	"git.sr.ht/~uid/tie/metadata"
-	"git.sr.ht/~uid/tie/tiedb"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -505,8 +505,7 @@ func retentionDrops(versions []childEntry, keep int) []childEntry {
 // children (subdirs, including _prev dirs) and children with no recorded filename
 // are skipped.
 func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
-	o := GetOptions{Reverse: true, Filter: str(TieParent), GetNextLevel: true}
-	r, err := tie.Get(string(uid), o)
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Filter: str(TieParent), Expand: true})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -514,51 +513,50 @@ func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 		return nil, err
 	}
 	var out []childEntry
-	r.Result.ForEachKey(func(key string) {
-		meta := r.NextLevelResult[key]
-		if meta[str(TieTypeProperty)].Has(str(TieDirectory)) {
-			return // subdir, not a file
+	for _, row := range rows {
+		if RowHas(row, str(TieTypeProperty), str(TieDirectory)) {
+			continue // subdir, not a file
 		}
 		// A hash can carry several filenames (identical bytes shared under
 		// different names). Pick one deterministically for display/history-dir
 		// naming; reconciliation itself keys on the hash, so the choice only
 		// affects the _prev directory name.
-		names := meta[str(TieFilename)].ToSlice()
+		names := RowValues(row, str(TieFilename))
 		if len(names) == 0 {
-			return // cannot reconcile a child with no recorded name
+			continue // cannot reconcile a child with no recorded name
 		}
 		sort.Strings(names)
 		out = append(out, childEntry{
-			Hash:     key,
+			Hash:     row.Key,
 			Filename: names[0],
-			TagDate:  parseTagDate(meta[str(TieTagDate)].ToString()),
+			TagDate:  parseTagDate(RowFirst(row, str(TieTagDate))),
 		})
-	})
+	}
 	return out, nil
 }
 
 // dirPath returns the (uid,"path") value of a directory DirUID, or "" if none.
 func dirPath(tie *TieClient, uid DirUID) (string, error) {
-	r, err := tie.SimpleGet(string(uid))
+	row, err := tie.Attrs(string(uid))
 	if errors.Is(err, ErrNotFound) {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return r.Result[string(uid)][str(TiePath)].ToString(), nil
+	return RowFirst(row, str(TiePath)), nil
 }
 
 // parentCount returns how many (hash,"parent",*) edges hash currently has.
 func parentCount(tie *TieClient, hash string) (int, error) {
-	r, err := tie.SimpleGet(hash)
+	row, err := tie.Attrs(hash)
 	if errors.Is(err, ErrNotFound) {
 		return 0, nil
 	}
 	if err != nil {
 		return 0, err
 	}
-	return len(r.Result[hash][str(TieParent)].ToSlice()), nil
+	return len(RowValues(row, str(TieParent))), nil
 }
 
 // detachChild removes the (hash,"parent",fromDir) edge. If that was the hash's
@@ -581,7 +579,7 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 	if n > 0 {
 		return nil // still reachable from another directory; keep shared metadata
 	}
-	r, err := tie.SimpleGet(hash)
+	row, err := tie.Attrs(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -589,9 +587,11 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 		return err
 	}
 	meta := tie.NewBatchIn(collection)
-	r.Result.ForEachValue2(func(key, value1, value2 string) {
-		meta.Delete(key, value1, value2)
-	})
+	for relation, values := range row.Attributes {
+		for _, value2 := range values {
+			meta.Delete(hash, relation, value2)
+		}
+	}
 	if _, err := tie.Batch(meta); err != nil {
 		return err
 	}
@@ -712,14 +712,14 @@ func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string
 // batch before adding the new one (a batch runs deletes before adds). A missing
 // key yields no values and no error.
 func existingValues(tie *TieClient, key, relation string) ([]string, error) {
-	r, err := tie.SimpleGet(key)
+	row, err := tie.Attrs(key)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return r.Result[key][relation].ToSlice(), nil
+	return RowValues(row, relation), nil
 }
 
 func Tag(tie *TieClient, info TagInfo, collection string) error {
@@ -734,16 +734,8 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 	batch.Add(hash, str(TieTypeProperty), str(info.TieType))
 	batch.Add(hash, str(TieFilesize), strconv.Itoa(info.Size))
 	// tag-date is single-valued (the last import time). Re-tagging the same hash
-	// must not accumulate dates, so drop any existing value(s) first; the batch
-	// applies deletes before adds.
-	oldDates, err := existingValues(tie, hash, str(TieTagDate))
-	if err != nil {
-		return err
-	}
-	for _, d := range oldDates {
-		batch.Delete(hash, str(TieTagDate), d)
-	}
-	batch.Add(hash, str(TieTagDate), time.Now().Format(tagDateFormat))
+	// must not accumulate dates, so replace the whole relation in one op.
+	batch.Set(hash, str(TieTagDate), []string{time.Now().Format(tagDateFormat)})
 	for _, tag := range info.Tags {
 		if len(tag) > 0 {
 			if tag[0] == '-' {
@@ -778,14 +770,8 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 		batch.Add(hash, str(TieParent), str(info.Directory))
 	}
 
-	r, err := tie.Batch(batch)
-	if err != nil {
+	if _, err := tie.Batch(batch); err != nil {
 		return err
-	}
-	for _, a := range r.AddReplys {
-		if !a.Success {
-			return errors.New("Error tagging: " + a.OrigKey + " First error message: " + a.Message)
-		}
 	}
 
 	return nil
@@ -802,16 +788,9 @@ func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string,
 	batch.Add(str(uid), str(TieFilename), dirname)
 	batch.Add(str(uid), str(TieName), dirname)
 	batch.Add(str(uid), str(TieFilesize), strconv.Itoa(size))
-	// tag-date is single-valued; drop prior value(s) before adding the new one so
-	// re-import does not accumulate dates on the DirUID.
-	oldDates, err := existingValues(tie, str(uid), str(TieTagDate))
-	if err != nil {
-		return err
-	}
-	for _, d := range oldDates {
-		batch.Delete(str(uid), str(TieTagDate), d)
-	}
-	batch.Add(str(uid), str(TieTagDate), time.Now().Format(tagDateFormat))
+	// tag-date is single-valued; replace the whole relation so re-import does not
+	// accumulate dates on the DirUID.
+	batch.Set(str(uid), str(TieTagDate), []string{time.Now().Format(tagDateFormat)})
 	for _, tag := range tags {
 		if len(tag) > 0 {
 			if tag[0] == '-' {
@@ -822,39 +801,29 @@ func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string,
 			}
 		}
 	}
-	r, err := tie.Batch(batch)
-	if err != nil {
+	if _, err := tie.Batch(batch); err != nil {
 		return err
-	}
-	for _, a := range r.AddReplys {
-		if !a.Success {
-			return errors.New("Error tagging directory: " + a.OrigKey + " First error message: " + a.Message)
-		}
 	}
 	return nil
 }
 
 func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
-	o := GetOptions{
-		Reverse: true,
-		Filter:  str(TiePath),
-	}
 	if !strings.HasPrefix(path, FileURIScheme) {
 		path = FileURIScheme + path
 	}
-	var uid DirUID
-	r, err := tie.Get(path, o)
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{path}, Reverse: true, Filter: str(TiePath)})
 	if errors.Is(err, ErrNotFound) {
 		return "", nil // path not tied to any UID yet
 	}
 	if err != nil {
 		return "", errors.New("error:'" + err.Error() + "'")
 	}
-	if len(r.Result) > 1 {
-		return "", errors.New("Multiple (" + strconv.Itoa(len(r.Result)) + ") UIDs found for path. Expected 1.")
+	if len(rows) > 1 {
+		return "", errors.New("Multiple (" + strconv.Itoa(len(rows)) + ") UIDs found for path. Expected 1.")
 	}
-	for key := range r.Result {
-		uid = DirUID(key)
+	var uid DirUID
+	for _, row := range rows {
+		uid = DirUID(row.Key)
 	}
 
 	return uid, nil
@@ -908,67 +877,59 @@ type File struct {
 
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 	var dir Directory
-	r, err := tie.SimpleGet(string(uid))
+	self, err := tie.Attrs(string(uid))
 	if err != nil {
 		return dir, errors.New("error:'" + err.Error() + "'")
 	}
-	r.Result.ForEachKey(func(key string) {
-		dir.Uid = uid
-		entry := r.Result[key]
-		dir.Paths = entry[str(TiePath)].ToSlice()
-		parents := entry[str(TieParent)].ToSlice()
-		dir.ParentUIDs = make([]DirUID, 0, len(parents))
-		for _, x := range parents {
-			dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
-		}
-	})
-
-	o := GetOptions{
-		Reverse:      true,
-		GetNextLevel: true,
+	dir.Uid = uid
+	dir.Paths = RowValues(self, str(TiePath))
+	parents := RowValues(self, str(TieParent))
+	dir.ParentUIDs = make([]DirUID, 0, len(parents))
+	for _, x := range parents {
+		dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
 	}
-	r, err = tie.Get(string(uid), o)
+
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Expand: true})
 	if errors.Is(err, ErrNotFound) {
 		return dir, nil // directory has no children
 	}
 	if err != nil {
 		return dir, errors.New("error:'" + err.Error() + "'")
 	}
-	r.Result.ForEachKey(func(key string) {
-		meta := r.NextLevelResult[key]
-		types := meta[str(TieTypeProperty)]
+	for _, row := range rows {
+		types := row.Attributes[str(TieTypeProperty)]
 		switch true {
-		case types.Has(str(TieDirectory)):
+		case slices.Contains(types, str(TieDirectory)):
 			subDir := SubDirectory{
-				Uid:      DirUID(key),
-				Paths:    meta[str(TiePath)].ToSlice(),
-				DirTypes: SliceToTieType(types.ToSlice()),
+				Uid:      DirUID(row.Key),
+				Paths:    RowValues(row, str(TiePath)),
+				DirTypes: SliceToTieType(types),
 			}
 			dir.SubDirs = append(dir.SubDirs, subDir)
-		case types.Has(str(TieImageFile)):
+		case slices.Contains(types, str(TieImageFile)):
 			fallthrough
-		case types.Has(str(TieVideoFile)):
+		case slices.Contains(types, str(TieVideoFile)):
 			fallthrough
-		case types.Has(str(TieAudioFile)):
+		case slices.Contains(types, str(TieAudioFile)):
 			fallthrough
-		case types.Has(str(TieDocumentFile)):
-			size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
-			filename := meta[str(TieFilename)].ToString()
+		case slices.Contains(types, str(TieDocumentFile)):
+			size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
+			filename := RowFirst(row, str(TieFilename))
 			if filename == "" {
-				filename = key // fall back to the hash when no filename is recorded
+				filename = row.Key // fall back to the hash when no filename is recorded
 			}
 			f := File{
-				Uid:       key,
+				Uid:       row.Key,
 				Filename:  filename,
-				TieType:   StringToTieType(types.ToString()),
-				MediaType: meta[str(TieMediaType)].ToString(),
+				TieType:   StringToTieType(strings.Join(types, ", ")),
+				MediaType: RowFirst(row, str(TieMediaType)),
 				Size:      size,
-				TagDate:   parseTagDate(meta[str(TieTagDate)].ToString()),
+				TagDate:   parseTagDate(RowFirst(row, str(TieTagDate))),
 			}
 			dir.Files = append(dir.Files, f)
 
 		}
-	})
+	}
 
 	// dir.Files comes from a map iteration, so its order is nondeterministic.
 	// Sort it stably (filename, then hash) so callers that disambiguate colliding
@@ -1009,16 +970,12 @@ func parseTagDate(s string) time.Time {
 // its name everywhere the same content appears (other directories, every tag
 // query). This is inherent to the content-addressed model.
 func RenameFile(tie *TieClient, hash string, oldParent, newParent DirUID, newName string) error {
-	r, err := tie.SimpleGet(hash)
+	row, err := tie.Attrs(hash)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
-	var oldFilename, oldName string
-	if r.Result != nil {
-		entry := r.Result[hash]
-		oldFilename = entry[str(TieFilename)].ToString()
-		oldName = entry[str(TieName)].ToString()
-	}
+	oldFilename := RowFirst(row, str(TieFilename))
+	oldName := RowFirst(row, str(TieName))
 
 	batch := tie.NewBatch()
 	if newName != oldFilename {
@@ -1108,14 +1065,14 @@ func collectDescendantDirs(tie *TieClient, root DirUID) ([]SubDirectory, error) 
 // reads the (hash,"tag",<tag>) triples. A hash with no tags returns an empty
 // slice, not an error.
 func GetTags(tie *TieClient, hash string) ([]string, error) {
-	r, err := tie.SimpleGet(hash)
+	row, err := tie.Attrs(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	tags := r.Result[hash][str(TieTag)].ToSlice()
+	tags := RowValues(row, str(TieTag))
 	sort.Strings(tags)
 	return tags, nil
 }
@@ -1185,9 +1142,12 @@ type TaggedFile struct {
 // offset/limit paginate; limit <= 0 means no limit. The second return is the
 // total number of tags before pagination.
 func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
-	o := GetOptions{Filter: str(TieAll)}
-	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
-	r, err := tie.Get(str(TieTags), o)
+	rows, total, err := tie.Query(QuerySpec{
+		Terms:  []string{str(TieTags)},
+		Filter: str(TieAll),
+		Offset: offset,
+		Limit:  limit,
+	})
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil
 	}
@@ -1195,10 +1155,10 @@ func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
 		return nil, 0, err
 	}
 	var tags []string
-	for _, t := range r.SortedResult {
-		tags = append(tags, t.Value2)
+	for _, row := range rows {
+		tags = append(tags, RowValues(row, str(TieAll))...)
 	}
-	return tags, r.TotalCount, nil
+	return tags, total, nil
 }
 
 // FilesWithTags returns the files that carry ALL of include and NONE of exclude,
@@ -1222,16 +1182,16 @@ func (tie *TieClient) FilesWithTags(scope string, include, exclude []string, off
 		return tie.filesOfType(scope, offset, limit)
 	}
 
-	o := GetOptions{
-		Reverse:      true,
-		Filter:       str(TieTag),
-		Include:      include[1:],
-		Exclude:      exclude,
-		Scope:        scope,
-		GetNextLevel: true,
-	}
-	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
-	r, err := tie.Get(include[0], o)
+	rows, total, err := tie.Query(QuerySpec{
+		Terms:   include,
+		Exclude: exclude,
+		Scope:   scope,
+		Filter:  str(TieTag),
+		Reverse: true,
+		Expand:  true,
+		Offset:  offset,
+		Limit:   limit,
+	})
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil
 	}
@@ -1239,50 +1199,55 @@ func (tie *TieClient) FilesWithTags(scope string, include, exclude []string, off
 		return nil, 0, err
 	}
 
-	var files []TaggedFile
-	for _, t := range r.SortedResult {
-		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
+	files := make([]TaggedFile, 0, len(rows))
+	for _, row := range rows {
+		files = append(files, taggedFileFrom(row))
 	}
-	return files, r.TotalCount, nil
+	return files, total, nil
 }
 
 // filesOfType builds TaggedFiles for every hash carrying the tie-type value
-// scope, pulling per-hash metadata via a reverse GetNextLevel lookup. The server
+// scope, pulling per-hash metadata via an expanded reverse query. The server
 // paginates via offset/limit.
 func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile, int, error) {
-	o := GetOptions{Reverse: true, Filter: str(TieTypeProperty), GetNextLevel: true}
-	o.Sort = tiedb.SortOptions{Offset: offset, Limit: limit}
-	r, err := tie.Get(scope, o)
+	rows, total, err := tie.Query(QuerySpec{
+		Terms:   []string{scope},
+		Filter:  str(TieTypeProperty),
+		Reverse: true,
+		Expand:  true,
+		Offset:  offset,
+		Limit:   limit,
+	})
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil
 	}
 	if err != nil {
 		return nil, 0, err
 	}
-	var files []TaggedFile
-	for _, t := range r.SortedResult {
-		files = append(files, taggedFileFrom(t.Key, r.NextLevelResult[t.Key]))
+	files := make([]TaggedFile, 0, len(rows))
+	for _, row := range rows {
+		files = append(files, taggedFileFrom(row))
 	}
-	return files, r.TotalCount, nil
+	return files, total, nil
 }
 
 // taggedFileFrom builds a TaggedFile from a hash and its next-level metadata,
 // falling back to the hash as the display name when no filename is recorded.
 // For directories, tries TieFilename first, then TiePath (for DirUIDs), extracting
 // the basename from either.
-func taggedFileFrom(hash string, meta tiedb.Value1) TaggedFile {
-	isDir := meta[str(TieTypeProperty)].Has(str(TieDirectory))
-	filename := meta[str(TieFilename)].ToString()
-	
+func taggedFileFrom(row Row) TaggedFile {
+	isDir := RowHas(row, str(TieTypeProperty), str(TieDirectory))
+	filename := RowFirst(row, str(TieFilename))
+
 	// If filename contains a path separator, extract just the basename.
 	// This handles both old imports (full paths) and ensures consistency.
 	if filename != "" && strings.ContainsAny(filename, "/\\") {
 		filename = filepath.Base(filename)
 	}
-	
+
 	if filename == "" && isDir {
 		// Directories (especially DirUIDs) might use TiePath; extract the basename.
-		if paths := meta[str(TiePath)].ToSlice(); len(paths) > 0 {
+		if paths := RowValues(row, str(TiePath)); len(paths) > 0 {
 			// Use the first path's basename as the display name.
 			p := paths[0]
 			p = strings.TrimPrefix(p, FileURIScheme)
@@ -1294,14 +1259,14 @@ func taggedFileFrom(hash string, meta tiedb.Value1) TaggedFile {
 			}
 		}
 	}
-	
+
 	// Final fallback: use the hash/UID as the display name.
 	if filename == "" {
-		filename = hash
+		filename = row.Key
 	}
-	
-	size, _ := strconv.Atoi(meta[str(TieFilesize)].ToString())
-	return TaggedFile{Hash: hash, Filename: filename, Size: size, IsDir: isDir}
+
+	size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
+	return TaggedFile{Hash: row.Key, Filename: filename, Size: size, IsDir: isDir}
 }
 
 // MediaRelation is a named, directed association from one media item to another,
@@ -1330,14 +1295,8 @@ func (tie *TieClient) RelateFiles(fromHash, relation, toHash string) error {
 	b := tie.NewBatch()
 	b.Add(fromHash, relation, toHash)
 	b.Add(toHash, relation, fromHash)
-	r, err := tie.Batch(b)
-	if err != nil {
+	if _, err := tie.Batch(b); err != nil {
 		return err
-	}
-	for _, a := range r.AddReplys {
-		if !a.Success {
-			return errors.New("RelateFiles: " + a.Message)
-		}
 	}
 	return nil
 }
@@ -1348,7 +1307,7 @@ func (tie *TieClient) RelateFiles(fromHash, relation, toHash string) error {
 // is itself a content hash are returned, so file metadata (filename, tag, ...) is
 // excluded.
 func (tie *TieClient) RelationsFrom(hash string) ([]MediaRelation, error) {
-	r, err := tie.SimpleGet(hash)
+	row, err := tie.Attrs(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -1356,11 +1315,13 @@ func (tie *TieClient) RelationsFrom(hash string) ([]MediaRelation, error) {
 		return nil, err
 	}
 	var rels []MediaRelation
-	r.Result.ForEachValue2(func(key, relation, value2 string) {
-		if metadata.IsHexHash(value2) {
-			rels = append(rels, MediaRelation{FromHash: key, Relation: relation, ToHash: value2})
+	for relation, values := range row.Attributes {
+		for _, value2 := range values {
+			if metadata.IsHexHash(value2) {
+				rels = append(rels, MediaRelation{FromHash: hash, Relation: relation, ToHash: value2})
+			}
 		}
-	})
+	}
 	return rels, nil
 }
 
@@ -1466,7 +1427,7 @@ func (tie *TieClient) SetDirType(uid DirUID, dirType string) error {
 // is never surfaced here. A directory with no extra labels returns an empty
 // slice, not an error.
 func GetDirType(tie *TieClient, uid DirUID) ([]string, error) {
-	r, err := tie.SimpleGet(string(uid))
+	row, err := tie.Attrs(string(uid))
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -1474,7 +1435,7 @@ func GetDirType(tie *TieClient, uid DirUID) ([]string, error) {
 		return nil, err
 	}
 	var labels []string
-	for _, t := range r.Result[string(uid)][str(TieTypeProperty)].ToSlice() {
+	for _, t := range RowValues(row, str(TieTypeProperty)) {
 		if t != str(TieDirectory) {
 			labels = append(labels, t)
 		}
@@ -1540,14 +1501,14 @@ func (tie *TieClient) ListDirTypes() ([]string, error) {
 	for t := TieImageDir; t <= TieDirectory; t++ {
 		set[t.String()] = true
 	}
-	r, err := tie.Get(typeRegistrySubject, GetOptions{Filter: str(TieAll)})
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{typeRegistrySubject}, Filter: str(TieAll)})
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
-	if err == nil {
-		r.Result.ForEachValue2(func(_, _, value2 string) {
+	for _, row := range rows {
+		for _, value2 := range RowValues(row, str(TieAll)) {
 			set[value2] = true
-		})
+		}
 	}
 	labels := make([]string, 0, len(set))
 	for t := range set {

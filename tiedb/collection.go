@@ -393,6 +393,14 @@ func (ic *Collection) getEntryFromString(value string) (entryID uint64, level in
 	return lastParentId, lastLevel, true
 }
 
+func (ic *Collection) GetTotalEntries() uint64 {
+	return ic.totalEntries
+}
+
+func (ic *Collection) nextID() uint64 {
+	return atomic.AddUint64(&ic.totalEntries, 1)
+}
+
 func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]byte) (entryID uint64) {
 	entryID = ic.nextID()
 	uv := &UniqueValue{parentId, value}
@@ -819,6 +827,46 @@ func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTr
 
 	result, sorted, total = ic.GetPage(set, q.Filter, q.Sort)
 	return result, sorted, total, true
+}
+
+// ExpandKeys returns one Row per key holding that key's forward attributes
+// (relation -> values), reusing the same GetAssociations + Sort path a query
+// uses. Keys with no associations are skipped. Order follows the input keys.
+// This is the multi-key batch fetch that lets a client attach metadata to many
+// matches (or list many entries) in one round trip instead of one Get per key.
+func (ic *Collection) ExpandKeys(keys []string, filter string) []Row {
+	rows := make([]Row, 0, len(keys))
+	for _, key := range keys {
+		tree, found := ic.GetAssociations(key)
+		if !found {
+			continue
+		}
+		sorted, _ := ic.Sort(tree, filter, SortOptions{Limit: -1})
+		attrs := make(map[string][]string)
+		for _, t := range sorted {
+			attrs[t.Value1] = append(attrs[t.Value1], t.Value2)
+		}
+		rows = append(rows, Row{Key: key, Attributes: attrs})
+	}
+	return rows
+}
+
+// SetValues makes (key, value1) hold exactly the given values: it removes every
+// existing value2 for the relation and adds each of values. This is the
+// multi-valued generalization of SimpleUpdate — the server-side "replace this
+// relation" primitive, so clients no longer Get-then-Delete-each-then-Add.
+// Passing an empty values slice clears the relation.
+func (ic *Collection) SetValues(key string, value1 string, values []string) {
+	if existing, found := ic.Get(key, value1); found {
+		if set, ok := existing[key][value1]; ok {
+			set.ForEach(func(value2 string) {
+				ic.Delete(key, value1, value2)
+			})
+		}
+	}
+	for _, v := range values {
+		ic.Add(key, value1, v)
+	}
 }
 
 // ForEachTriple calls do for every forward triple in the collection. It walks

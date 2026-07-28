@@ -145,7 +145,9 @@ Configuration (server settings and user accounts) is read from a TOML file.
 
 	requests := []webservice.RequestInterface{
 		c.NewDummyRequest(),
-		c.NewGetRequest(""),
+		c.NewQueryRequest(),
+		c.NewExpandRequest(nil, ""),
+		c.NewSetRequest("", "", nil),
 		c.NewAddRequest("", "", ""),
 		c.NewDeleteRequest("", "", ""),
 		c.NewUpdateRequest(api.Update{}),

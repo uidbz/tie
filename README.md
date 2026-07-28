@@ -48,9 +48,10 @@ pizza  topping  basil
 pizza  baking-time  7 min
 ```
 
-A query returns a `TripleSet` — a map of maps of maps
-(`key → value1 → value2`) — with helper methods for reading results ergonomically.
-Order is not retained.
+A query returns a flat, ordered list of `client.Row`s. Each `Row` has a `Key`
+and an `Attributes` map (`relation → []values`), so a result reads as
+`row.Attributes["topping"]` with no nested-map navigation — the same
+language-neutral shape a non-Go client parses straight from JSON.
 
 ### Example
 
@@ -80,23 +81,29 @@ func main() {
 	add("pizza", "baking-temperature", "250 °C")
 	tie.Sync()
 
-	reply, err := tie.Get("pizza", client.GetOptions{})
+	// Attrs fetches one key's attributes as a flat Row (relation -> values).
+	row, err := tie.Attrs("pizza")
 	if err != nil {
 		fmt.Println("Error getting result:", err)
 		return
 	}
 
-	// All value2s under a given value1 ("category").
-	reply.Result["pizza"]["topping"].ForEach(func(value2 string) {
+	// All values under a given relation.
+	for _, value2 := range client.RowValues(row, "topping") {
 		fmt.Println(value2)
-	})
+	}
 
-	// A single expected value2.
-	if value2, ok := reply.OneValue2("baking-temperature"); ok {
+	// A single expected value.
+	if value2, ok := client.RowOne(row, "baking-temperature"); ok {
 		fmt.Println(value2)
 	}
 }
 ```
+
+Queries return flat, ordered `client.Row`s — `row.Attributes["topping"]` is a
+`[]string`, the same JSON shape (`{"key":...,"attributes":{...}}`) a non-Go
+client parses. Use `tie.Query` for tag/association searches, `tie.Expand` to
+fetch many keys at once, and `tie.Set` to replace a relation's values in one op.
 
 Client methods return `(reply, error)`; `error` is non-nil for both transport
 failures and API-level failures. `client.ErrNotFound` distinguishes "no such

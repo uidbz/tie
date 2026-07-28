@@ -2,129 +2,122 @@ package api
 
 import (
 	"errors"
+	"strconv"
 
 	ws "git.sr.ht/~uid/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Batch to 'NewName'
-3. Implement Reply and define fields in structs
-4. Batch to request slice and pass to NewWebservice on server
-*/
-
 const (
 	IdBatch = "Batch"
+
+	BatchAdd    = "add"
+	BatchDelete = "delete"
+	BatchSet    = "set"
+	BatchUpdate = "update"
 )
+
+// BatchOp is one write in a batch. Op selects the kind; the remaining fields are
+// interpreted per Op:
+//   - add:    add triple (Key, Relation, Values[0])
+//   - delete: delete triple (Key, Relation, Values[0])
+//   - set:    replace (Key, Relation) with all of Values
+//   - update: change (Key, Relation, Values[0]) to NewValue; AddOnFailure adds
+//     NewValue when the original triple is absent
+type BatchOp struct {
+	Op           string   `json:"op"`
+	Key          string   `json:"key"`
+	Relation     string   `json:"relation"`
+	Values       []string `json:"values"`
+	NewValue     string   `json:"newValue"`
+	AddOnFailure bool     `json:"addOnFailure"`
+}
+
+// Batch is an ordered list of write ops against one collection. Ops execute in
+// slice order (the caller controls sequencing — e.g. a delete before an add to
+// replace a value); every op is applied and checked, and the whole batch shares
+// one durability Sync at the end.
+type Batch struct {
+	Collection CollectionInfo `json:"collection"`
+	Ops        []BatchOp      `json:"ops"`
+}
 
 type BatchRequest struct {
 	ws.Request
-	Batch *Batch
-}
-
-type Batch struct {
-	Collection     CollectionInfo
-	AddRequests    []*AddRequest
-	GetRequests    []*GetRequest
-	DeleteRequests []*DeleteRequest
-	UpdateRequests []*UpdateRequest
+	Batch *Batch `json:"batch"`
 }
 
 type BatchReply struct {
 	ws.ReplyStatus
-
-	AddReplys    []AddReply
-	GetReplys    []GetReply
-	DeleteReplys []DeleteReply
-	UpdateReplys []UpdateReply
 }
 
-func (batch *Batch) Add(key, value1, value2 string) {
-	batch.AddRequests = append(batch.AddRequests, batch.Collection.NewAddRequest(key, value1, value2))
+func (batch *Batch) Add(key, relation, value string) {
+	batch.Ops = append(batch.Ops, BatchOp{Op: BatchAdd, Key: key, Relation: relation, Values: []string{value}})
 }
 
-func (batch *Batch) Get(key string) {
-	batch.GetRequests = append(batch.GetRequests, batch.Collection.NewGetRequest(key))
+func (batch *Batch) Delete(key, relation, value string) {
+	batch.Ops = append(batch.Ops, BatchOp{Op: BatchDelete, Key: key, Relation: relation, Values: []string{value}})
 }
 
-func (batch *Batch) Delete(key, value1, value2 string) {
-	batch.DeleteRequests = append(batch.DeleteRequests, batch.Collection.NewDeleteRequest(key, value1, value2))
+func (batch *Batch) Set(key, relation string, values []string) {
+	batch.Ops = append(batch.Ops, BatchOp{Op: BatchSet, Key: key, Relation: relation, Values: values})
 }
 
 func (batch *Batch) Update(update Update) {
-	batch.UpdateRequests = append(batch.UpdateRequests, batch.Collection.NewUpdateRequest(update))
+	batch.Ops = append(batch.Ops, BatchOp{
+		Op:           BatchUpdate,
+		Key:          update.Key,
+		Relation:     update.Value1,
+		Values:       []string{update.Value2},
+		NewValue:     update.NewValue2,
+		AddOnFailure: update.AddOnFailure,
+	})
 }
 
 func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := BatchReply{}
+	col := env.Collection(request.Batch.Collection.Namespace, request.Batch.Collection.CollectionId)
 
-	tmpNamespace, tmpCollectionId := "", ""
-	syncOnCollectionChange := func(namespace, collectionId string) {
-		if tmpNamespace == "" {
-			tmpNamespace, tmpCollectionId = namespace, collectionId
-		} else if namespace != tmpNamespace && collectionId != tmpCollectionId {
-			env.Collection(namespace, collectionId).Sync()
-			tmpNamespace, tmpCollectionId = namespace, collectionId
+	for i, op := range request.Batch.Ops {
+		var msg string
+		ok := true
+		switch op.Op {
+		case BatchAdd:
+			col.Add(op.Key, op.Relation, op.value())
+		case BatchDelete:
+			// Delete is idempotent: a missing triple is a no-op, not a batch
+			// failure. Callers delete prior values (tag-date, tags) that may
+			// not exist yet on first write.
+			col.Delete(op.Key, op.Relation, op.value())
+		case BatchSet:
+			col.SetValues(op.Key, op.Relation, op.Values)
+		case BatchUpdate:
+			if op.AddOnFailure {
+				msg, ok = col.UpdateAdd(op.Key, op.Relation, op.value(), op.NewValue)
+			} else {
+				msg, ok = col.Update(op.Key, op.Relation, op.value(), op.NewValue)
+			}
+		default:
+			msg, ok = "unknown batch op '"+op.Op+"'", false
 		}
-	}
-	for _, x := range request.Batch.UpdateRequests {
-		r, err := x.Reply(env)
-		if err == nil {
-			reply.UpdateReplys = append(reply.UpdateReplys, r.ReplyStructPtr.(UpdateReply))
-		} else {
+		if !ok {
 			reply.Success = false
-			reply.Message = "Error updating values"
-			return ws.Reply{request.Id, reply}, errors.New("Error updating values")
-		}
-		syncOnCollectionChange(x.Namespace, x.CollectionId)
-	}
-
-	env.Collection(tmpNamespace, tmpCollectionId).Sync() // Sync before continue to next request type
-	tmpNamespace, tmpCollectionId = "", ""
-
-	for _, x := range request.Batch.DeleteRequests {
-		r, err := x.Reply(env)
-		if err == nil {
-			reply.DeleteReplys = append(reply.DeleteReplys, r.ReplyStructPtr.(DeleteReply))
-		} else {
-			reply.Success = false
-			reply.Message = "Error deleting values"
-			return ws.Reply{request.Id, reply}, errors.New("Error deleting values")
-		}
-		syncOnCollectionChange(x.Namespace, x.CollectionId)
-	}
-	env.Collection(tmpNamespace, tmpCollectionId).Sync() // Sync before continue to next request type
-	tmpNamespace, tmpCollectionId = "", ""
-
-	for _, x := range request.Batch.AddRequests {
-		r, err := x.Reply(env)
-		if err == nil {
-			reply.AddReplys = append(reply.AddReplys, r.ReplyStructPtr.(AddReply))
-		} else {
-			reply.Success = false
-			reply.Message = "Error adding values"
-			return ws.Reply{request.Id, reply}, errors.New("Error adding values")
-		}
-		syncOnCollectionChange(x.Namespace, x.CollectionId)
-	}
-	env.Collection(tmpNamespace, tmpCollectionId).Sync() // Sync before continue to next request type
-	tmpNamespace, tmpCollectionId = "", ""
-
-	for _, x := range request.Batch.GetRequests {
-		r, err := x.Reply(env)
-		if err == nil {
-			reply.GetReplys = append(reply.GetReplys, r.ReplyStructPtr.(GetReply))
-		} else {
-			reply.Success = false
-			reply.Message = "Error getting values"
-			return ws.Reply{request.Id, reply}, errors.New("Error getting values")
+			reply.Message = "batch op " + strconv.Itoa(i) + " (" + op.Op + ") failed: " + msg
+			col.Sync()
+			return ws.Reply{request.Id, reply}, errors.New(reply.Message)
 		}
 	}
 
+	col.Sync()
 	reply.Success = true
 
 	return ws.Reply{request.Id, reply}, nil
+}
+
+func (op BatchOp) value() string {
+	if len(op.Values) == 0 {
+		return ""
+	}
+	return op.Values[0]
 }
 
 func (request *BatchRequest) New() ws.RequestInterface {

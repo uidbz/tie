@@ -174,6 +174,34 @@ type StringTriple struct {
 	Value2 string
 }
 
+// Row is the flat, language-neutral result unit that crosses the wire. It groups
+// one key's triples by relation: Attributes maps a relation (value1) to all its
+// values (value2). A client reads row.Attributes["tag"] directly — no nested-map
+// navigation or callbacks. TripleSet stays internal to the engine.
+type Row struct {
+	Key        string              `json:"key"`
+	Attributes map[string][]string `json:"attributes"`
+}
+
+// RowsFromSorted folds an ordered []StringTriple into []Row, preserving the
+// first-seen key order (the slice is already sorted/paginated by Sort). Triples
+// for the same key coalesce into one Row; values under a relation keep their
+// order of appearance.
+func RowsFromSorted(sorted []StringTriple) []Row {
+	rows := make([]Row, 0, len(sorted))
+	index := make(map[string]int, len(sorted))
+	for _, t := range sorted {
+		i, ok := index[t.Key]
+		if !ok {
+			i = len(rows)
+			index[t.Key] = i
+			rows = append(rows, Row{Key: t.Key, Attributes: make(map[string][]string)})
+		}
+		rows[i].Attributes[t.Value1] = append(rows[i].Attributes[t.Value1], t.Value2)
+	}
+	return rows
+}
+
 type Set map[string]map[string]map[string]bool
 
 type Unit struct{}

@@ -23,26 +23,26 @@ func main() {
 	add("pizza", "baking-temperature", "250 °C")
 	tie.Sync()
 
-	reply, err := tie.Get("pizza", client.GetOptions{})
+	// Attrs fetches a single key's forward attributes as one flat Row.
+	row, err := tie.Attrs("pizza")
 	if err != nil {
 		fmt.Println("Error getting result:", err)
 		return
 	}
-	// Print all values
-	reply.Result.ForEachValue2(func(key, value1, value2 string) {
-		fmt.Println(value2)
-	})
-	// Print all value2s in a "category"/value1
-	cat := reply.Result["pizza"]["topping"]
-	cat.ForEach(func(value2 string) {
-		fmt.Println(value2)
-	})
-	// One way of reading the result
-	if value2, ok := reply.Result["pizza"]["baking-time"].One(); ok {
+	// Print all values across every relation.
+	for _, values := range row.Attributes {
+		for _, value2 := range values {
+			fmt.Println(value2)
+		}
+	}
+	// Print all values under one relation.
+	for _, value2 := range client.RowValues(row, "topping") {
 		fmt.Println(value2)
 	}
-	// Here is a shortcut to the same function
-	if value2, ok := reply.OneValue2("baking-temperature"); ok {
+	// Read a relation known to hold a single value.
+	if value2, ok := client.RowOne(row, "baking-time"); ok {
 		fmt.Println(value2)
 	}
+	// RowFirst returns the first value (or "" if absent).
+	fmt.Println(client.RowFirst(row, "baking-temperature"))
 }

@@ -11,10 +11,13 @@ func main() {
 	tie := client.NewTieClient(config)
 	batch := tie.NewBatch()
 
+	// Ops run in array order and the whole batch shares one final Sync.
 	batch.Add("Bob", "age", "32")
 	batch.Add("Alice", "age", "25")
 	batch.Add("Pete", "age", "24")
-	batch.Add("Pete", "age", "23") // Adding this will cause the last loop to skip Pete
+	// Set replaces the whole (key, relation) value set in one op — here it
+	// corrects Pete's age instead of leaving two values behind.
+	batch.Set("Pete", "age", []string{"23"})
 
 	batch.Add("Pizza", "topping", "tomato")
 	batch.Add("Pizza", "topping", "cheese")
@@ -22,30 +25,30 @@ func main() {
 	batch.Add("Pizza", "baking-time", "7 min")
 	batch.Add("Pizza", "baking-temperature", "250 °C")
 
-	batch.Get("Bob")
-	batch.Get("Alice")
-	batch.Get("Pete")
-	batch.Get("Pizza")
-
-	reply, err := tie.Batch(batch)
-	if err != nil {
+	// Batch now returns only an error: it succeeds as a whole or reports the
+	// first failing op. There are no per-op replies to inspect.
+	if _, err := tie.Batch(batch); err != nil {
 		fmt.Println("Error happened:", err)
 		return
 	}
-	for _, x := range reply.AddReplys {
-		fmt.Println("Success:", x.Success, "Message:", x.Message)
-	}
-	// Print all values that was added
-	for _, x := range reply.GetReplys {
-		x.Result.ForEachValue2(func(key, val1, val2 string) {
-			fmt.Println(key, val1, val2)
-		})
-	}
-	// Print age, if only 1 age exists
-	for _, x := range reply.GetReplys {
-		if val2, ok := x.OneValue2("age"); ok {
-			fmt.Println(val2)
-		}
 
+	// Expand fetches many keys' attributes in one round trip.
+	rows, err := tie.Expand([]string{"Bob", "Alice", "Pete", "Pizza"})
+	if err != nil {
+		fmt.Println("Error reading back:", err)
+		return
+	}
+	for _, row := range rows {
+		for relation, values := range row.Attributes {
+			for _, value2 := range values {
+				fmt.Println(row.Key, relation, value2)
+			}
+		}
+	}
+	// Print each key's single age value, if it has exactly one.
+	for _, row := range rows {
+		if age, ok := client.RowOne(row, "age"); ok {
+			fmt.Println(row.Key, "is", age)
+		}
 	}
 }

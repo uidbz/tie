@@ -13,6 +13,13 @@ import (
 	"time"
 )
 
+// Debug and Info are thin wrappers kept for existing call sites; they forward
+// to the process slog logger (which tie-daemon/tie-filehost point at a log file
+// plus pretty stderr). Diagnostics stay off stdout — stdout is data.
+func Debug(value string) { slog.Debug(value) }
+
+func Info(value string) { slog.Info(value) }
+
 func (ic *Collection) bufToEntry(buf [ENTRY_SIZE]byte) (level int, entryID uint64, uv *UniqueValue) {
 	var last int = SIZE_DATATYPE
 

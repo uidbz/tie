@@ -24,7 +24,6 @@ import (
 
 	"git.sr.ht/~uid/conf"
 
-	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/io/fuselib"
 
@@ -87,53 +86,62 @@ func cmdGet() *cli.Command {
 			} else {
 				reverse = ctx.Bool("reverse")
 			}
-			including := make([]string, 0)
+			terms := []string{args[0]}
 			excluding := make([]string, 0)
-			for i := 1; i < len(ctx.Args().Slice()); i++ {
+			for i := 1; i < len(args); i++ {
 				if strings.HasPrefix(args[i], "-") {
 					excluding = append(excluding, strings.TrimPrefix(args[i], "-"))
 				} else {
-					including = append(including, args[i])
+					terms = append(terms, args[i])
 				}
 			}
-			o := api.GetOptions{
-				Reverse: reverse,
-				Include: including,
+			rows, _, err := tie.Query(client.QuerySpec{
+				Terms:   terms,
 				Exclude: excluding,
+				Reverse: reverse,
 				Filter:  ctx.String("filter"),
-				Sort: tiedb.SortOptions{
-					Offset: ctx.Int("offset"),
-					Limit:  ctx.Int("limit"),
-					SortBy: ctx.String("sortby"),
-				},
-			}
-			reply, err := tie.Get(args[0], o)
+				Offset:  ctx.Int("offset"),
+				Limit:   ctx.Int("limit"),
+				SortBy:  ctx.String("sortby"),
+			})
 			if err != nil {
+				if errors.Is(err, client.ErrNotFound) {
+					return nil
+				}
 				return errors.New("Get Error: " + err.Error())
 			}
-			printTriples(reply.SortedResult)
+			printRows(rows)
 
 			return nil
 		},
 	}
 }
 
-// printTriples writes get results to stdout. When stdout is an interactive
-// terminal it renders aligned, headered columns for readability; when stdout is
-// piped or redirected it emits plain tab-separated lines (one triple per line)
-// so downstream tools like cut/awk/sort keep working unchanged.
-func printTriples(triples []tiedb.StringTriple) {
+// printRows writes query results to stdout, flattening each Row back into
+// key<TAB>relation<TAB>value lines. When stdout is an interactive terminal it
+// renders aligned, headered columns for readability; when stdout is piped or
+// redirected it emits plain tab-separated lines so downstream tools like
+// cut/awk/sort keep working unchanged.
+func printRows(rows []client.Row) {
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		for _, t := range triples {
-			fmt.Println(t.Key + "\t" + t.Value1 + "\t" + t.Value2)
+		for _, r := range rows {
+			for relation, values := range r.Attributes {
+				for _, v := range values {
+					fmt.Println(r.Key + "\t" + relation + "\t" + v)
+				}
+			}
 		}
 		return
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(tw, "KEY\tVALUE1\tVALUE2")
-	for _, t := range triples {
-		fmt.Fprintln(tw, t.Key+"\t"+t.Value1+"\t"+t.Value2)
+	for _, r := range rows {
+		for relation, values := range r.Attributes {
+			for _, v := range values {
+				fmt.Fprintln(tw, r.Key+"\t"+relation+"\t"+v)
+			}
+		}
 	}
 	tw.Flush()
 }
@@ -453,33 +461,34 @@ func cmdDel() *cli.Command {
 			}
 			args := cCtx.Args().Slice()
 			deleteBatch := func(filter string) error {
-				o := api.GetOptions{
+				rows, _, err := tie.Query(client.QuerySpec{
+					Terms:  []string{args[0]},
 					Filter: filter,
-					Sort:   tiedb.SortOptions{Limit: -1},
-				}
-				reply, err := tie.Get(args[0], o)
+					Limit:  -1,
+				})
 				if err != nil {
+					if errors.Is(err, client.ErrNotFound) {
+						return nil
+					}
 					fmt.Println("Error:", err.Error())
 					return nil
 				}
 				b := tie.NewBatch()
-				reply.Result.ForEachValue2(func(key, val1, val2 string) {
-					b.Delete(key, val1, val2)
-				})
-				batchReply, err := tie.Batch(b)
-				if err != nil {
-					return errors.New("Delete Error: " + err.Error())
-				}
-				for _, d := range batchReply.DeleteReplys {
-					if !d.Success {
-						return errors.New("First Delete Error: " + d.Message)
+				for _, r := range rows {
+					for relation, values := range r.Attributes {
+						for _, v := range values {
+							b.Delete(r.Key, relation, v)
+						}
 					}
+				}
+				if _, err := tie.Batch(b); err != nil {
+					return errors.New("Delete Error: " + err.Error())
 				}
 				return nil
 			}
 			switch true {
 			case args[1] == "*" && args[2] == "*":
-				return deleteBatch(args[1])
+				return deleteBatch("")
 
 			case args[1] != "*" && args[2] == "*":
 				return deleteBatch(args[1])

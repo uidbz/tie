@@ -38,12 +38,62 @@ const (
 type AssociatedReply = *api.AssociatedReply
 type DumpReply = *api.DumpReply
 type AddReply = *api.AddReply
-type GetReply = *api.GetReply
 type DeleteReply = *api.DeleteReply
 type UpdateReply = *api.UpdateReply
 type BatchReply = *api.BatchReply
 type Update = api.Update
-type GetOptions = api.GetOptions
+
+// Row is the flat query result unit: a key plus its attributes (relation ->
+// values). Re-exported from tiedb so callers and future bindings need only the
+// client package.
+type Row = tiedb.Row
+
+// QuerySpec describes a tag/association query. Terms is the full AND-list of
+// values a match must be associated with (no positional seed). See api.Query.
+type QuerySpec struct {
+	Terms   []string
+	Exclude []string
+	Scope   string
+	Filter  string
+	Reverse bool
+	Expand  bool
+	Offset  int
+	Limit   int
+	SortBy  string
+}
+
+// RowValues returns all values a row holds under relation, or nil.
+func RowValues(r Row, relation string) []string {
+	return r.Attributes[relation]
+}
+
+// RowOne returns the single value under relation and true, or ("", false) when
+// the relation is absent or holds a different count than one.
+func RowOne(r Row, relation string) (string, bool) {
+	v := r.Attributes[relation]
+	if len(v) != 1 {
+		return "", false
+	}
+	return v[0], true
+}
+
+// RowFirst returns the first value under relation, or "" when absent.
+func RowFirst(r Row, relation string) string {
+	if v := r.Attributes[relation]; len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+// RowHas reports whether relation holds value.
+func RowHas(r Row, relation, value string) bool {
+	for _, v := range r.Attributes[relation] {
+		if v == value {
+			return true
+		}
+	}
+	return false
+}
 
 type TieClient struct {
 	client *ws.Client
@@ -220,31 +270,70 @@ func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 	return reply, replyError(reply.ReplyStatus)
 }
 
-// Get a TripleSet from a key.
-// Returns ErrNotFound if the key has no associated values.
-func (tc *TieClient) SimpleGet(key string) (GetReply, error) {
+// Query runs a tag/association query and returns the matching rows (ordered and
+// paginated per spec), the total match count before pagination, and an error.
+// Returns ErrNotFound (with nil rows) when nothing matches.
+func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
-	request := col.NewGetRequest(key)
+	request := col.NewQueryRequest()
+	request.Terms = spec.Terms
+	request.Exclude = spec.Exclude
+	request.Scope = spec.Scope
+	request.Filter = spec.Filter
+	request.Reverse = spec.Reverse
+	request.Expand = spec.Expand
+	request.Sort = tiedb.SortOptions{Offset: spec.Offset, Limit: spec.Limit, SortBy: spec.SortBy}
 
-	reply, err := run[api.GetReply](tc, request)
+	reply, err := run[api.QueryReply](tc, request)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return reply, replyError(reply.ReplyStatus)
+	if e := replyError(reply.ReplyStatus); e != nil {
+		return nil, 0, e
+	}
+	return reply.Rows, reply.TotalCount, nil
 }
 
-// Get a TripleSet from a key with options.
-// Returns ErrNotFound if the key has no associated values.
-func (tc *TieClient) Get(key string, o GetOptions) (GetReply, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
-	request := col.NewGetRequest(key)
-	request.Options = o
+// Attrs fetches the forward attributes of a single key. Returns ErrNotFound if
+// the key has no associated values. It is Expand for one key.
+func (tc *TieClient) Attrs(key string) (Row, error) {
+	rows, err := tc.Expand([]string{key})
+	if err != nil {
+		return Row{}, err
+	}
+	if len(rows) == 0 {
+		return Row{}, ErrNotFound
+	}
+	return rows[0], nil
+}
 
-	reply, err := run[api.GetReply](tc, request)
+// Expand fetches the forward attributes of many keys in one round trip, one Row
+// per key that exists (missing keys are omitted). Order follows keys.
+func (tc *TieClient) Expand(keys []string) ([]Row, error) {
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	request := col.NewExpandRequest(keys, "")
+
+	reply, err := run[api.ExpandReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
-	return reply, replyError(reply.ReplyStatus)
+	if e := replyError(reply.ReplyStatus); e != nil {
+		return nil, e
+	}
+	return reply.Rows, nil
+}
+
+// Set makes (key, relation) hold exactly values, replacing any existing values
+// for that relation in one server-side op. An empty values slice clears it.
+func (tc *TieClient) Set(key, relation string, values []string) error {
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	request := col.NewSetRequest(key, relation, values)
+
+	reply, err := run[api.SetReply](tc, request)
+	if err != nil {
+		return err
+	}
+	return replyError(reply.ReplyStatus)
 }
 
 // Delete a triple from the collection
@@ -335,20 +424,14 @@ func (tc *TieClient) Restore(triples [][3]string) error {
 	for _, t := range triples {
 		b.Add(t[0], t[1], t[2])
 	}
-	reply, err := tc.Batch(b)
-	if err != nil {
+	if _, err := tc.Batch(b); err != nil {
 		return err
-	}
-	for _, a := range reply.AddReplys {
-		if !a.Success {
-			return errors.New("restore failed for key '" + a.OrigKey + "': " + a.Message)
-		}
 	}
 	return nil
 }
 
 // Check if the key exists
 func (tc *TieClient) Exists(key string) bool {
-	reply, err := tc.SimpleGet(key)
-	return err == nil && reply.Success
+	_, err := tc.Attrs(key)
+	return err == nil
 }
