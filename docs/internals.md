@@ -304,3 +304,59 @@ relations. Collections that never set an allowlist keep full reverse generality.
   and cache it) was considered as an alternative that keeps full generality at
   the cost of an O(n) first query; the opt-in approach was chosen because this
   codebase's reverse queries hit a small, known set of relations.
+
+## Why triples, and why not just SQL
+
+Triple stores are not novel — RDF/SPARQL, Datomic and friends have used the
+`(subject, predicate, object)` shape for decades — and over time `tiedb` has
+drifted toward looking like a relational database: the `Query` API grew
+`Terms`/`Exclude`/`Scope`/`Sort`/`Limit` (a `WHERE`/`ORDER BY`/`LIMIT` in
+disguise), and the `Row` type hands results back as `{key, columns, values}`.
+It is fair to ask whether SQLite from day one would have been the smarter call.
+Both of the following are true.
+
+**Where the triple model genuinely fits this project:**
+
+- **Open schema.** A new relation (`artist`, `tie-type`, a tag invented
+  tomorrow) needs no `ALTER TABLE` — it is just another `(key, value1, value2)`.
+  For a personal media/tagging store where the "columns" are open-ended and
+  user-defined, that avoids constant migrations. The SQL equivalent is an EAV
+  table, which *is* a triple store with more ceremony.
+- **Multi-valued by default.** "Each cell is a list" is the point: a key can
+  hold many values under one relation without a join table. The common case (N
+  tags per file) is the default, not the special case.
+- **Reverse associations as a first-class index.** `ReverseRelations` makes
+  "which files have tag X" as cheap as "which tags does file X have." SQL offers
+  the same via an index on a join table; here it is the core primitive, tuned for
+  exactly this query pattern (see [Associations](#associations-forward-and-reverse-indexes)).
+- **Uniform storage/wire/backup.** One record shape means `dump`/`restore` is
+  trivial TSV, the crash-safe writer handles one kind of record, and the FUSE
+  tree derives from the same triples — no per-table schema to version.
+
+**Where SQL would have been the easier path:**
+
+- **We rebuilt a database.** The crash-safe writer, freespace reclamation, sync
+  durability, the association index, sort/pagination — SQLite provides all of
+  that for free, hardened over twenty years. That is the real cost of the DIY
+  engine.
+- **The `Row` type is the tell.** The moment clients wanted `{key, columns,
+  values}` back, we admitted the *consumption* pattern is tabular even though the
+  *storage* is triples. `Row` optimizes for the consuming client's mental model
+  (a wire-friendly, language-neutral record); the triple form optimizes for the
+  engine's (a subject and its predicate→object groups). `Row` sits exactly on
+  that boundary, which is why the name feels slightly off from inside tiedb.
+- **Ad-hoc queries.** Anything not pre-indexed in reverse is awkward; SQL's query
+  planner just handles new query shapes.
+
+**Synthesis.** A defensible alternative is *triples-as-the-logical-model over
+SQLite-as-the-engine*: a single `triples(key, value1, value2)` table with the
+right indexes. That keeps every conceptual benefit above (open schema,
+multi-valued, reverse lookups via a second index) while deleting most of tiedb —
+the writer, freespace, durability, sort. The genuinely distinctive part of the
+project was never the triple store; it is the **content-addressed blob store +
+FUSE tag tree** combination, and that does not care whether metadata lives in
+tiedb or SQLite. None of this argues for ripping tiedb out now: it works, it is
+tuned for this repo's memory constraints (memory is weighted ≥ load speed), and a
+storage-engine rewrite is real risk for a mostly-ergonomic gain. It is recorded
+here so the trade-off is a deliberate, remembered choice rather than an
+accident.

@@ -14,6 +14,31 @@ importing a filesystem, tagging albums/series/galleries, querying media by tag
 combinations, and linking media together — see
 [docs/media-database.md](docs/media-database.md).
 
+## What's unique about tie
+
+Triple stores are not new (RDF, SPARQL, Datomic have used the
+`(subject, predicate, object)` shape for decades), and content-addressed storage
+is not new either. What tie combines is the interesting part: **a
+content-addressed blob store and a live, tag-derived FUSE filesystem, joined by
+the content hash.**
+
+- **Content is the key.** A file's highwayhash is its address in the blob store
+  *and* the `key` of every triple that describes it. Metadata and bytes are
+  joined by identity, so the same content tagged from two places is never
+  duplicated — deduplication is a property of the model, not a cleanup job.
+- **Tags are a filesystem.** The `--db` mount turns tag/association queries into
+  a browsable, writable directory tree: a path *is* a query, `mkdir`/rename edits
+  tags, and the tree updates as the store does. You navigate your data by
+  combining tags instead of by remembering where you filed something.
+- **Open, multi-valued schema.** Because everything is a triple, a new relation
+  (a tag you invent today, a new media attribute) needs no migration, and a key
+  naturally holds many values under one relation — the common case for tagging.
+
+The triple store underneath (`tiedb`) is a deliberately hand-built,
+memory-tuned engine rather than a wrapper over SQL; the trade-offs of that
+choice — and where a `triples`-over-SQLite design would have been simpler — are
+discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-not-just-sql).
+
 ## Programs (`cmd/`)
 
 | Program        | What it does |
