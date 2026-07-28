@@ -30,7 +30,7 @@ func (request *SyncRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	env.Collection(request.Namespace, request.CollectionId).Sync()
 	reply.Success = true
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *SyncRequest) New() ws.RequestInterface {

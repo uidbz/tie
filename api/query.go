@@ -58,7 +58,7 @@ func (request *QueryRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	if !found || len(sorted) == 0 {
 		reply.Success = false
 		reply.Message = "Key has no associated values"
-		return ws.Reply{request.Id, reply}, nil
+		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 	}
 
 	reply.TotalCount = total
@@ -77,7 +77,7 @@ func (request *QueryRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	}
 	reply.Success = true
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *QueryRequest) New() ws.RequestInterface {

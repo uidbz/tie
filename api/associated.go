@@ -51,11 +51,11 @@ func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		reply.Success = true
 		reply.OrigKey = request.Key
 
-		return ws.Reply{request.Id, reply}, nil
+		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 	}
 	reply.Success = false
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *AssociatedRequest) New() ws.RequestInterface {

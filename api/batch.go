@@ -103,14 +103,14 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 			reply.Success = false
 			reply.Message = "batch op " + strconv.Itoa(i) + " (" + op.Op + ") failed: " + msg
 			col.Sync()
-			return ws.Reply{request.Id, reply}, errors.New(reply.Message)
+			return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, errors.New(reply.Message)
 		}
 	}
 
 	col.Sync()
 	reply.Success = true
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (op BatchOp) value() string {

@@ -33,7 +33,7 @@ func (request *ExpandRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply.Rows = col.ExpandKeys(request.Keys, request.Filter)
 	reply.Success = true
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *ExpandRequest) New() ws.RequestInterface {

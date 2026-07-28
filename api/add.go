@@ -43,7 +43,7 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply.OrigValue1 = request.Value2
 	reply.OrigValue2 = request.Value2
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *AddRequest) New() ws.RequestInterface {

@@ -34,7 +34,7 @@ func (request *SetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply.Success = true
 	reply.OrigKey = request.Key
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 func (request *SetRequest) New() ws.RequestInterface {

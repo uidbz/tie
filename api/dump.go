@@ -31,7 +31,7 @@ func (request *DumpRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	})
 	reply.Success = true
 
-	return ws.Reply{request.Id, reply}, nil
+	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
 }
 
 // StreamReply writes every forward triple as NDJSON (one JSON StringTriple per
