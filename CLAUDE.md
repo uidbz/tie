@@ -35,7 +35,7 @@ cd test-env
 - **Both servers are TOML-configured** (`-config <file>`), not flags. `start.sh`
   generates `tie-daemon.toml` and `tie-filehost.toml` if missing. Both are
   gitignored runtime artifacts; only `config.toml` (the CLI config) is tracked.
-- Filehost config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
+- Filehost config keys: `ListenOn`, `Insecure`, `BlobPath`, `CertFile`/`KeyFile`,
   `ReapInterval` (Go duration; `"0"` disables the expired-blob reaper).
 - Daemon config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
   `MaxConcurrentRequests` (0 = unbounded), `[[Users]]` (Username/Password),

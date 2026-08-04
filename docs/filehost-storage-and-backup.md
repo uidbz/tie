@@ -12,7 +12,7 @@ Two facts about the filehost drive everything here:
   backup only ever gains new blobs and (if the reaper runs) loses expired ones —
   it never has to reconcile in-place edits.
 - **The store is one root, sharded by count, not by data.** Every blob lives
-  under `DbPath` as `<xx>/<yy>/<hash>` — two levels of 2-hex directories, up to
+  under `BlobPath` as `<xx>/<yy>/<hash>` — two levels of 2-hex directories, up to
   256×256 leaf dirs. The prefix comes from the content hash, so blobs distribute
   roughly uniformly *by object count* across shards, regardless of their size.
 
@@ -34,7 +34,7 @@ A tempting layout is to mount shard prefixes onto different disks
 
 ### BTRFS hosts: pool the disks into one filesystem
 
-On BTRFS, let the filesystem pool mismatched disks and point `DbPath` at the one
+On BTRFS, let the filesystem pool mismatched disks and point `BlobPath` at the one
 mount. The filehost keeps its single-root model untouched.
 
 ```bash
@@ -63,7 +63,7 @@ backup server.
 
 You will also run the filehost on hosts without BTRFS. Two good options:
 
-1. **Single large disk / hardware or mdadm RAID.** Simplest: put `DbPath` on one
+1. **Single large disk / hardware or mdadm RAID.** Simplest: put `BlobPath` on one
    filesystem and let RAID (or the cloud provider's block store) handle disk
    failure. Nothing filehost-specific to configure.
 2. **LVM to pool mismatched disks.** If you have several odd-sized disks and no
@@ -77,7 +77,7 @@ You will also run the filehost on hosts without BTRFS. Two good options:
    mount /dev/filehost/blobs /mnt/filehost
    ```
 
-   Point `DbPath` at the mount. Grow later with `vgextend` + `lvextend -r`.
+   Point `BlobPath` at the mount. Grow later with `vgextend` + `lvextend -r`.
 
 The rule is the same on every platform: **give the filehost one root directory
 and pool underneath it.** Never split the shard tree across mounts by hand.

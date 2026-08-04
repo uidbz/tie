@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # ---- Configuration (override via environment) -------------------------------
-# Local blob store root (tie-filehost DbPath). Trailing slash matters to rsync;
+# Local blob store root (tie-filehost BlobPath). Trailing slash matters to rsync;
 # the script normalizes it below.
 SRC="${TIE_FILEHOST_DATA:-/mnt/filehost}"
 # Remote target: user@host:/path the blobs are mirrored into.

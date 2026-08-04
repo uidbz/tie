@@ -73,25 +73,25 @@ install -d -o "$TIE_USER" -g "$TIE_USER" -m 0755 "$DATADIR" "$DATADIR/db" "$DATA
 # --- Config -------------------------------------------------------------
 install -d -m 0755 "$CONFDIR"
 
-# install_config <example-src> <dest> <db-path>
-# Copies the example (once), pointing DbPath at the installed data dir. Config
-# holds credentials, so it is chmod 0640 and owned by the tie user.
+# install_config <example-src> <dest> <path-key> <path-value>
+# Copies the example (once), pointing the named path key at the installed data
+# dir. Config holds credentials, so it is chmod 0640 and owned by the tie user.
 install_config() {
-	local src="$1" dest="$2" dbpath="$3"
+	local src="$1" dest="$2" key="$3" val="$4"
 	if [ -e "$dest" ]; then
 		log "keeping existing $dest"
 		return
 	fi
 	log "installing $dest"
-	sed "s#^DbPath = .*#DbPath = \"$dbpath\"#" "$src" > "$dest"
+	sed "s#^${key} = .*#${key} = \"${val}\"#" "$src" > "$dest"
 	chown "$TIE_USER:$TIE_USER" "$dest"
 	chmod 0640 "$dest"
 }
 
 install_config "$REPO_ROOT/cmd/tie-daemon/tie-daemon.toml.example" \
-	"$CONFDIR/tie-daemon.toml" "$DATADIR/db"
+	"$CONFDIR/tie-daemon.toml" "DbPath" "$DATADIR/db"
 install_config "$REPO_ROOT/cmd/tie-filehost/tie-filehost.toml.example" \
-	"$CONFDIR/tie-filehost.toml" "$DATADIR/data"
+	"$CONFDIR/tie-filehost.toml" "BlobPath" "$DATADIR/data"
 
 # --- Service files ------------------------------------------------------
 case "$INIT" in

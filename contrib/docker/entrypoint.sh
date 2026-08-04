@@ -30,7 +30,7 @@ if [ ! -f "$CONFDIR/tie-filehost.toml" ]; then
 	cat > "$CONFDIR/tie-filehost.toml" <<-EOF
 	ListenOn = "0.0.0.0:1162"
 	Insecure = true
-	DbPath = "$DATADIR/data"
+	BlobPath = "$DATADIR/data"
 	ReapInterval = "1h"
 	EOF
 fi

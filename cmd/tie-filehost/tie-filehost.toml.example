@@ -3,7 +3,7 @@
 # Copy to tie-filehost.toml (or pass -config <path>) and edit.
 
 ListenOn = ":1162"
-DbPath = "/data"
+BlobPath = "/data"
 
 # How often expired blobs are reaped, as a Go duration (e.g. "1h", "30m").
 # Empty or "0" disables the reaper (all blobs kept forever).
@@ -21,3 +21,14 @@ KeyFile = ""
 # append structured JSON to a file. LogLevel is debug, info, warn, or error.
 LogFile = ""
 LogLevel = "info"
+
+# Optional read cache on faster storage (e.g. SSD or tmpfs). On first access a
+# blob is copied from BlobPath into CachePath and served from there on subsequent
+# requests. An LRU eviction policy keeps total cache disk use near CacheSizeGB.
+# Leave CachePath empty (the default) to serve all blobs directly from BlobPath.
+#
+# Example: cache on a tmpfs mounted at /mnt/ram
+#   CachePath = "/mnt/ram/tie-cache"
+#   CacheSizeGB = 4.0
+CachePath = ""
+CacheSizeGB = 1.0

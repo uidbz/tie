@@ -24,6 +24,7 @@ var (
 	listenOn    string = ":1162"
 	destination string = "/data"
 	retention   *retentionIndex
+	filecache   *blobCache
 )
 
 // FilehostConfig is the full tie-filehost configuration, loaded from TOML.
@@ -35,8 +36,8 @@ type FilehostConfig struct {
 	Insecure bool
 	CertFile string
 	KeyFile  string
-	// DbPath is the datastore root where content-addressed blobs are stored.
-	DbPath string
+	// BlobPath is the root directory where content-addressed blobs are stored.
+	BlobPath string
 	// ReapInterval is how often expired blobs are reaped, as a Go duration
 	// string (e.g. "1h"). Empty or "0" disables the reaper.
 	ReapInterval string
@@ -46,13 +47,21 @@ type FilehostConfig struct {
 	// LogLevel is the minimum level emitted: debug, info, warn, error. Empty
 	// defaults to info.
 	LogLevel string
+	// CachePath is an optional directory on faster storage (e.g. an SSD or
+	// tmpfs) where blobs are copied on first access and served from thereafter.
+	// Leave empty to disable; blobs are served directly from BlobPath.
+	CachePath string
+	// CacheSizeGB is the LRU eviction budget for CachePath in gibibytes.
+	// Defaults to 1. Ignored when CachePath is empty.
+	CacheSizeGB float64
 }
 
 func defaultConfig() FilehostConfig {
 	return FilehostConfig{
 		ListenOn:     ":1162",
-		DbPath:       "/data",
+		BlobPath:     "/data",
 		ReapInterval: "1h",
+		CacheSizeGB:  1,
 	}
 }
 
@@ -214,9 +223,16 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Invalid hash:", hash)
 		return
 	}
-	path := PathFromHash(destination, hash)
 	slog.Info("serving blob", "hash", hash)
-	http.ServeFile(w, r, path)
+	if filecache != nil {
+		if cached, err := filecache.get(hash); err == nil {
+			http.ServeFile(w, r, cached)
+			return
+		} else {
+			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
+		}
+	}
+	http.ServeFile(w, r, PathFromHash(destination, hash))
 }
 
 func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -227,8 +243,15 @@ func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "Invalid hash:", hash)
 		return
 	}
-	path := PathFromHash(destination, hash)
 	slog.Info("serving blob", "hash", hash, "filename", filename)
+	path := PathFromHash(destination, hash)
+	if filecache != nil {
+		if cached, err := filecache.get(hash); err == nil {
+			path = cached
+		} else {
+			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
+		}
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Fprint(w, "Error happened")
@@ -326,8 +349,8 @@ set CertFile/KeyFile to serve HTTPS directly.
 	}
 	defer cleanup()
 
-	if cfg.DbPath == "" {
-		slog.Error("please provide a DbPath in the config file")
+	if cfg.BlobPath == "" {
+		slog.Error("please provide a BlobPath in the config file")
 		os.Exit(1)
 	}
 
@@ -343,8 +366,20 @@ set CertFile/KeyFile to serve HTTPS directly.
 	router := http.NewServeMux()
 	routes(router)
 
-	destination = filepath.Clean(cfg.DbPath)
+	destination = filepath.Clean(cfg.BlobPath)
 	listenOn = cfg.ListenOn
+
+	if cfg.CachePath != "" {
+		maxBytes := int64(cfg.CacheSizeGB * 1024 * 1024 * 1024)
+		if maxBytes <= 0 {
+			maxBytes = 1 << 30 // 1 GiB default when CacheSizeGB is unset/zero
+		}
+		if filecache, err = newBlobCache(destination, filepath.Clean(cfg.CachePath), maxBytes); err != nil {
+			slog.Error("initializing blob cache", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("blob cache enabled", "path", cfg.CachePath, "size_gb", cfg.CacheSizeGB)
+	}
 
 	if retention, err = loadRetentionIndex(destination); err != nil {
 		slog.Error("loading retention index", "err", err)

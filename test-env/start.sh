@@ -61,14 +61,14 @@ if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
 	EOF
 fi
 
-# The filehost is likewise configured by a TOML file (not flags). DbPath is
+# The filehost is likewise configured by a TOML file (not flags). BlobPath is
 # relative to $TIE_ENV, matching start_one's cwd. ReapInterval = "0" disables
 # the expired-blob reaper for the sandbox.
 if [[ ! -f "$TIE_FILEHOST_CONFIG" ]]; then
 	cat >"$TIE_FILEHOST_CONFIG" <<-EOF
 		ListenOn = ":1162"
 		Insecure = true
-		DbPath = "data"
+		BlobPath = "data"
 		ReapInterval = "0"
 	EOF
 fi

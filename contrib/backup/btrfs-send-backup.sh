@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # ---- Configuration (override via environment) -------------------------------
-# The BTRFS subvolume holding the blob store (tie-filehost DbPath, or its parent
+# The BTRFS subvolume holding the blob store (tie-filehost BlobPath, or its parent
 # subvolume). Must be a subvolume, not a plain directory.
 SUBVOL="${TIE_FILEHOST_SUBVOL:-/mnt/filehost}"
 # Local directory holding read-only snapshots. Must be on the same BTRFS FS.
