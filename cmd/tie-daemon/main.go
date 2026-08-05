@@ -155,6 +155,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		c.NewAssociatedRequest(""),
 		c.NewSyncRequest(),
 		c.NewDumpRequest(),
+		c.NewCoTagsRequest(nil, nil, ""),
 	}
 
 	ws := webservice.NewWebservice(config, requests)

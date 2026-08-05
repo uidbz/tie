@@ -8,6 +8,15 @@ to follow semantic versioning.
 
 ### Added
 
+- **Faceted tag refinement (`CoTagsForQuery`).** A new daemon endpoint
+  (`POST /CoTags`) and matching client methods return all unique tags carried by
+  entries that match a given AND/NOT/scope tag query. This is the "what can I
+  narrow by next?" query: given the user's current filter (e.g. `tree,nature`),
+  it answers which further tags (e.g. `2026,norway,sunset`) exist on the
+  matching set — without transferring full file rows. Use
+  `TieClient.CoTagsForQueryExcludingInput` to strip the input tags from the
+  result, or `CoTagsForQuery` to include them.
+
 - **Versioned re-import.** Re-importing a directory tree is now a true sync:
   when a file's content changes (a new hash under the same name) or a file is
   renamed/deleted on disk, its superseded content is moved into a per-file

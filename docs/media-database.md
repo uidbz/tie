@@ -319,6 +319,40 @@ yet expose — for now media-typed queries are a Go-client feature.
 > store intersects by associate (hash) identity alone — the whole query, scoping
 > included, resolves server-side in one call.
 
+### Faceted refinement: what tags can I further narrow by?
+
+Once a user has picked a set of filter tags it is useful to know which *other*
+tags appear on the matching files — the narrowing options left. This is the
+"faceted search" pattern common in photo browsers and media managers.
+
+```go
+// User currently has "tree" and "nature" selected.
+// CoTagsForQueryExcludingInput returns tags on those files *other* than the
+// input tags, so the UI can offer them as additional refinements.
+tags, err := tie.CoTagsForQueryExcludingInput(
+    []string{"tree", "nature"}, // include: already-selected tags
+    nil,                        // exclude
+    "",                         // scope (empty = all media types)
+)
+// tags might be: ["2026", "norway", "sunset", ...]
+```
+
+`CoTagsForQuery` returns the full tag set including the input tags:
+
+```go
+// Same query but input tags are included in the result.
+tags, err := tie.CoTagsForQuery([]string{"tree", "nature"}, nil, "")
+```
+
+Both calls return a sorted, deduplicated slice. `ErrNotFound` is returned when
+no entries match the given include terms (the result set is empty).
+
+> How it works: the server runs the same tag-intersection set algebra as a
+> `FilesWithTags` call to find the matching hashes, then for each matching hash
+> looks up its forward `tag` associations and collects every unique tag value.
+> The result never crosses the wire until fully accumulated, so only the
+> compact tag list — not the full file rows — is transferred.
+
 ## Relating media to each other
 
 Any two media items can be linked by an open-vocabulary, user-named relation —
@@ -469,6 +503,7 @@ note the range in the relation name or a companion triple.
 | Add / remove a tag | `tie add <hash> tag t` / `tie del <hash> tag t` |
 | Files with one tag | `tie.FilesWithTag(tag, off, lim)` |
 | Music with tags, not others | `tie.FilesWithTags(TieAudioFile, incl, excl, off, lim)` |
+| Narrowing tags for a filter | `tie.CoTagsForQueryExcludingInput(incl, excl, scope)` |
 | Tag-only AND/NOT (CLI) | `tie get -r -f tag t1 t2 -t3` |
 | Relate two media | `tie.RelateFiles(a, "relation", b)` |
 | Relations on an item | `tie.RelationsFrom(hash)` |
