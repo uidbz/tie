@@ -39,7 +39,7 @@ func main() {
 			"mounts collections as a FUSE filesystem.",
 		EnableShellCompletion: true,
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load", Value: "config.toml"},
+			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
 		},
 		Commands: []*cli.Command{
 			cmdAdd(),

@@ -33,7 +33,17 @@ func ReadConfig(configName string) Config {
 	return c
 }
 
+// ConfigFileName lets callers omit the extension: `tie -c myconf` resolves to
+// myconf.toml. A name that already ends in .toml is left as-is.
+func ConfigFileName(configName string) string {
+	if configName != "" && !strings.HasSuffix(configName, ".toml") {
+		return configName + ".toml"
+	}
+	return configName
+}
+
 func LoadConfig(configName string) (Config, error) {
+	configName = ConfigFileName(configName)
 	c := Config{}
 	loadPath, err := conf.LoadConfig("tie", configName, &c)
 	if err != nil {
@@ -75,7 +85,7 @@ func LoadOrCreateConfig(configName string) (Config, bool, error) {
 }
 
 func SaveConfig(name string, config Config) error {
-	return conf.SaveToUserConfigDir("tie", name, config)
+	return conf.SaveToUserConfigDir("tie", ConfigFileName(name), config)
 }
 
 func (tc *TieClient) PrintState() {

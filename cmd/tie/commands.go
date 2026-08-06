@@ -544,7 +544,7 @@ func cmdConf() *cli.Command {
 					if err != nil {
 						return err
 					}
-					path, err := conf.PathUserConfigDir("tie", name)
+					path, err := conf.PathUserConfigDir("tie", client.ConfigFileName(name))
 					fmt.Println("Config created here:", path)
 
 					return err
