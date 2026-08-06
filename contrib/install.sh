@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Install tie-daemon and tie-filehost as system services.
+# Install the tie client, tie-daemon, and tie-filehost, wiring up the daemon and
+# filehost as system services.
 #
-# Builds both binaries, installs them to /usr/local/bin, creates a dedicated
-# `tie` system user, lays down config in /etc/tie and data dirs in /var/lib/tie,
-# then installs service files for whichever init system is detected (systemd or
-# OpenRC).
+# Builds all three binaries, installs them to /usr/local/bin, creates a
+# dedicated `tie` system user, lays down config in /etc/tie and data dirs in
+# /var/lib/tie, then installs service files for whichever init system is
+# detected (systemd or OpenRC). The client (tie) is installed too so a server
+# box has the CLI on hand.
 #
 # Usage: sudo ./contrib/install.sh
 #
@@ -41,6 +43,7 @@ log "init system: ${INIT:-none}"
 
 # --- Build --------------------------------------------------------------
 log "building binaries (static)"
+( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie" ./cmd/tie )
 ( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-daemon" ./cmd/tie-daemon )
 ( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-filehost" ./cmd/tie-filehost )
 
@@ -62,9 +65,10 @@ fi
 # --- Binaries -----------------------------------------------------------
 log "installing binaries to $BINDIR"
 install -d "$BINDIR"
+install -m 0755 "$SCRIPT_DIR/tie" "$BINDIR/tie"
 install -m 0755 "$SCRIPT_DIR/tie-daemon" "$BINDIR/tie-daemon"
 install -m 0755 "$SCRIPT_DIR/tie-filehost" "$BINDIR/tie-filehost"
-rm -f "$SCRIPT_DIR/tie-daemon" "$SCRIPT_DIR/tie-filehost"
+rm -f "$SCRIPT_DIR/tie" "$SCRIPT_DIR/tie-daemon" "$SCRIPT_DIR/tie-filehost"
 
 # --- Data dirs ----------------------------------------------------------
 log "creating data dirs under $DATADIR"

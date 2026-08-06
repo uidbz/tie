@@ -297,7 +297,8 @@ Common tasks are wrapped in a `Makefile`:
 | Command | What it does |
 |---------|--------------|
 | `make build` | Build all commands into `dist/`. |
-| `make install` | Install `tie-daemon` + `tie-filehost` as system services (systemd/OpenRC). Run as `sudo make install`. See [Running as system services](#running-as-system-services). |
+| `make install` | Install just the `tie` client into `GOBIN` (rootless). |
+| `make install-server` | Install the client, `tie-daemon`, and `tie-filehost` as system services (systemd/OpenRC). Run as `sudo make install-server`. See [Running as system services](#running-as-system-services). |
 | `make clean` | Remove `dist/`. |
 | `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-daemon` / `tie-filehost`. |
 | `make push MSG="message"` | `go get -u . && go mod tidy`, then commit everything and push. |
@@ -326,12 +327,13 @@ bind `ListenOn` to localhost so only the proxy reaches the service.
 
 ### Running as system services
 
-The installer builds both binaries, creates a dedicated `tie` user, lays down
-config in `/etc/tie/` and data in `/var/lib/tie/`, and installs service files
-for whichever init system is detected (systemd or OpenRC):
+The installer builds all three binaries (client, daemon, filehost), creates a
+dedicated `tie` user, lays down config in `/etc/tie/` and data in
+`/var/lib/tie/`, and installs service files for whichever init system is
+detected (systemd or OpenRC):
 
 ```sh
-sudo make install      # or: sudo ./contrib/install.sh
+sudo make install-server   # or: sudo ./contrib/install.sh
 ```
 
 Then edit `/etc/tie/tie-daemon.toml` (at least the `[[Users]]` account) and

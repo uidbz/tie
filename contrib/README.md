@@ -12,14 +12,18 @@ tie as a normal package (Portage-managed binaries, config, and service files).
 From a checkout of this repo:
 
 ```
-sudo make install         # from the repo root
+sudo make install-server  # from the repo root
 # or equivalently:
 sudo ./contrib/install.sh
 ```
 
+(`make install` on its own installs just the `tie` client, rootless, into your
+`GOBIN` — use `install-server` for the daemon and filehost.)
+
 The installer:
 
-- builds both binaries and installs them to `/usr/local/bin`,
+- builds all three binaries (`tie`, `tie-daemon`, `tie-filehost`) and installs
+  them to `/usr/local/bin`,
 - creates a dedicated `tie` system user,
 - writes config to `/etc/tie/` (from the `*.toml.example` files, if not already
   present) and data dirs to `/var/lib/tie/`,

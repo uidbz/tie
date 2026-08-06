@@ -7,7 +7,7 @@ CMDS    := tie tie-daemon tie-filehost
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X git.sr.ht/~uid/tie/version.Version=$(VERSION)
 
-.PHONY: build install tls-keys push release clean
+.PHONY: build install install-server tls-keys push release clean
 
 # Build all commands into dist/, embedding the version via ldflags.
 build:
@@ -18,9 +18,16 @@ build:
 		go build -ldflags "$(LDFLAGS)" -o $(DIST)/ ./cmd/$$cmd || exit 1; \
 	done
 
-# Install tie as system services (systemd/OpenRC). Requires root, so run as
-# `sudo make install`. See contrib/install.sh and contrib/README.md.
+# Install just the tie client into GOBIN (or $GOPATH/bin). Rootless: this is
+# the common case, since most machines only need the client. For the server
+# components use `make install-server`.
 install:
+	go install -ldflags "$(LDFLAGS)" ./cmd/tie
+
+# Install the full stack — client, daemon, and filehost — plus system services
+# (systemd/OpenRC). Requires root, so run as `sudo make install-server`.
+# See contrib/install.sh and contrib/README.md.
+install-server:
 	./contrib/install.sh
 
 # Generate a self-signed localhost certificate for tie-daemon / tie-filehost.
