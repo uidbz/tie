@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
-## [Unreleased]
+## [v0.4.1] - 2026-08-06
 
 ### Added
 
@@ -28,6 +28,17 @@ to follow semantic versioning.
   another directory) is never disturbed.
 - **File modification times in the `--db` mount.** Files now report their import
   date as `mtime`, surfaced from the `tag-date` triple.
+- **LRU blob cache for tie-filehost.** When `CachePath` is set in the filehost
+  TOML config, blobs are copied from `BlobPath` (slow storage) into `CachePath`
+  (fast storage, e.g. SSD or tmpfs) on first access and served from there
+  afterward. Concurrent requests for the same hash coalesce on a per-entry ready
+  channel (single copy), and LRU eviction enforces the `CacheSizeGB` budget;
+  both download handlers fall back to `BlobPath` on any cache error.
+- **`restore --drop`.** The CLI `restore` command gains a `--drop` flag that
+  drops the target collection before restoring, so the backup's data replaces
+  the collection entirely rather than merging into it. Backed by a new
+  end-to-end `Drop` request (`TieTree.DropCollection` /
+  `TieClient.DropCollection`).
 
 ### Changed
 
@@ -43,6 +54,16 @@ to follow semantic versioning.
   no longer accumulates multiple `tag-date` values; it records only the last
   import time. The finer precision keeps version retention ordered correctly for
   re-imports within the same second. Legacy second-resolution values still parse.
+- **filehost config key `DbPath` renamed to `BlobPath`.** The filehost's blob
+  storage path is now `BlobPath` in the TOML config, disambiguating it from the
+  daemon's (unchanged) `DbPath`. Existing filehost configs must rename the key.
+- **`make install` installs only the client.** The rootless common case,
+  `make install`, now installs just the `tie` client into `GOBIN`. The full
+  server install (client + daemon + filehost + system services) moves to
+  `make install-server`.
+- **`-c` config name accepts an omitted `.toml` extension.** `tie -c myconf`
+  now resolves to `myconf.toml`; the extension is appended when absent in both
+  load and save paths.
 
 ## [v0.4.0] - 2026-07-24
 
