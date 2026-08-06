@@ -175,6 +175,12 @@ func (ws *Webservice) GetCollection(namespace, collection string) *tiedb.Collect
 	return ws.db.GetCollection(key)
 }
 
+func (ws *Webservice) DropCollection(namespace, collection string) error {
+	key := tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}
+
+	return ws.db.DropCollection(key)
+}
+
 func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	raw_data, _ := io.ReadAll(r.Body)
 	r.Body.Close()

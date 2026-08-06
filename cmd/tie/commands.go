@@ -338,6 +338,12 @@ func cmdRestore() *cli.Command {
 		Name:      "restore",
 		Usage:     "Restore triples from a TSV file (key<TAB>value1<TAB>value2) into the current collection (additive); reads stdin if no file is given",
 		ArgsUsage: "[file]",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "drop",
+				Usage: "Drop the existing collection first, overwriting it entirely with the restored data (default: merge)",
+			},
+		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
@@ -366,6 +372,15 @@ func cmdRestore() *cli.Command {
 					return fmt.Errorf("Malformed line %d: %v", line, err)
 				}
 				triples = append(triples, [3]string{rec[0], rec[1], rec[2]})
+			}
+			// The whole file is parsed first, so a malformed input aborts before
+			// anything is dropped. The drop+restore that follows is not atomic,
+			// though: if the restore fails mid-batch the collection is left empty.
+			// Acceptable for a backup-recovery tool; re-run restore to retry.
+			if ctx.Bool("drop") {
+				if err := tie.DropCollection(); err != nil {
+					return errors.New("Drop Error: " + err.Error())
+				}
 			}
 			if err := tie.Restore(triples); err != nil {
 				return errors.New("Restore Error: " + err.Error())

@@ -95,6 +95,35 @@ func (db *TieTree) Close() {
 	})
 }
 
+// DropCollection deletes a collection's entire on-disk state and forgets its
+// in-memory index. The live writer (if any) is closed first so its fd is
+// released before the .tie file is removed, then the collection is dropped from
+// the map; a later GetCollection reloads it lazily from the now-absent file,
+// yielding an empty collection. This is the destructive counterpart to the
+// additive Add/Restore path — the whole collection is overwritten, not merged.
+// A no-op in memory-only mode returns nil after dropping the in-memory entry.
+func (db *TieTree) DropCollection(key CollectionKey) error {
+	db.colMutex.Lock()
+	defer db.colMutex.Unlock()
+
+	if col, found := db.collections.Get(key); found {
+		if db.writeToDisk {
+			col.closeDB()
+		}
+		db.collections.Delete(key)
+	}
+
+	if !db.writeToDisk {
+		return nil
+	}
+
+	path := key.Database + "/" + key.Collection + ".tie"
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) *Collection {
 	ic := Collection{}
 

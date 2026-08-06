@@ -155,6 +155,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		c.NewAssociatedRequest(""),
 		c.NewSyncRequest(),
 		c.NewDumpRequest(),
+		c.NewDropRequest(),
 		c.NewCoTagsRequest(nil, nil, ""),
 	}
 

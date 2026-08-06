@@ -41,6 +41,7 @@ type AddReply = *api.AddReply
 type DeleteReply = *api.DeleteReply
 type UpdateReply = *api.UpdateReply
 type BatchReply = *api.BatchReply
+type DropReply = *api.DropReply
 type Update = api.Update
 
 // Row is the flat query result unit: a key plus its attributes (relation ->
@@ -402,6 +403,21 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 	}
 	reply.Success = true
 	return reply, nil
+}
+
+// DropCollection deletes the entire current collection — its on-disk .tie file
+// and in-memory index — server-side. The collection reloads empty on next
+// access. Unlike Delete (one triple) this discards the whole collection, so it
+// is the destructive setup for an overwriting Restore.
+func (tc *TieClient) DropCollection() error {
+	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	request := col.NewDropRequest()
+
+	reply, err := run[api.DropReply](tc, request)
+	if err != nil {
+		return err
+	}
+	return replyError(reply.ReplyStatus)
 }
 
 // Restore adds every (key, value1, value2) triple into the current collection
