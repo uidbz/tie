@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 
+	"git.sr.ht/~uid/tie/io/archivelib"
 	"git.sr.ht/~uid/tie/metadata"
 	"github.com/dhowden/tag"
 	"github.com/h2non/filetype"
@@ -33,11 +34,42 @@ func GetTieType(file io.Reader) (TieType, error) {
 
 func GetTieTypeFromPath(path string) (TieType, error) {
 	file, err := os.Open(path)
-	defer file.Close()
 	if err != nil {
 		return TieUnknownFile, err
 	}
-	return GetTieType(file)
+	defer file.Close()
+
+	t, err := GetTieType(file)
+	if err != nil {
+		return TieUnknownFile, err
+	}
+	// An archive refines to a media-specific *-archive by peeking at its
+	// members: the fd is a seekable ReaderAt, so we can open it as a zip
+	// without buffering. A failure to open leaves it as the generic
+	// archive-file (e.g. a non-zip archive we don't expand yet).
+	if t == TieArchiveFile {
+		if members, err := archivelib.List(file); err == nil {
+			return ArchiveTieType(archivelib.ModalKind(members)), nil
+		}
+	}
+	return t, nil
+}
+
+// ArchiveTieType maps an archivelib member-kind to the archive tie-type stored
+// on the blob. An unrecognized/mixed archive stays the generic archive-file.
+func ArchiveTieType(k archivelib.Kind) TieType {
+	switch k {
+	case archivelib.Image:
+		return TieImageArchive
+	case archivelib.Audio:
+		return TieAudioArchive
+	case archivelib.Video:
+		return TieVideoArchive
+	case archivelib.Document:
+		return TieDocumentArchive
+	default:
+		return TieArchiveFile
+	}
 }
 
 // ExtractMediaMetadata reads embedded media tags from a local file. Audio files

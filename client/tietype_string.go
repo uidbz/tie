@@ -19,19 +19,21 @@ func _() {
 	_ = x[TieVideoDir-8]
 	_ = x[TieDocumentDir-9]
 	_ = x[TieImageArchive-10]
-	_ = x[TieVideoArchive-11]
-	_ = x[TieDocumentArchive-12]
-	_ = x[TieDirectory-13]
-	_ = x[TieFile-14]
+	_ = x[TieAudioArchive-11]
+	_ = x[TieVideoArchive-12]
+	_ = x[TieDocumentArchive-13]
+	_ = x[TieDirectory-14]
+	_ = x[TieFile-15]
 }
 
-const _TieType_name = "unknown-fileimage-fileaudio-filevideo-filedocument-filearchive-fileimage-diraudio-dirvideo-dirdocument-dirimage-archivevideo-archivedocument-archivedirectoryfile"
+const _TieType_name = "unknown-fileimage-fileaudio-filevideo-filedocument-filearchive-fileimage-diraudio-dirvideo-dirdocument-dirimage-archiveaudio-archivevideo-archivedocument-archivedirectoryfile"
 
-var _TieType_index = [...]uint8{0, 12, 22, 32, 42, 55, 67, 76, 85, 94, 106, 119, 132, 148, 157, 161}
+var _TieType_index = [...]uint8{0, 12, 22, 32, 42, 55, 67, 76, 85, 94, 106, 119, 132, 145, 161, 170, 174}
 
 func (i TieType) String() string {
-	if i < 0 || i >= TieType(len(_TieType_index)-1) {
+	idx := int(i) - 0
+	if i < 0 || idx >= len(_TieType_index)-1 {
 		return "TieType(" + strconv.FormatInt(int64(i), 10) + ")"
 	}
-	return _TieType_name[_TieType_index[i]:_TieType_index[i+1]]
+	return _TieType_name[_TieType_index[idx]:_TieType_index[idx+1]]
 }

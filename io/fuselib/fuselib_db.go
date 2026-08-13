@@ -492,7 +492,7 @@ func taggedFileStream(state *TieDBFuse, files []client.TaggedFile) fs.DirStream 
 	entries := make([]fuse.DirEntry, 0, len(files))
 	for _, f := range files {
 		mode := uint32(fuse.S_IFREG)
-		if f.IsDir {
+		if f.IsDir || f.IsArchive {
 			mode = fuse.S_IFDIR
 		}
 		entries = append(entries, fuse.DirEntry{
@@ -515,6 +515,11 @@ func lookupTaggedFile(ctx context.Context, parent *fs.Inode, state *TieDBFuse, f
 		}
 		if f.IsDir {
 			child := &taggedDir{state: state, uid: client.DirUID(f.Hash)}
+			stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: state.fuseTree.inodeID(f.Hash)}
+			return parent.NewInode(ctx, child, stable), 0
+		}
+		if f.IsArchive {
+			child := &archiveDir{state: state, hash: f.Hash}
 			stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: state.fuseTree.inodeID(f.Hash)}
 			return parent.NewInode(ctx, child, stable), 0
 		}
@@ -547,7 +552,7 @@ func (d *taggedDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files))
+	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+len(dir.Archives))
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
 			if name := baseName(p); name != "" {
@@ -558,6 +563,13 @@ func (d *taggedDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 				})
 			}
 		}
+	}
+	for _, a := range dir.Archives {
+		entries = append(entries, fuse.DirEntry{
+			Name: a.Filename,
+			Mode: fuse.S_IFDIR,
+			Ino:  d.state.fuseTree.inodeID(a.Hash),
+		})
 	}
 	for _, f := range disambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
@@ -583,6 +595,14 @@ func (d *taggedDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 			stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: d.state.fuseTree.inodeID(string(sub.Uid))}
 			return d.NewInode(ctx, child, stable), 0
 		}
+	}
+	for _, a := range dir.Archives {
+		if a.Filename != name {
+			continue
+		}
+		child := &archiveDir{state: d.state, hash: a.Hash}
+		stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: d.state.fuseTree.inodeID(a.Hash)}
+		return d.NewInode(ctx, child, stable), 0
 	}
 	for _, f := range disambiguateFiles(dir.Files) {
 		if f.Filename != name {
@@ -642,13 +662,20 @@ func (d *pathDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files))
+	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+len(dir.Archives))
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
 			if name := baseName(p); name != "" {
 				entries = append(entries, fuse.DirEntry{Name: name, Mode: fuse.S_IFDIR})
 			}
 		}
+	}
+	for _, a := range dir.Archives {
+		entries = append(entries, fuse.DirEntry{
+			Name: a.Filename,
+			Mode: fuse.S_IFDIR,
+			Ino:  d.state.fuseTree.inodeID(a.Hash),
+		})
 	}
 	for _, f := range disambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
@@ -673,6 +700,14 @@ func (d *pathDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 			child := &pathDir{state: d.state, path: childPath(d.path, name)}
 			return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 		}
+	}
+	for _, a := range dir.Archives {
+		if a.Filename != name {
+			continue
+		}
+		child := &archiveDir{state: d.state, hash: a.Hash}
+		stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: d.state.fuseTree.inodeID(a.Hash)}
+		return d.NewInode(ctx, child, stable), 0
 	}
 	for _, f := range disambiguateFiles(dir.Files) {
 		if f.Filename != name {

@@ -38,6 +38,7 @@ const (
 	TieVideoDir                       // video-dir
 	TieDocumentDir                    // document-dir
 	TieImageArchive                   // image-archive
+	TieAudioArchive                   // audio-archive
 	TieVideoArchive                   // video-archive
 	TieDocumentArchive                // document-archive
 	TieDirectory                      // directory
@@ -123,12 +124,25 @@ type TagInfo struct {
 	Metadata  metadata.Media
 }
 
-func (tie *TieClient) ImportFile(file string, host FileHost, collection string, tags []string, directory DirUID) error {
+// applyArchiveOverride forces an archive file's tie-type to forced when forced
+// names an archive type and the sniffed type is itself an archive. Non-archive
+// files keep their auto-detected type. This backs `import <archive-type>`, which
+// forces the classification of zips (e.g. an album zip that auto-detects as
+// image-archive because scans dominate) without disturbing other files.
+func applyArchiveOverride(sniffed, forced TieType) TieType {
+	if IsArchiveType(forced) && IsArchiveType(sniffed) {
+		return forced
+	}
+	return sniffed
+}
+
+func (tie *TieClient) ImportFile(file string, host FileHost, collection string, tags []string, directory DirUID, forcedArchive TieType) error {
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
 		return err
 	}
+	fileType = applyArchiveOverride(fileType, forcedArchive)
 	stat, err := os.Stat(file)
 	if err != nil {
 		return err
@@ -314,7 +328,7 @@ func (tie *TieClient) importRootPath(dir, dest, dirType string, meta []metadata.
 // Member order is left implicit: filesystem order already matches the tiedir
 // manifest order. An explicit position triple is only written when a user later
 // reorders members (future work).
-func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string) error {
+func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string, forcedArchive TieType) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host)})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
@@ -409,6 +423,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if err != nil {
 			return err
 		}
+		fileType = applyArchiveOverride(fileType, forcedArchive)
 		info := TagInfo{
 			Hash:      x.Hash,
 			File:      x.Filename,
@@ -854,6 +869,7 @@ type Directory struct {
 	Uid        DirUID
 	SubDirs    []SubDirectory
 	Files      []File
+	Archives   []ArchiveEntry
 	ParentUIDs []DirUID
 }
 
@@ -873,6 +889,47 @@ type File struct {
 	// triple. Zero when no date is recorded. The FUSE mount surfaces it as the
 	// file's mtime.
 	TagDate time.Time
+}
+
+// ArchiveEntry is a directory child that is a single archive blob (a zip)
+// carrying an archive tie-type. Unlike a SubDirectory it has no graph
+// child-edges: its "directory" contents live inside the blob and are produced
+// by expanding it at read time (see io/archivelib). Uid is the blob's content
+// hash, which is the expansion key — never pass it to ReadTieDir.
+type ArchiveEntry struct {
+	Filename string
+	Hash     string
+	TieType  TieType
+	Size     int
+	TagDate  time.Time
+}
+
+// archiveTypes are the tie-types that mark a blob as a browsable archive, most
+// specific first.
+var archiveTypes = []TieType{TieImageArchive, TieAudioArchive, TieVideoArchive, TieDocumentArchive, TieArchiveFile}
+
+// IsArchiveType reports whether t marks a blob that should be expanded as a
+// virtual directory of members.
+func IsArchiveType(t TieType) bool {
+	return slices.Contains(archiveTypes, t)
+}
+
+func containsArchiveType(types []string) bool {
+	for _, t := range archiveTypes {
+		if slices.Contains(types, str(t)) {
+			return true
+		}
+	}
+	return false
+}
+
+func archiveTypeOf(types []string) TieType {
+	for _, t := range archiveTypes {
+		if slices.Contains(types, str(t)) {
+			return t
+		}
+	}
+	return TieArchiveFile
 }
 
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
@@ -906,6 +963,19 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 				DirTypes: SliceToTieType(types),
 			}
 			dir.SubDirs = append(dir.SubDirs, subDir)
+		case containsArchiveType(types):
+			size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
+			filename := RowFirst(row, str(TieFilename))
+			if filename == "" {
+				filename = row.Key
+			}
+			dir.Archives = append(dir.Archives, ArchiveEntry{
+				Filename: filename,
+				Hash:     row.Key,
+				TieType:  archiveTypeOf(types),
+				Size:     size,
+				TagDate:  parseTagDate(RowFirst(row, str(TieTagDate))),
+			})
 		case slices.Contains(types, str(TieImageFile)):
 			fallthrough
 		case slices.Contains(types, str(TieVideoFile)):
@@ -939,6 +1009,12 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 			return dir.Files[i].Filename < dir.Files[j].Filename
 		}
 		return dir.Files[i].Uid < dir.Files[j].Uid
+	})
+	sort.Slice(dir.Archives, func(i, j int) bool {
+		if dir.Archives[i].Filename != dir.Archives[j].Filename {
+			return dir.Archives[i].Filename < dir.Archives[j].Filename
+		}
+		return dir.Archives[i].Hash < dir.Archives[j].Hash
 	})
 
 	return dir, nil
@@ -1135,6 +1211,13 @@ type TaggedFile struct {
 	Filename string
 	Size     int
 	IsDir    bool
+	// IsArchive marks a single archive blob (a zip) that is browsable as a
+	// virtual directory of its members. It is a file structurally (IsDir is
+	// false), but consumers should expand it at read time via io/archivelib
+	// rather than treating it as plain downloadable content. TieType carries the
+	// specific archive type when IsArchive is set.
+	IsArchive bool
+	TieType   TieType
 }
 
 // ListTags returns tag names known to the store, read from the
@@ -1237,6 +1320,8 @@ func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile
 // the basename from either.
 func taggedFileFrom(row Row) TaggedFile {
 	isDir := RowHas(row, str(TieTypeProperty), str(TieDirectory))
+	types := row.Attributes[str(TieTypeProperty)]
+	isArchive := !isDir && containsArchiveType(types)
 	filename := RowFirst(row, str(TieFilename))
 
 	// If filename contains a path separator, extract just the basename.
@@ -1266,7 +1351,11 @@ func taggedFileFrom(row Row) TaggedFile {
 	}
 
 	size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
-	return TaggedFile{Hash: row.Key, Filename: filename, Size: size, IsDir: isDir}
+	tf := TaggedFile{Hash: row.Key, Filename: filename, Size: size, IsDir: isDir, IsArchive: isArchive}
+	if isArchive {
+		tf.TieType = archiveTypeOf(types)
+	}
+	return tf
 }
 
 // MediaRelation is a named, directed association from one media item to another,

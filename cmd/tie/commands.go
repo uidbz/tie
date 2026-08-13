@@ -570,12 +570,27 @@ func importFlags() []cli.Flag {
 // [ImportDest] keys.
 var builtinDirTypes = []string{"audio-dir", "image-dir", "video-dir", "document-dir"}
 
+// builtinArchiveTypes are archive tie-types offered as import subcommands. Unlike
+// dir-types they do not label a directory root: an archive is a single file, so
+// the subcommand forces the classification of archive files (zips) encountered
+// during the import while leaving other files auto-detected.
+var builtinArchiveTypes = []string{"image-archive", "audio-archive", "video-archive", "document-archive"}
+
 // runImport uploads and tags every path argument. Each file's own tie-type is
-// detected from its contents; dirType only labels the root of an imported
-// directory tree (files inside are still detected individually).
-func runImport(ctx *cli.Command, dirType string) error {
+// detected from its contents. label is the invoked subcommand: a dir-type labels
+// the root of an imported directory tree; an archive type instead forces the
+// tie-type of archive files (zips) found during the import.
+func runImport(ctx *cli.Command, label string) error {
 	if tie == nil {
 		return errors.New("Error: Config not loaded")
+	}
+	dirType := label
+	var forcedArchive client.TieType
+	if t := client.StringToTieType(label); client.IsArchiveType(t) {
+		// Archive subcommand: don't mislabel the directory root; force archive
+		// files instead.
+		forcedArchive = t
+		dirType = client.TieDirectory.String()
 	}
 	for _, file := range ctx.Args().Slice() {
 		fi, err := os.Stat(file)
@@ -590,11 +605,11 @@ func runImport(ctx *cli.Command, dirType string) error {
 		fmt.Println("Uploading to", hosts)
 		for _, h := range hosts {
 			if fi.IsDir() {
-				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags"), ctx.String("dest")); err != nil {
+				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags"), ctx.String("dest"), forcedArchive); err != nil {
 					fmt.Println(err)
 				}
 			} else {
-				if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), ""); err != nil {
+				if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), "", forcedArchive); err != nil {
 					fmt.Println(err)
 				}
 			}
@@ -606,9 +621,13 @@ func runImport(ctx *cli.Command, dirType string) error {
 // dirTypeImport builds an `import <name>` subcommand that labels imported
 // directory roots with dirType (e.g. `import audio-dir album/`).
 func dirTypeImport(name string) *cli.Command {
+	usage := "import files, labeling directory roots as " + name
+	if client.IsArchiveType(client.StringToTieType(name)) {
+		usage = "import files, forcing archive files (zips) to " + name
+	}
 	return &cli.Command{
 		Name:  name,
-		Usage: "import files, labeling directory roots as " + name,
+		Usage: usage,
 		Flags: importFlags(),
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			return runImport(ctx, name)
@@ -620,9 +639,13 @@ func dirTypeImport(name string) *cli.Command {
 // custom types declared as [ImportDest] keys in config, deduped and with the
 // built-ins kept first so their order is stable.
 func importDirTypes(config client.Config) []string {
-	seen := make(map[string]bool, len(builtinDirTypes))
-	types := make([]string, 0, len(builtinDirTypes)+len(config.ImportDest))
+	seen := make(map[string]bool, len(builtinDirTypes)+len(builtinArchiveTypes))
+	types := make([]string, 0, len(builtinDirTypes)+len(builtinArchiveTypes)+len(config.ImportDest))
 	for _, name := range builtinDirTypes {
+		seen[name] = true
+		types = append(types, name)
+	}
+	for _, name := range builtinArchiveTypes {
 		seen[name] = true
 		types = append(types, name)
 	}
@@ -636,7 +659,7 @@ func importDirTypes(config client.Config) []string {
 }
 
 func cmdImport(config client.Config) *cli.Command {
-	subcommands := make([]*cli.Command, 0, len(builtinDirTypes)+len(config.ImportDest))
+	subcommands := make([]*cli.Command, 0, len(builtinDirTypes)+len(builtinArchiveTypes)+len(config.ImportDest))
 	for _, name := range importDirTypes(config) {
 		subcommands = append(subcommands, dirTypeImport(name))
 	}

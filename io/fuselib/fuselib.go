@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"git.sr.ht/~uid/tie/client"
+	"git.sr.ht/~uid/tie/io/archivelib"
 	"git.sr.ht/~uid/tie/metadata"
+	"github.com/h2non/filetype"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
@@ -192,7 +194,7 @@ func (n *node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	for _, x := range n.Children {
 		d := fuse.DirEntry{
 			Name: x.Name,
-			Ino:  n.State.inodeID(x.Hash),
+			Ino:  n.State.inodeID(x.inodeKey()),
 			Mode: x.Mode,
 		}
 		r = append(r, d)
@@ -225,9 +227,15 @@ func (current *node) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		// The child inode is identified by its Inode number.
 		// If multiple concurrent lookups try to find the same
 		// inode, they are deduplicated on this key.
-		Ino: current.State.inodeID(child.Hash),
+		Ino: current.State.inodeID(child.inodeKey()),
 	}
-	operations := &node{Hash: child.Hash, Size: child.Size, State: current.State} // The Open function is run on this
+	operations := &node{
+		Hash:          child.Hash,
+		Size:          child.Size,
+		State:         current.State,
+		ArchiveHash:   child.ArchiveHash,
+		ArchiveMember: child.ArchiveMember,
+	} // The Open function is run on this
 
 	// fmt.Println("OP:", operations.Hash, operations.Size)
 	// The NewInode call wraps the `operations` object into an Inode.
@@ -267,6 +275,14 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 		return nil, 0, syscall.EROFS
 	}
 
+	if f.ArchiveMember != "" {
+		return &archiveMemberFileHandle{
+			cache:       f.State.cache,
+			archiveHash: f.ArchiveHash,
+			member:      f.ArchiveMember,
+		}, fuse.FOPEN_KEEP_CACHE, fs.OK
+	}
+
 	fh = &bytesFileHandle{
 		hash:  f.Hash,
 		cache: f.State.cache,
@@ -291,33 +307,41 @@ func (c *cache) blob(hash string) (*cacheEntry, error) {
 	if !metadata.IsHexHash(hash) {
 		return nil, fmt.Errorf("fuselib: invalid content hash %q", hash)
 	}
+	return c.get(hash, func() (*os.File, int64, error) { return c.download(hash) })
+}
 
+// get returns the ready cache entry for key, running producer on the first
+// request and coalescing concurrent requests for the same key into that single
+// run. producer must return an open, read-only file (already unlinked) plus its
+// size. Used both for whole-blob downloads (key = content hash) and extracted
+// archive members (key = archive hash + member name).
+func (c *cache) get(key string, producer func() (*os.File, int64, error)) (*cacheEntry, error) {
 	c.mu.Lock()
-	if e, ok := c.entries[hash]; ok {
+	if e, ok := c.entries[key]; ok {
 		c.mu.Unlock()
 		<-e.ready
 		return e, e.err
 	}
 	e := &cacheEntry{ready: make(chan struct{})}
-	c.entries[hash] = e
+	c.entries[key] = e
 	c.mu.Unlock()
 
-	// This goroutine won the race to create the entry, so it owns the download.
-	e.file, e.size, e.err = c.download(hash)
+	// This goroutine won the race to create the entry, so it owns the work.
+	e.file, e.size, e.err = producer()
 	if e.err != nil {
 		// Drop the failed entry so a later read can retry rather than caching
 		// the error forever.
 		c.mu.Lock()
-		delete(c.entries, hash)
+		delete(c.entries, key)
 		c.mu.Unlock()
 		close(e.ready)
 		return nil, e.err
 	}
 
 	c.mu.Lock()
-	c.order = append(c.order, hash)
+	c.order = append(c.order, key)
 	c.curSize += e.size
-	c.evictLocked(hash)
+	c.evictLocked(key)
 	c.mu.Unlock()
 
 	close(e.ready)
@@ -410,6 +434,12 @@ type node struct {
 	Children []*node // for directories
 	Size     int
 	State    *TieFuse
+	// ArchiveHash/ArchiveMember are set on a node that is a member *inside* an
+	// archive blob rather than a content-addressed blob of its own. Such a node
+	// has an empty Hash; its bytes come from the member cache keyed on the
+	// (archive hash, member name) pair.
+	ArchiveHash   string
+	ArchiveMember string
 	// Mtime is the file's modification time, surfaced from its import date
 	// (tag-date). Zero leaves the mount's default (unset) timestamp.
 	Mtime time.Time
@@ -417,6 +447,16 @@ type node struct {
 
 func (n *node) AddChild(child *node) {
 	n.Children = append(n.Children, child)
+}
+
+// inodeKey is the stable identity used to deduplicate inodes. A normal node is
+// keyed by its content hash; an archive member has no hash of its own, so it is
+// keyed by its (archive hash, member name) pair.
+func (n *node) inodeKey() string {
+	if n.ArchiveMember != "" {
+		return memberKey(n.ArchiveHash, n.ArchiveMember)
+	}
+	return n.Hash
 }
 
 const dirHeader = metadata.DirHeader
@@ -480,6 +520,31 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		}
 		if err := scanner.Err(); err != nil {
 			return nil, err
+		}
+	} else if filetype.IsArchive(body) {
+		// A zip blob browsed by hash expands into a virtual directory of its
+		// members. The blob has no tie-type triples here, so detection is by
+		// magic bytes. Members are served from the member cache on read.
+		n.Mode = fuse.S_IFDIR
+		members, err := archivelib.List(bytes.NewReader(body))
+		if err != nil {
+			// Not a readable archive after all — fall back to a plain file.
+			n.Mode = fuse.S_IFREG
+			return n, nil
+		}
+		// Flatten nested member paths to disambiguated base names — a dirent name
+		// cannot contain '/'. The full member name is kept as ArchiveMember for
+		// extraction. Shared with the --db mount's archiveDir.
+		for _, v := range archiveMemberViews(members) {
+			child := &node{
+				Name:          v.display,
+				Size:          int(v.member.Size),
+				Mode:          fuse.S_IFREG,
+				State:         state,
+				ArchiveHash:   sourceHash,
+				ArchiveMember: v.member.Name,
+			}
+			n.AddChild(child)
 		}
 	} else {
 		n.Mode = fuse.S_IFREG
