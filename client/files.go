@@ -60,7 +60,7 @@ func UploadTo(host FileHost, file string) (*UploadResult, error) {
 // writes each chunk of uploaded bytes to it so callers can render a progress
 // bar. The total byte count is the file (or manifest) size.
 func UploadToWithProgress(host FileHost, file string, progress io.Writer) (*UploadResult, error) {
-	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: httpClientFor(host), Progress: progress})
+	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress})
 	result := &UploadResult{ErrorMsg: status.ErrorMsg}
 	for _, item := range status.UploadedItems {
 		result.Items = append(result.Items, UploadedItem{
@@ -94,12 +94,12 @@ func DownloadFrom(host FileHost, sourceHash, dest string) error {
 // non-nil, writes each chunk of downloaded file bytes to it so callers can
 // render a progress bar.
 func DownloadFromWithProgress(host FileHost, sourceHash, dest string, progress io.Writer) error {
-	return getlib.DownloadFile(httpClientFor(host), host.URL, sourceHash, dest, progress)
+	return getlib.DownloadFile(HTTPClientFor(host), host.URL, sourceHash, dest, progress)
 }
 
 // DownloadSize returns the total number of bytes a download of sourceHash would
 // transfer, recursing into directories. Callers use it to size a progress bar
 // before starting the transfer.
 func DownloadSize(host FileHost, sourceHash string) (int64, error) {
-	return getlib.TotalSize(httpClientFor(host), host.URL, sourceHash)
+	return getlib.TotalSize(HTTPClientFor(host), host.URL, sourceHash)
 }

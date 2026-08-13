@@ -422,7 +422,7 @@ func cmdMount() *cli.Command {
 					return errors.New("Need 1 arg: mountpoint")
 				}
 				mountpoint = ctx.Args().Get(0)
-				state := fuselib.NewTieDBFuse(tie, filehost.URL, filehost.Insecure, ctx.Int("cache"), ctx.Bool("verify"))
+				state := fuselib.NewTieDBFuse(tie, filehost, ctx.Int("cache"), ctx.Bool("verify"))
 				defer state.Close()
 				s, err := state.MountDB(mountpoint)
 				if err != nil {
@@ -435,7 +435,7 @@ func cmdMount() *cli.Command {
 				}
 				hash := ctx.Args().Get(0)
 				mountpoint = ctx.Args().Get(1)
-				state := fuselib.NewTieFuse(filehost.URL, filehost.Insecure, ctx.Int("cache"), ctx.Bool("verify"))
+				state := fuselib.NewTieFuse(filehost, ctx.Int("cache"), ctx.Bool("verify"))
 				defer state.Close()
 				s, err := state.Mount(hash, mountpoint)
 				if err != nil {

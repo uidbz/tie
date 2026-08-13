@@ -14,10 +14,21 @@ import (
 	"time"
 
 	"git.sr.ht/~uid/conf"
+	"git.sr.ht/~uid/tie/auth"
 	"git.sr.ht/~uid/tie/tielog"
 	"git.sr.ht/~uid/tie/version"
 	"github.com/minio/highwayhash"
 )
+
+// User is a single account entry in the filehost config. Passwords are stored
+// in plaintext, so the config file must be tightly permissioned.
+type User struct {
+	Username string
+	Password string
+	// Role is "read" (download only) or "write" (upload + download). Empty
+	// defaults to "write".
+	Role string
+}
 
 var (
 	key         []byte
@@ -54,14 +65,23 @@ type FilehostConfig struct {
 	// CacheSizeGB is the LRU eviction budget for CachePath in gibibytes.
 	// Defaults to 1. Ignored when CachePath is empty.
 	CacheSizeGB float64
+	// Users are the accounts allowed to authenticate. Empty leaves the filehost
+	// open (see AnonymousAccess).
+	Users []User
+	// AnonymousAccess is the role granted to a request with no valid credentials:
+	// "write" (fully open — the default, preserving unauthenticated uploads),
+	// "read" (anonymous downloads, uploads require a write user), or "none"
+	// (every request requires auth).
+	AnonymousAccess string
 }
 
 func defaultConfig() FilehostConfig {
 	return FilehostConfig{
-		ListenOn:     ":1162",
-		BlobPath:     "/data",
-		ReapInterval: "1h",
-		CacheSizeGB:  1,
+		ListenOn:        ":1162",
+		BlobPath:        "/data",
+		ReapInterval:    "1h",
+		CacheSizeGB:     1,
+		AnonymousAccess: "write",
 	}
 }
 
@@ -362,9 +382,25 @@ set CertFile/KeyFile to serve HTTPS directly.
 		}
 	}
 
+	users := make(map[string]auth.User, len(cfg.Users))
+	for _, u := range cfg.Users {
+		role, errRole := auth.ParseUserRole(u.Role)
+		if errRole != nil {
+			slog.Error("invalid user role in config", "user", u.Username, "err", errRole)
+			os.Exit(1)
+		}
+		users[u.Username] = auth.User{Password: u.Password, Role: role}
+	}
+	anon, errAnon := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleWrite)
+	if errAnon != nil {
+		slog.Error("invalid AnonymousAccess in config", "err", errAnon)
+		os.Exit(1)
+	}
+	authStore := auth.NewStore(users, anon)
+
 	InitKey()
 	router := http.NewServeMux()
-	routes(router)
+	routes(router, authStore)
 
 	destination = filepath.Clean(cfg.BlobPath)
 	listenOn = cfg.ListenOn

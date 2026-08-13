@@ -68,8 +68,8 @@ func TestTieDirAncestors(t *testing.T) {
 		{"a/b", []string{"file:/a", "file:/a/b"}}, // relative treated as absolute
 		{"file:/", nil},
 		{"/", nil},
-		{"file:/a//b/", []string{"file:/a", "file:/a/b"}},  // redundant separators
-		{"file:/a/./b", []string{"file:/a", "file:/a/b"}},  // "." collapsed
+		{"file:/a//b/", []string{"file:/a", "file:/a/b"}},    // redundant separators
+		{"file:/a/./b", []string{"file:/a", "file:/a/b"}},    // "." collapsed
 		{"file:/a/x/../b", []string{"file:/a", "file:/a/b"}}, // ".." collapsed
 	}
 	for _, c := range cases {

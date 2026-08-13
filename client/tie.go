@@ -92,12 +92,12 @@ type TieClient struct {
 }
 
 type Config struct {
-	configPath       string
-	Username         string
-	Password         string
-	Namespace        string
-	Collection       string
-	Webservice       string
+	configPath string
+	Username   string
+	Password   string
+	Namespace  string
+	Collection string
+	Webservice string
 	// WebserviceInsecure enables TLS InsecureSkipVerify for the Webservice
 	// connection (accept self-signed certificates).
 	WebserviceInsecure bool
@@ -125,8 +125,8 @@ type Config struct {
 	// query. The query string uses the same syntax as an ad-hoc query dir
 	// (space-ANDed terms, "-" excludes, optional "type:" scope).
 	Queries map[string]string
-	key        []byte
-	verbose    bool
+	key     []byte
+	verbose bool
 }
 
 // Path returns the filesystem path the config was loaded from (empty for a
@@ -136,22 +136,47 @@ func (c Config) Path() string {
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
-// (accept self-signed certificates); the scheme lives in URL.
+// (accept self-signed certificates); the scheme lives in URL. Username/Password
+// are optional HTTP Basic Auth credentials sent with every request to a filehost
+// that requires authentication; leave them empty for an open filehost.
 type FileHost struct {
 	URL      string
 	Insecure bool
+	Username string
+	Password string
 }
 
-// httpClientFor returns an *http.Client honoring the host's Insecure flag.
-// A secure host reuses http.DefaultClient; an insecure one gets a client that
-// skips TLS certificate verification.
-func httpClientFor(host FileHost) *http.Client {
-	if !host.Insecure {
+// basicAuthTransport injects HTTP Basic Auth on every request. Wrapping the
+// transport (rather than each call site) lets credentials ride along both the
+// download path (getlib, which uses client.Get) and the upload path without
+// threading them through every function signature.
+type basicAuthTransport struct {
+	base           http.RoundTripper
+	username, pass string
+}
+
+func (t *basicAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Clone before mutating: RoundTrip must not modify the caller's request.
+	r := req.Clone(req.Context())
+	r.SetBasicAuth(t.username, t.pass)
+	return t.base.RoundTrip(r)
+}
+
+// HTTPClientFor returns an *http.Client honoring the host's Insecure flag and
+// credentials. A plain, credential-free secure host reuses http.DefaultClient;
+// anything needing a custom TLS config or Basic Auth gets a dedicated client.
+func HTTPClientFor(host FileHost) *http.Client {
+	if !host.Insecure && host.Username == "" {
 		return http.DefaultClient
 	}
-	return &http.Client{
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	var base http.RoundTripper = http.DefaultTransport
+	if host.Insecure {
+		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
 	}
+	if host.Username != "" {
+		base = &basicAuthTransport{base: base, username: host.Username, pass: host.Password}
+	}
+	return &http.Client{Transport: base}
 }
 
 type TagOptions struct {

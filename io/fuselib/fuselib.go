@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"git.sr.ht/~uid/tie/client"
 	"git.sr.ht/~uid/tie/metadata"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -41,17 +41,12 @@ func (state *TieFuse) Close() error {
 // downloaded blob bytes are hashed and checked against their content address:
 // off by default, since for a trusted personal filehost the per-read hash pass
 // over multi-GB media is wasted work; turn it on when the filehost is untrusted.
-func NewTieFuse(filehost string, insecure bool, cacheSizeGB int, verify bool) *TieFuse {
-	httpClient := http.DefaultClient
-	if insecure {
-		httpClient = &http.Client{
-			Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-		}
-	}
+func NewTieFuse(host client.FileHost, cacheSizeGB int, verify bool) *TieFuse {
+	httpClient := client.HTTPClientFor(host)
 	return &TieFuse{
-		cache:       newCache(filehost, httpClient, int64(cacheSizeGB)*1024*1024*1024, verify),
+		cache:       newCache(host.URL, httpClient, int64(cacheSizeGB)*1024*1024*1024, verify),
 		hashToInode: make(map[string]uint64),
-		config:      config{filehost: filehost, client: httpClient, verify: verify},
+		config:      config{filehost: host.URL, client: httpClient, verify: verify},
 		uid:         uint32(os.Getuid()),
 		gid:         uint32(os.Getgid()),
 	}

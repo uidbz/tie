@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"git.sr.ht/~uid/tie/auth"
 	"git.sr.ht/~uid/tie/metadata"
 	"git.sr.ht/~uid/tie/tiedb"
 )
@@ -34,9 +35,10 @@ type WebserviceConfig struct {
 	UserNamespace string
 	DbPath        string
 
-	// Users maps a username to its password. Access management is done by
-	// populating this from the daemon's config file; it is read-only at runtime.
-	Users map[string]string
+	// Auth resolves each request's role from its Basic Auth credentials and gates
+	// read vs write operations. Access management is done by populating it from
+	// the daemon's config file; it is read-only at runtime.
+	Auth *auth.Store
 
 	// ReverseRelations restricts which relations (value1) collections index in
 	// reverse. Empty/nil indexes every relation (the original behavior). Set it
@@ -137,26 +139,25 @@ func (ws *Webservice) Close() {
 	ws.db.Close()
 }
 
-func (ws *Webservice) BasicAuth(h http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Get the Basic Authentication credentials
-		user, password, hasAuth := r.BasicAuth()
-		realPW, userExists := ws.GetPassword(user)
-		if hasAuth && userExists && password == realPW {
-			// Delegate request to the given handler
-			h(w, r)
-		} else {
-			// Request Basic Authentication otherwise
-			w.Header().Set("WWW-Authenticate", "Basic realm=Restricted")
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-		}
-	}
+// readRequests are the request Ids that only read state. Every other Id
+// (including any future one) is treated as a write, so a new write operation is
+// never accidentally exposed to a read-only user.
+var readRequests = map[string]bool{
+	"Dummy":      true,
+	"Query":      true,
+	"Expand":     true,
+	"Associated": true,
+	"CoTags":     true,
+	"Dump":       true,
 }
 
-func (ws *Webservice) GetPassword(user string) (password string, exists bool) {
-	pw, ok := ws.Config.Users[user]
-
-	return pw, ok
+// accessFor classifies a request Id as read or write. Unknown Ids default to
+// write (fail-safe).
+func accessFor(reqName string) auth.Access {
+	if readRequests[reqName] {
+		return auth.AccessRead
+	}
+	return auth.AccessWrite
 }
 
 func (ws *Webservice) DbPath(namespace string) string {
@@ -186,7 +187,16 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	r.Body.Close()
 	reqName := r.PathValue("request")
 	slog.Info("request", "from", r.RemoteAddr, "request", reqName)
-	username, _, _ := r.BasicAuth() // Credentials already validated
+
+	if ok, status := ws.Config.Auth.Authorize(r, accessFor(reqName)); !ok {
+		if status == http.StatusUnauthorized {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
+		}
+		http.Error(w, http.StatusText(status), status)
+		slog.Warn("access denied", "from", r.RemoteAddr, "request", reqName, "status", status)
+		return
+	}
+	username, _, _ := r.BasicAuth()
 
 	for _, x := range ws.requests {
 		if reqName == x.GetId() {

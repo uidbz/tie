@@ -36,10 +36,28 @@ cd test-env
   generates `tie-daemon.toml` and `tie-filehost.toml` if missing. Both are
   gitignored runtime artifacts; only `config.toml` (the CLI config) is tracked.
 - Filehost config keys: `ListenOn`, `Insecure`, `BlobPath`, `CertFile`/`KeyFile`,
-  `ReapInterval` (Go duration; `"0"` disables the expired-blob reaper).
+  `ReapInterval` (Go duration; `"0"` disables the expired-blob reaper),
+  `[[Users]]` and `AnonymousAccess` — see access control below.
 - Daemon config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
-  `MaxConcurrentRequests` (0 = unbounded), `[[Users]]` (Username/Password),
-  `ReverseRelations`, and `[[Collections]]` overrides — see below.
+  `MaxConcurrentRequests` (0 = unbounded), `[[Users]]` (Username/Password/Role),
+  `AnonymousAccess`, `ReverseRelations`, and `[[Collections]]` overrides — see below.
+- **Access control (both servers).** HTTP Basic Auth with a shared role model in
+  the `auth/` package: roles are `none < read < write` (write ⊇ read). Each
+  request is classified read or write and allowed iff the caller's role covers
+  it. `[[Users]]` gained a `Role` field (`"read"` or `"write"`; **empty defaults
+  to `"write"`** so pre-existing users keep full access). `AnonymousAccess`
+  (`"none"`|`"read"`|`"write"`) is the role granted to a request with no valid
+  credentials. **Filehost defaults `AnonymousAccess = "write"`** (fully open —
+  preserves unauthenticated uploads; opt in by setting `"read"` to lock uploads
+  or `"none"` to lock everything). **Daemon defaults `"none"`** (unchanged
+  always-authenticated behavior). Passwords are plaintext in config; only the
+  wire compare is constant-time (`subtle.ConstantTimeCompare`) — hashing is a
+  deliberate non-goal for now. Daemon read requests: `Dummy`, `Query`, `Expand`,
+  `Associated`, `CoTags`, `Dump`; every other Id (incl. new ones) is write
+  (fail-safe). 401 = missing/failed auth; 403 = valid user, insufficient role.
+  Client filehost creds live in `[FileHosts.<name>]` (`Username`/`Password`) and
+  ride every request via a Basic-Auth `http.RoundTripper` in
+  `client.HTTPClientFor`.
 - **Reverse-relation config.** `ReverseRelations` sets which relations (value1)
   every collection indexes in reverse; omit it for the built-in default
   (`tag`, `path`, `parent`, `tie-type`). Add a `[[Collections]]` block

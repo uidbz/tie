@@ -32,3 +32,20 @@ LogLevel = "info"
 #   CacheSizeGB = 4.0
 CachePath = ""
 CacheSizeGB = 1.0
+
+# Authentication (HTTP Basic Auth). The filehost is fully open by default so
+# unauthenticated uploads keep working. AnonymousAccess is the role granted to a
+# request with no valid credentials:
+#   "write" (the default): anyone may upload and download.
+#   "read":  anonymous downloads are allowed, but uploads (and retention
+#            changes) require a user with the "write" role.
+#   "none":  every request requires a valid user.
+# Passwords are stored in plaintext, so keep this file readable only by the
+# filehost's user (e.g. chmod 600) once you add [[Users]].
+#
+# AnonymousAccess = "read"
+#
+# [[Users]]
+# Username = "alice"
+# Password = "secret"
+# Role = "write"   # "write" (upload+download) or "read" (download only)

@@ -9,6 +9,7 @@ import (
 
 	"git.sr.ht/~uid/conf"
 	"git.sr.ht/~uid/tie/api"
+	"git.sr.ht/~uid/tie/auth"
 	"git.sr.ht/~uid/tie/tiedb"
 	"git.sr.ht/~uid/tie/tielog"
 	"git.sr.ht/~uid/tie/version"
@@ -25,6 +26,9 @@ var (
 type User struct {
 	Username string
 	Password string
+	// Role is "read" (read-only) or "write" (full read+write). Empty defaults to
+	// "write" so accounts predating roles keep full access.
+	Role string
 }
 
 // DaemonConfig is the full tie-daemon configuration, loaded from TOML. It holds
@@ -45,6 +49,10 @@ type DaemonConfig struct {
 	// MaxConcurrentRequests caps how many requests run at once. 0 = unbounded.
 	MaxConcurrentRequests int
 	Users                 []User
+	// AnonymousAccess is the role granted to a request with no valid credentials:
+	// "none" (require auth for everything), "read", or "write". Empty defaults to
+	// "none", preserving the daemon's always-authenticated behavior.
+	AnonymousAccess string
 	// ReverseRelations is the default set of relations (value1) indexed in
 	// reverse for every collection. Empty falls back to defaultReverseRelations
 	// below. Restricting it cuts association memory on metadata-heavy stores.
@@ -109,10 +117,21 @@ Configuration (server settings and user accounts) is read from a TOML file.
 	}
 	defer cleanup()
 
-	users := make(map[string]string, len(cfg.Users))
+	users := make(map[string]auth.User, len(cfg.Users))
 	for _, u := range cfg.Users {
-		users[u.Username] = u.Password
+		role, err := auth.ParseUserRole(u.Role)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error in config: user %q: %v\n", u.Username, err)
+			os.Exit(1)
+		}
+		users[u.Username] = auth.User{Password: u.Password, Role: role}
 	}
+	anon, err := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleNone)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error in config:", err)
+		os.Exit(1)
+	}
+	authStore := auth.NewStore(users, anon)
 
 	reverseRelations := cfg.ReverseRelations
 	if len(reverseRelations) == 0 {
@@ -135,7 +154,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		KeyFile:                    cfg.KeyFile,
 		UserNamespace:              "userdata",
 		DbPath:                     cfg.DbPath,
-		Users:                      users,
+		Auth:                       authStore,
 		ReverseRelations:           reverseRelations,
 		CollectionReverseRelations: overrides,
 		MaxConcurrentRequests:      cfg.MaxConcurrentRequests,
@@ -162,7 +181,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 	ws := webservice.NewWebservice(config, requests)
 
 	routes := func(mux *http.ServeMux) {
-		mux.HandleFunc("POST /{request}", ws.BasicAuth(ws.RequestHandler))
+		mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	}
 
 	ws.ListenAndServe(routes)

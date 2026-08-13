@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **Read/read-write user roles and filehost authentication.** Both `tie-daemon`
+  and `tie-filehost` now share a role-based access model (new `auth` package):
+  users are `read` (queries / downloads) or `write` (full access). `[[Users]]`
+  gained a `Role` field (defaults to `write`, so existing configs are
+  unaffected), and a new `AnonymousAccess` key (`"none"` | `"read"` | `"write"`)
+  sets what an unauthenticated request may do.
+  - `tie-filehost` had **no authentication** before; it is now opt-in and
+    **defaults to fully open** (`AnonymousAccess = "write"`) so anonymous uploads
+    keep working. Set `"read"` to require a write user for uploads (downloads
+    stay open) or `"none"` to require auth for everything, and add `[[Users]]`.
+  - `tie-daemon` continues to default to always-authenticated
+    (`AnonymousAccess = "none"`); its request set is now classified read vs write
+    and gated per role.
+  - Rejections return `401` for missing/invalid credentials and `403` for a valid
+    user whose role is too low. Passwords stay plaintext in config, but the wire
+    comparison is now constant-time.
+  - Client configs may set `Username`/`Password` per `[FileHosts.<name>]`; the
+    credentials are sent as HTTP Basic Auth on every upload and download.
+
 ## [v0.4.1] - 2026-08-06
 
 ### Added

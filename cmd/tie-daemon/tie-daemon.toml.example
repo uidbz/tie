@@ -21,6 +21,15 @@ KeyFile = ""
 LogFile = ""
 LogLevel = "info"
 
+# Role granted to a request with no valid credentials: "none" (require auth for
+# everything, the default), "read" (allow anonymous queries but require a write
+# user for changes), or "write" (fully open).
+AnonymousAccess = "none"
+
 [[Users]]
 Username = "defaultuser"
 Password = "defaultpassword"
+# Role is "write" (full read+write, the default when omitted) or "read"
+# (queries only: Query/Expand/Associated/CoTags/Dump). Write covers Add, Delete,
+# Set, Update, Batch, Sync, and Drop.
+Role = "write"

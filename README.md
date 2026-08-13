@@ -208,12 +208,16 @@ DefaultFileHosts = ['default']
 [FileHosts.default]
 URL = 'http://localhost:1162'
 Insecure = false   # true skips TLS certificate verification (self-signed certs)
+# Username = 'alice'  # optional Basic Auth for a filehost that requires it
+# Password = 'secret'
 ```
 
 The default config uses plain `http://localhost`, matching the servers' default
 of `Insecure = true`. This suits a personal library on a single PC or a small
 trusted LAN. To use TLS, switch the URLs to `https://` and configure the servers
 with `CertFile`/`KeyFile` (or a reverse proxy) — see the deployment notes below.
+For an authenticated filehost, add `Username`/`Password` to its `[FileHosts.*]`
+block; they are sent as HTTP Basic Auth with every upload and download.
 
 `upload`, `download`, `import`, and `mount` select a filehost with `--host
 <name>` (defaulting to the first `DefaultFileHosts` entry). `upload`/`download`
@@ -324,6 +328,42 @@ untrusted network as-is.
 For TLS, either set `CertFile`/`KeyFile` in each config to serve HTTPS directly,
 or put a reverse proxy (nginx / Caddy) in front, keep `Insecure = true`, and
 bind `ListenOn` to localhost so only the proxy reaches the service.
+
+### Access control
+
+Both servers authenticate with HTTP Basic Auth and share a two-tier role model:
+a user is either **read** (queries / downloads only) or **write** (full access,
+which includes read). Add accounts as `[[Users]]` blocks with a `Role`; an
+omitted `Role` defaults to `write`, so existing configs keep working.
+
+```toml
+AnonymousAccess = "read"   # role granted when no valid credentials are sent
+
+[[Users]]
+Username = "alice"
+Password = "secret"
+Role = "write"             # "write" (default) or "read"
+```
+
+`AnonymousAccess` sets what an *unauthenticated* request may do — `"write"`
+(fully open), `"read"` (anonymous reads, writes need a user), or `"none"` (every
+request needs a valid user):
+
+- **`tie-daemon` defaults to `"none"`** — it has always required a login, and
+  that is unchanged. Read requests are `Query`/`Expand`/`Associated`/`CoTags`/
+  `Dump`; everything else (`Add`/`Delete`/`Set`/`Update`/`Batch`/`Sync`/`Drop`)
+  is a write.
+- **`tie-filehost` defaults to `"write"`** — it is fully open out of the box, so
+  existing tools that upload anonymously keep working. To lock it down, set
+  `AnonymousAccess = "read"` (downloads stay open, uploads require a write user)
+  or `"none"` (everything requires a user), and add `[[Users]]`. Uploads and
+  retention changes are writes; downloads and retention reads are reads.
+
+A rejected request returns **401** when credentials are missing or wrong, and
+**403** when a valid user's role is too low. Passwords are stored in plaintext,
+so keep each config file readable only by the service user (e.g. `chmod 600`).
+On the client side, give each authenticated filehost a `Username`/`Password` in
+its `[FileHosts.*]` block.
 
 ### Running as system services
 

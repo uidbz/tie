@@ -26,9 +26,9 @@ func TestParseTagQuery(t *testing.T) {
 		{"mellow type:audio", "audio-file", []string{"mellow"}, nil},
 		{"type:image", "image-file", nil, nil},
 		{"  jazz   -live  ", "", []string{"jazz"}, []string{"live"}},
-		{"type:live-album", "live-album", nil, nil},              // custom label kept literally
+		{"type:live-album", "live-album", nil, nil},                 // custom label kept literally
 		{"type:audio-dir jazz", "audio-dir", []string{"jazz"}, nil}, // full type name passes through
-		{"-", "", nil, nil},                                     // bare dash ignored
+		{"-", "", nil, nil}, // bare dash ignored
 	}
 	for _, tt := range tests {
 		gotScope, gotInc, gotExc := parseTagQuery(tt.query)
@@ -54,11 +54,11 @@ func TestDisambiguate(t *testing.T) {
 	}
 	got := disambiguate(in)
 	want := []string{
-		"SomeDir",              // first keeps the bare name
-		"SomeDir~42e55dcf",     // collision suffixed with short hash
-		"track1.jpg",           // first keeps the bare name
-		"track1~d39f1cac.jpg",  // suffix inserted before the extension
-		"unique.txt",           // no collision, untouched
+		"SomeDir",             // first keeps the bare name
+		"SomeDir~42e55dcf",    // collision suffixed with short hash
+		"track1.jpg",          // first keeps the bare name
+		"track1~d39f1cac.jpg", // suffix inserted before the extension
+		"unique.txt",          // no collision, untouched
 	}
 	for i, w := range want {
 		if got[i].Filename != w {
@@ -85,9 +85,9 @@ func TestDisambiguateFiles(t *testing.T) {
 	}
 	got := disambiguateFiles(in)
 	want := []string{
-		"file1.txt",           // first keeps the bare name
-		"file1~d39f1cac.txt",  // collision suffixed before the extension
-		"unique.txt",          // no collision, untouched
+		"file1.txt",          // first keeps the bare name
+		"file1~d39f1cac.txt", // collision suffixed before the extension
+		"unique.txt",         // no collision, untouched
 	}
 	for i, w := range want {
 		if got[i].Filename != w {
@@ -156,7 +156,7 @@ func TestListContentClassifiesEntries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	state := NewTieFuse(srv.URL, false, 1, true)
+	state := NewTieFuse(client.FileHost{URL: srv.URL}, 1, true)
 	n, err := state.listContent(rootHash)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestCacheConcurrentAccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	state := NewTieFuse(srv.URL, false, 1, true)
+	state := NewTieFuse(client.FileHost{URL: srv.URL}, 1, true)
 	defer state.Close()
 	c := state.cache
 
@@ -247,7 +247,7 @@ func TestCacheServesFileLargerThanBudget(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	state := NewTieFuse(srv.URL, false, 0, true) // zero-GB budget: everything exceeds it
+	state := NewTieFuse(client.FileHost{URL: srv.URL}, 0, true) // zero-GB budget: everything exceeds it
 	defer state.Close()
 
 	fh := &bytesFileHandle{hash: hash, cache: state.cache}
@@ -285,14 +285,14 @@ func TestCacheVerifyFlag(t *testing.T) {
 	defer srv.Close()
 
 	// verify off: mismatched bytes are served anyway.
-	off := NewTieFuse(srv.URL, false, 1, false)
+	off := NewTieFuse(client.FileHost{URL: srv.URL}, 1, false)
 	defer off.Close()
 	if _, err := off.cache.blob(wanted); err != nil {
 		t.Errorf("verify off: expected bytes served without error, got %v", err)
 	}
 
 	// verify on: the mismatch is caught.
-	on := NewTieFuse(srv.URL, false, 1, true)
+	on := NewTieFuse(client.FileHost{URL: srv.URL}, 1, true)
 	defer on.Close()
 	if _, err := on.cache.blob(wanted); err == nil {
 		t.Error("verify on: expected a hash-mismatch error, got nil")

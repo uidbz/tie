@@ -9,6 +9,10 @@ PrevVersions = 3
 [FileHosts.default]
 URL = 'http://localhost:1162'
 Insecure = false
+# Optional HTTP Basic Auth for a filehost that requires it (AnonymousAccess
+# "read" or "none"). Leave unset for an open filehost.
+# Username = 'alice'
+# Password = 'secret'
 
 [Queries]
 outdoor-getaways = 'vacation outdoors'

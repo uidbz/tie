@@ -133,7 +133,7 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 	if err != nil {
 		return err
 	}
-	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: httpClientFor(host)})
+	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host)})
 
 	if status.ErrorMsg == "" {
 		info := TagInfo{
@@ -315,7 +315,7 @@ func (tie *TieClient) importRootPath(dir, dest, dirType string, meta []metadata.
 // manifest order. An explicit position triple is only written when a user later
 // reorders members (future work).
 func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string) error {
-	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: httpClientFor(host)})
+	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host)})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}

@@ -40,10 +40,10 @@ type TieDBFuse struct {
 	gid      uint32   // owner gid for all files
 }
 
-func NewTieDBFuse(tie *client.TieClient, filehost string, insecure bool, cacheSizeGB int, verify bool) *TieDBFuse {
+func NewTieDBFuse(tie *client.TieClient, host client.FileHost, cacheSizeGB int, verify bool) *TieDBFuse {
 	return &TieDBFuse{
 		tie:      tie,
-		fuseTree: NewTieFuse(filehost, insecure, cacheSizeGB, verify),
+		fuseTree: NewTieFuse(host, cacheSizeGB, verify),
 		uid:      uint32(os.Getuid()),
 		gid:      uint32(os.Getgid()),
 	}

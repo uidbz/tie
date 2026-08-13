@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"git.sr.ht/~uid/tie/auth"
 	"git.sr.ht/~uid/tie/examples/webservice/api"
 
 	"git.sr.ht/~uid/tie/webservice"
@@ -32,7 +33,10 @@ func main() {
 		CertFile:      *certFile,
 		KeyFile:       *keyFile,
 		UserNamespace: "userdata",
-		Users:         map[string]string{"myuser": "mypassword"},
+		Auth: auth.NewStore(
+			map[string]auth.User{"myuser": {Password: "mypassword", Role: auth.RoleWrite}},
+			auth.RoleNone,
+		),
 	}
 
 	requests := []webservice.RequestInterface{
@@ -42,7 +46,7 @@ func main() {
 	ws := webservice.NewWebservice(config, requests)
 
 	routes := func(mux *http.ServeMux) {
-		mux.HandleFunc("POST /{request}", ws.BasicAuth(ws.RequestHandler))
+		mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	}
 
 	ws.ListenAndServe(routes)
