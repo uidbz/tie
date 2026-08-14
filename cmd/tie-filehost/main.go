@@ -147,12 +147,14 @@ func PathFromHash(dest, hash string) string {
 	return filepath.Join(dest, hash)
 }
 
-func MakeDestinationPath(hash string) string {
+func MakeDestinationPath(hash string) (string, error) {
 	dest := PathFromHash(destination, hash)
 
-	os.MkdirAll(filepath.Dir(dest), 0755) // TODO: Error handling
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return "", err
+	}
 
-	return dest
+	return dest, nil
 }
 
 func UploadHandler(w http.ResponseWriter, r *http.Request) {
@@ -173,7 +175,12 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		dest = filepath.Join(dest, "tempfile")
 	} else {
-		dest = MakeDestinationPath(h)
+		var errMake error
+		if dest, errMake = MakeDestinationPath(h); errMake != nil {
+			slog.Error("creating destination directory", "hash", h, "err", errMake)
+			http.Error(w, "Error creating destination directory on server: "+errMake.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	now := time.Now()
@@ -195,15 +202,18 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		slog.Error("opening destination file", "dest", dest, "err", err)
-		if err := os.Remove(dest); err != nil {
-			slog.Error("deleting bad file", "dest", dest, "err", err)
-		}
+		http.Error(w, "Error opening destination file on server: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 	defer out.Close()
 
-	_, errCopy := io.Copy(out, r.Body)
-	if errCopy != nil {
+	if _, errCopy := io.Copy(out, r.Body); errCopy != nil {
 		slog.Error("copying upload body", "dest", dest, "err", errCopy)
+		if err := os.Remove(dest); err != nil {
+			slog.Error("deleting bad file", "dest", dest, "err", err)
+		}
+		http.Error(w, "Error writing upload body on server: "+errCopy.Error(), http.StatusInternalServerError)
+		return
 	}
 	hashHex, _ := AddressOfFile(key, dest)
 	if h != "" && hashHex != h {
@@ -215,7 +225,13 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	blobExisted := false
 	if h == "" {
 		h = hashHex
-		dest2 := MakeDestinationPath(h)
+		dest2, errMake := MakeDestinationPath(h)
+		if errMake != nil {
+			slog.Error("creating destination directory", "hash", h, "err", errMake)
+			http.Error(w, "Error creating destination directory on server: "+errMake.Error(), http.StatusInternalServerError)
+			os.RemoveAll(filepath.Dir(dest))
+			return
+		}
 		if _, err := os.Stat(dest2); os.IsNotExist(err) {
 			slog.Debug("moving file", "from", dest, "to", dest2)
 			if errMove := os.Rename(dest, dest2); errMove != nil {
