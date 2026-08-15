@@ -63,11 +63,12 @@ func newBlobCache(srcDir, dir string, maxSizeBytes int64) (*blobCache, error) {
 	}, nil
 }
 
-// blobPath returns the path where hash is stored inside the cache dir.
-// Blobs are stored flat (no sharding) because the cache dir is separate from
-// the primary store and may only hold a subset of blobs.
+// blobPath returns the path where hash is stored inside the cache dir. It uses
+// the same sharded layout as the primary store (data/<xx>/<yy>/<hash>): a large
+// cache (e.g. 2 TB of small blobs) can hold millions of files, and a flat
+// directory at that scale degrades on most filesystems.
 func (c *blobCache) blobPath(hash string) string {
-	return filepath.Join(c.dir, hash)
+	return PathFromHash(c.dir, hash)
 }
 
 // get ensures hash is present in the cache dir and returns its path. On the
@@ -117,6 +118,9 @@ func (c *blobCache) copyBlob(hash string) (string, int64, error) {
 	defer in.Close()
 
 	dst := c.blobPath(hash)
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return "", 0, fmt.Errorf("blob cache: creating shard dir for %q: %w", dst, err)
+	}
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return "", 0, fmt.Errorf("blob cache: creating cache file %q: %w", dst, err)
