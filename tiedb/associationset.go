@@ -276,6 +276,45 @@ func (s *AssociationSet) ForEach(fn func(key UniqueAssociation, pos int64)) {
 	}
 }
 
+// HasRelation reports whether any entry is stored under relation id rel. The set
+// is keyed on the full {AssociateTo, Relation} pair with no per-relation index,
+// so this scans — but it early-exits on the first match, and the sets it is
+// meant for (one subject's forward associations = its handful of metadata
+// triples) are tiny, so a hit or miss is effectively O(1) in practice.
+func (s *AssociationSet) HasRelation(rel uint64) bool {
+	s.changeLock.RLock()
+	if s.shards == nil {
+		if s.small != nil {
+			for i := range s.small {
+				if s.small[i].key.Relation == rel {
+					s.changeLock.RUnlock()
+					return true
+				}
+			}
+			s.changeLock.RUnlock()
+			return false
+		}
+		has := s.hasInline && s.inlineKey.Relation == rel
+		s.changeLock.RUnlock()
+		return has
+	}
+	shards := s.shards
+	s.changeLock.RUnlock()
+
+	for i := range shards.shards {
+		sh := &shards.shards[i]
+		sh.mu.RLock()
+		for k := range sh.m {
+			if k.Relation == rel {
+				sh.mu.RUnlock()
+				return true
+			}
+		}
+		sh.mu.RUnlock()
+	}
+	return false
+}
+
 // intersect returns a new set of the entries present in both s and other.
 func (s *AssociationSet) intersect(other *AssociationSet) *AssociationSet {
 	out := newAssociationSet()

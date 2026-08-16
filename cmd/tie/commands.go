@@ -554,6 +554,171 @@ func cmdConf() *cli.Command {
 	}
 }
 
+// cmdTag groups tag-management subcommands. Tags attach to a content hash, so
+// del/rename act on the tag everywhere that content appears in the current
+// collection, and everywhere in the tag-query views.
+func cmdTag() *cli.Command {
+	return &cli.Command{
+		Name:  "tag",
+		Usage: "Manage tags: list, add, del, rename, files, show, set",
+		Commands: []*cli.Command{
+			{
+				Name:  "list",
+				Usage: "List all known tag names: tag list",
+				Flags: []cli.Flag{
+					&cli.IntFlag{Name: "offset", Aliases: []string{"o"}, Value: 0},
+					&cli.IntFlag{Name: "limit", Aliases: []string{"l"}, Value: 0, Usage: "Max tags to list (0 = all)"},
+				},
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					tags, _, err := tie.ListTags(ctx.Int("offset"), ctx.Int("limit"))
+					if err != nil {
+						return errors.New("Tag list Error: " + err.Error())
+					}
+					for _, t := range tags {
+						fmt.Println(t)
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "add",
+				Usage: "Register a tag name in the store (no file needed): tag add [tag]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need 1 arg: tag")
+					}
+					if err := tie.RegisterTag(ctx.Args().First()); err != nil {
+						return errors.New("Tag add Error: " + err.Error())
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "del",
+				Usage: "Delete a tag from every item and the registry: tag del [tag]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need 1 arg: tag")
+					}
+					n, err := tie.DeleteTag(ctx.Args().First())
+					if err != nil {
+						return errors.New("Tag del Error: " + err.Error())
+					}
+					fmt.Fprintf(os.Stderr, "Removed tag from %d item(s)\n", n)
+					return nil
+				},
+			},
+			{
+				Name:  "rename",
+				Usage: "Rename a tag everywhere it is used: tag rename [tag] [newname]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 2 {
+						return errors.New("Need 2 args: tag, newname")
+					}
+					n, err := tie.RenameTag(ctx.Args().Get(0), ctx.Args().Get(1))
+					if err != nil {
+						return errors.New("Tag rename Error: " + err.Error())
+					}
+					fmt.Fprintf(os.Stderr, "Renamed tag on %d item(s)\n", n)
+					return nil
+				},
+			},
+			{
+				Name:  "files",
+				Usage: "List items carrying a tag: tag files [tag]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need 1 arg: tag")
+					}
+					files, _, err := tie.FilesWithTags("", []string{ctx.Args().First()}, nil, 0, -1)
+					if err != nil {
+						return errors.New("Tag files Error: " + err.Error())
+					}
+					for _, f := range files {
+						fmt.Println(f.Hash + "\t" + f.Filename)
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "untagged",
+				Usage: "List files/dirs that carry no tag: tag untagged [--type tie-type]",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "type", Aliases: []string{"t"}, Usage: "Restrict to one tie-type (e.g. audio-file, image-dir); default: all files and directories"},
+					&cli.IntFlag{Name: "offset", Aliases: []string{"o"}, Value: 0},
+					&cli.IntFlag{Name: "limit", Aliases: []string{"l"}, Value: 0, Usage: "Max items to list (0 = all)"},
+				},
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					files, _, err := tie.UntaggedFiles(ctx.String("type"), ctx.Int("offset"), ctx.Int("limit"))
+					if err != nil {
+						return errors.New("Tag untagged Error: " + err.Error())
+					}
+					for _, f := range files {
+						fmt.Println(f.Hash + "\t" + f.Filename)
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "show",
+				Usage: "Show the tags on a content hash: tag show [hash]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need 1 arg: hash")
+					}
+					tags, err := client.GetTags(tie, ctx.Args().First())
+					if err != nil {
+						return errors.New("Tag show Error: " + err.Error())
+					}
+					for _, t := range tags {
+						fmt.Println(t)
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "set",
+				Usage: "Replace the full tag set on a content hash: tag set [hash] [tags...]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need at least 1 arg: hash (pass no tags to clear)")
+					}
+					hash := ctx.Args().First()
+					tags := ctx.Args().Tail()
+					if err := client.SetTags(tie, hash, tags); err != nil {
+						return errors.New("Tag set Error: " + err.Error())
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // importFlags are shared by the bare `import` command and every dir-type
 // subcommand.
 func importFlags() []cli.Flag {

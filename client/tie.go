@@ -55,12 +55,17 @@ type QuerySpec struct {
 	Terms   []string
 	Exclude []string
 	Scope   string
-	Filter  string
-	Reverse bool
-	Expand  bool
-	Offset  int
-	Limit   int
-	SortBy  string
+	// MissingRelation keeps only matches that carry no triple under this
+	// relation (e.g. "tag" to list untagged items). It is the negation of
+	// existence the tag algebra cannot express with Exclude, resolved
+	// server-side so only the qualifying rows cross the wire.
+	MissingRelation string
+	Filter          string
+	Reverse         bool
+	Expand          bool
+	Offset          int
+	Limit           int
+	SortBy          string
 }
 
 // RowValues returns all values a row holds under relation, or nil.
@@ -295,6 +300,7 @@ func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 	request.Terms = spec.Terms
 	request.Exclude = spec.Exclude
 	request.Scope = spec.Scope
+	request.MissingRelation = spec.MissingRelation
 	request.Filter = spec.Filter
 	request.Reverse = spec.Reverse
 	request.Expand = spec.Expand

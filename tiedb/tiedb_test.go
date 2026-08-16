@@ -558,3 +558,63 @@ func TestQueryTagsScope(t *testing.T) {
 		t.Errorf("image-scoped rock query = %v, want empty", got)
 	}
 }
+
+// TestQueryTagsMissingRelation verifies that MissingRelation keeps only matches
+// that carry no triple under the named relation, expressing "list items of a
+// type that have no tag" server-side (the negation of existence Exclude cannot
+// express).
+func TestQueryTagsMissingRelation(t *testing.T) {
+	db := NewDB(true)
+	db.SetDefaultReverseRelations([]string{"tag", "tie-type"})
+	col := db.GetCollection(CollectionKey{t.TempDir(), "missing"})
+
+	// fileA + fileD are tagged; fileB + dirC are not. Every item carries a
+	// structural tie-type ("file" or "directory").
+	col.Add("fileA", "tie-type", "file")
+	col.Add("fileA", "tag", "keep")
+	col.Add("fileB", "tie-type", "file")
+	col.Add("dirC", "tie-type", "directory")
+	col.Add("fileD", "tie-type", "file")
+	col.Add("fileD", "tag", "keep")
+	col.Sync()
+
+	// Files with no tag: fileB only (fileA/fileD tagged, dirC is a directory).
+	got := queryKeys(t, col, TagQuery{
+		Include: []string{"file"}, Reverse: true, MissingRelation: "tag",
+	})
+	if !got["fileB"] || got["fileA"] || got["fileD"] || got["dirC"] {
+		t.Errorf("untagged files = %v, want fileB only", got)
+	}
+
+	// Directories with no tag: dirC.
+	got = queryKeys(t, col, TagQuery{
+		Include: []string{"directory"}, Reverse: true, MissingRelation: "tag",
+	})
+	if !got["dirC"] || len(got) != 1 {
+		t.Errorf("untagged dirs = %v, want dirC only", got)
+	}
+
+	// Without the predicate, both tagged and untagged files match.
+	got = queryKeys(t, col, TagQuery{Include: []string{"file"}, Reverse: true})
+	if !got["fileA"] || !got["fileB"] || !got["fileD"] || got["dirC"] {
+		t.Errorf("all files = %v, want fileA,fileB,fileD", got)
+	}
+
+	// A relation nothing carries means every match "lacks" it, so all files pass.
+	got = queryKeys(t, col, TagQuery{
+		Include: []string{"file"}, Reverse: true, MissingRelation: "no-such-relation",
+	})
+	if !got["fileA"] || !got["fileB"] || !got["fileD"] {
+		t.Errorf("missing unknown-relation = %v, want all three files", got)
+	}
+
+	// Tagging the last untagged file removes it from the untagged result.
+	col.Add("fileB", "tag", "now")
+	col.Sync()
+	got = queryKeys(t, col, TagQuery{
+		Include: []string{"file"}, Reverse: true, MissingRelation: "tag",
+	})
+	if len(got) != 0 {
+		t.Errorf("after tagging fileB, untagged files = %v, want empty", got)
+	}
+}

@@ -13,21 +13,25 @@ const (
 // flat, ordered list of Rows. Terms is the full AND-list (every match must be
 // associated with all of them); there is no positional seed key. Exclude lists
 // terms a match must NOT carry. Scope restricts matches to associates of that
-// value under a different relation than the terms (e.g. a tie-type). Filter
-// filters-in on the relation (value1). Reverse selects matches by reverse
-// association (the tag-query case). When Expand is set, each match's own
-// forward attributes are attached to its Row instead of the matched triples.
+// value under a different relation than the terms (e.g. a tie-type).
+// MissingRelation keeps only matches that carry no triple under the named
+// relation — the "has no tag" case Exclude cannot express (Exclude removes a
+// specific value, not the presence of a relation). Filter filters-in on the
+// relation (value1). Reverse selects matches by reverse association (the
+// tag-query case). When Expand is set, each match's own forward attributes are
+// attached to its Row instead of the matched triples.
 type QueryRequest struct {
 	ws.Request
 	CollectionInfo
 
-	Terms   []string          `json:"terms"`
-	Exclude []string          `json:"exclude"`
-	Scope   string            `json:"scope"`
-	Filter  string            `json:"filter"`
-	Reverse bool              `json:"reverse"`
-	Expand  bool              `json:"expand"`
-	Sort    tiedb.SortOptions `json:"sort"`
+	Terms           []string          `json:"terms"`
+	Exclude         []string          `json:"exclude"`
+	Scope           string            `json:"scope"`
+	MissingRelation string            `json:"missingRelation"`
+	Filter          string            `json:"filter"`
+	Reverse         bool              `json:"reverse"`
+	Expand          bool              `json:"expand"`
+	Sort            tiedb.SortOptions `json:"sort"`
 }
 
 // QueryReply is the single, ordered result view. Rows is paginated per the
@@ -47,12 +51,13 @@ func (request *QueryRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	col := env.Collection(request.Namespace, request.CollectionId)
 
 	q := tiedb.TagQuery{
-		Include: request.Terms,
-		Exclude: request.Exclude,
-		Scope:   request.Scope,
-		Reverse: request.Reverse,
-		Filter:  request.Filter,
-		Sort:    request.Sort,
+		Include:         request.Terms,
+		Exclude:         request.Exclude,
+		Scope:           request.Scope,
+		MissingRelation: request.MissingRelation,
+		Reverse:         request.Reverse,
+		Filter:          request.Filter,
+		Sort:            request.Sort,
 	}
 	_, sorted, total, found := col.QueryTags(q)
 	if !found || len(sorted) == 0 {

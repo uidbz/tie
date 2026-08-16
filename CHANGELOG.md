@@ -8,6 +8,31 @@ to follow semantic versioning.
 
 ### Added
 
+- **`tie tag` command group for tag management.** A new CLI command groups tag
+  operations: `list` (registered tag names), `add <tag>` (register a name in the
+  `(tags,"all",…)` registry without needing a file), `del <tag>` and
+  `rename <old> <new>` (remove/rewrite a tag on every item and the registry,
+  globally), `files <tag>` (items carrying a tag), `show <hash>` and
+  `set <hash> [tags…]` (view/replace an item's tags), and `untagged
+  [--type <tie-type>]` (see below). Because tags attach to a content hash,
+  `del`/`rename`/`set` change the tag everywhere that content appears. Global
+  rewrites are applied in chunked batches so a tag spanning a large store never
+  builds one oversized request. Backed by new client methods `RegisterTag`,
+  `DeleteTag`, `RenameTag`, and `UntaggedFiles`.
+
+- **`MissingRelation` query predicate ("has no X").** `QuerySpec.MissingRelation`
+  (wired through `api` and `tiedb.TagQuery`) keeps only matches that carry no
+  triple under a named relation — the negation-of-existence the association
+  algebra's `Exclude` cannot express (it removes a specific value, not the
+  presence of a relation). It is resolved entirely server-side: after the normal
+  Include/Exclude/Scope pass, only subjects whose forward index lacks the relation
+  survive, via per-subject forward point-lookups (`AssociationSet.HasRelation`).
+  Cost is O(candidates) lookups with O(result) memory — no full-collection scan
+  and no client-side download. `tie tag untagged` uses it with
+  `MissingRelation="tag"` scoped to a `tie-type` to list files/directories that
+  carry a tie-type but no tag; any client (e.g. an image viewer) can pass the
+  field on an ordinary query to page untagged items server-side.
+
 - **Read/read-write user roles and filehost authentication.** Both `tie-daemon`
   and `tie-filehost` now share a role-based access model (new `auth` package):
   users are `read` (queries / downloads) or `write` (full access). `[[Users]]`

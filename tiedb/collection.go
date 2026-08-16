@@ -776,12 +776,13 @@ func (ic *Collection) GetPage(s *AssociationSet, value1Filter string, o SortOpti
 // the full {associate, relation} pair); it is applied by matching on associate
 // identity alone. An empty Scope means no scoping.
 type TagQuery struct {
-	Include []string    // AND across all; Include[0] is the seed set
-	Exclude []string    // NOT any of these
-	Scope   string      // restrict to associates of this value, ignoring relation
-	Reverse bool        // seed via reverse associations (tag query) vs forward
-	Filter  string      // filter-in on value1 (relation)
-	Sort    SortOptions // pagination (Offset/Limit/SortBy)
+	Include         []string    // AND across all; Include[0] is the seed set
+	Exclude         []string    // NOT any of these
+	Scope           string      // restrict to associates of this value, ignoring relation
+	MissingRelation string      // keep only matches with NO triple under this relation
+	Reverse         bool        // seed via reverse associations (tag query) vs forward
+	Filter          string      // filter-in on value1 (relation)
+	Sort            SortOptions // pagination (Offset/Limit/SortBy)
 }
 
 // QueryTags resolves the include/exclude set algebra internally and returns a
@@ -825,8 +826,45 @@ func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTr
 		set = set.intersectByAssociate(scope)
 	}
 
+	if q.MissingRelation != "" {
+		set = ic.filterMissingRelation(set, q.MissingRelation)
+	}
+
 	result, sorted, total = ic.GetPage(set, q.Filter, q.Sort)
 	return result, sorted, total, true
+}
+
+// filterMissingRelation returns the subset of seed whose subject carries no
+// forward triple under relation. It expresses "of these matches, keep the ones
+// that lack a tag" without a full-collection scan or client-side download: each
+// seed entry's subject is looked up in the forward index (a tiny per-subject
+// set) and dropped if it has any association under the relation.
+//
+// This is the negation-of-existence the association algebra cannot express with
+// Exclude (which removes a specific value, not the presence of a relation). Cost
+// is O(len(seed)) forward point-lookups; memory is O(result), so it respects the
+// engine's memory-over-speed weighting even on a metadata-heavy store.
+func (ic *Collection) filterMissingRelation(seed *AssociationSet, relation string) *AssociationSet {
+	relID, _, found := ic.getEntryFromString(relation)
+	out := newAssociationSet()
+	seed.ForEach(func(key UniqueAssociation, pos int64) {
+		if !found {
+			// The relation was never interned, so nothing carries it: every
+			// seed entry qualifies as "missing" it.
+			out.Put(key, pos)
+			return
+		}
+		// The reverse-set entry carries the subject id but not its level; the
+		// stored triple does, so resolve it to reach the subject's forward set.
+		t, ok := ic.resolveTriple(pos)
+		if !ok {
+			return
+		}
+		if !ic.getAssociations(t.Level, t.Key).HasRelation(relID) {
+			out.Put(key, pos)
+		}
+	})
+	return out
 }
 
 // ExpandKeys returns one Row per key holding that key's forward attributes

@@ -1244,6 +1244,134 @@ func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
 	return tags, total, nil
 }
 
+// tagBatchChunk bounds how many triple ops a single rename/delete batch carries.
+// A tag applied across a large store can touch millions of subjects; splitting
+// the rewrite into fixed-size batches keeps any one request bounded rather than
+// building one enormous batch.
+const tagBatchChunk = 1000
+
+// taggedSubjects returns the keys of every subject (file hash or directory
+// DirUID) that carries (subject,"tag",tag). It is a reverse lookup on the tag
+// relation; no Expand, since only the subject keys are needed. A tag no item
+// carries yields an empty slice, not an error.
+func (tie *TieClient) taggedSubjects(tag string) ([]string, error) {
+	rows, _, err := tie.Query(QuerySpec{
+		Terms:   []string{tag},
+		Filter:  str(TieTag),
+		Reverse: true,
+		Limit:   -1,
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	subjects := make([]string, 0, len(rows))
+	for _, row := range rows {
+		subjects = append(subjects, row.Key)
+	}
+	return subjects, nil
+}
+
+// RegisterTag records tag in the ("tags","all",<tag>) registry that backs
+// ListTags, so a tag name is known to the store even before any file carries
+// it. It writes the same registry triple Tag/SetTags write. Registering an
+// existing tag is a harmless no-op. An empty tag is rejected.
+func (tie *TieClient) RegisterTag(tag string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return errors.New("RegisterTag: tag must not be empty")
+	}
+	if _, err := tie.Add(str(TieTags), str(TieAll), tag); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
+// DeleteTag removes tag from every item that carries it and from the
+// ("tags","all",<tag>) registry, across the current collection. It returns the
+// number of items the tag was removed from. The registry entry is dropped even
+// when no item carries the tag, so a dangling registered tag can be cleaned up.
+//
+// Because a tag attaches to a content hash, this removes the tag everywhere that
+// content appears and from every tag-query view.
+func (tie *TieClient) DeleteTag(tag string) (int, error) {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return 0, errors.New("DeleteTag: tag must not be empty")
+	}
+	subjects, err := tie.taggedSubjects(tag)
+	if err != nil {
+		return 0, err
+	}
+	for i := 0; i < len(subjects); i += tagBatchChunk {
+		end := min(i+tagBatchChunk, len(subjects))
+		b := tie.NewBatch()
+		for _, subject := range subjects[i:end] {
+			b.Delete(subject, str(TieTag), tag)
+		}
+		if _, err := tie.Batch(b); err != nil {
+			return 0, err
+		}
+	}
+	reg := tie.NewBatch()
+	reg.Delete(str(TieTags), str(TieAll), tag)
+	if _, err := tie.Batch(reg); err != nil {
+		return 0, err
+	}
+	if err := tie.Sync(); err != nil {
+		return 0, err
+	}
+	return len(subjects), nil
+}
+
+// RenameTag rewrites tag oldTag to newTag on every item that carries it and in
+// the ("tags","all",<tag>) registry, across the current collection. It returns
+// the number of items rewritten. The registry entry is renamed even when no
+// item carries the tag, so a dangling registered tag can be renamed too.
+//
+// Because a tag attaches to a content hash, this renames the tag everywhere that
+// content appears and in every tag-query view. Re-tagging an item that already
+// carries newTag is a harmless no-op.
+func (tie *TieClient) RenameTag(oldTag, newTag string) (int, error) {
+	oldTag = strings.TrimSpace(oldTag)
+	newTag = strings.TrimSpace(newTag)
+	if oldTag == "" || newTag == "" {
+		return 0, errors.New("RenameTag: tags must not be empty")
+	}
+	if oldTag == newTag {
+		return 0, nil
+	}
+	subjects, err := tie.taggedSubjects(oldTag)
+	if err != nil {
+		return 0, err
+	}
+	for i := 0; i < len(subjects); i += tagBatchChunk {
+		end := min(i+tagBatchChunk, len(subjects))
+		b := tie.NewBatch()
+		for _, subject := range subjects[i:end] {
+			// A batch runs deletes before adds; oldTag and newTag differ, so
+			// there is no self-conflict on a subject.
+			b.Delete(subject, str(TieTag), oldTag)
+			b.Add(subject, str(TieTag), newTag)
+		}
+		if _, err := tie.Batch(b); err != nil {
+			return 0, err
+		}
+	}
+	reg := tie.NewBatch()
+	reg.Delete(str(TieTags), str(TieAll), oldTag)
+	reg.Add(str(TieTags), str(TieAll), newTag)
+	if _, err := tie.Batch(reg); err != nil {
+		return 0, err
+	}
+	if err := tie.Sync(); err != nil {
+		return 0, err
+	}
+	return len(subjects), nil
+}
+
 // FilesWithTags returns the files that carry ALL of include and NONE of exclude,
 // optionally scoped to a single tie-type value (e.g. "audio-file" for "find music
 // with tag1, tag2 but not tag4", or a custom dir-type label like "live-album").
@@ -1300,6 +1428,91 @@ func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile
 		Expand:  true,
 		Offset:  offset,
 		Limit:   limit,
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	files := make([]TaggedFile, 0, len(rows))
+	for _, row := range rows {
+		files = append(files, taggedFileFrom(row))
+	}
+	return files, total, nil
+}
+
+// UntaggedFiles returns items that carry a tie-type but no tag, i.e. files/dirs
+// in the store that have never been tagged. scope names a single tie-type to
+// browse (e.g. "audio-file", or a custom dir-type label); an empty scope browses
+// the structural universes "file" and "directory", covering every imported file
+// and directory. offset/limit paginate the untagged result; limit <= 0 means no
+// limit. The second return is the total number of untagged items before
+// pagination.
+//
+// The "has no tag" filter runs server-side via QuerySpec.MissingRelation, so
+// only untagged rows cross the wire (not the scope's full metadata). A single
+// scope is paginated by the server; the empty-scope case unions the two
+// structural types and paginates the merged result client-side.
+func (tie *TieClient) UntaggedFiles(scope string, offset, limit int) ([]TaggedFile, int, error) {
+	// A single explicit scope paginates entirely server-side.
+	if scope != "" {
+		return tie.untaggedOfType(scope, offset, limit)
+	}
+
+	// Empty scope: union the structural "file" and "directory" universes. Each
+	// side is already tag-filtered by the server; merge, sort, then paginate.
+	var untagged []TaggedFile
+	seen := make(map[string]bool)
+	for _, s := range []string{str(TieFile), str(TieDirectory)} {
+		files, _, err := tie.untaggedOfType(s, 0, -1)
+		if err != nil {
+			return nil, 0, err
+		}
+		for _, f := range files {
+			if seen[f.Hash] {
+				continue // same subject under both structural scopes
+			}
+			seen[f.Hash] = true
+			untagged = append(untagged, f)
+		}
+	}
+
+	// Stable order (filename, then hash) so client-side pagination is
+	// deterministic across calls, matching ReadTieDir's ordering.
+	sort.Slice(untagged, func(i, j int) bool {
+		if untagged[i].Filename != untagged[j].Filename {
+			return untagged[i].Filename < untagged[j].Filename
+		}
+		return untagged[i].Hash < untagged[j].Hash
+	})
+
+	total := len(untagged)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	untagged = untagged[offset:]
+	if limit > 0 && limit < len(untagged) {
+		untagged = untagged[:limit]
+	}
+	return untagged, total, nil
+}
+
+// untaggedOfType returns the untagged items of one tie-type via a reverse
+// tie-type query with the server-side MissingRelation="tag" predicate, so the
+// daemon returns only rows lacking a tag. The server paginates via offset/limit.
+func (tie *TieClient) untaggedOfType(scope string, offset, limit int) ([]TaggedFile, int, error) {
+	rows, total, err := tie.Query(QuerySpec{
+		Terms:           []string{scope},
+		Filter:          str(TieTypeProperty),
+		MissingRelation: str(TieTag),
+		Reverse:         true,
+		Expand:          true,
+		Offset:          offset,
+		Limit:           limit,
 	})
 	if errors.Is(err, ErrNotFound) {
 		return nil, 0, nil

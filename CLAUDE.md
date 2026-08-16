@@ -76,6 +76,28 @@ cd test-env
 `tie upload <file>` prints the content hash. `mount --db <mnt>` for the live tag
 tree; `mount <hash> <mnt>` for an immutable content-addressed dir.
 
+`tag` groups tag management: `list` (registry names), `add <tag>` (register a
+name only), `del <tag>` / `rename <old> <new>` (rewrite the tag on every item +
+the `(tags,"all",…)` registry, globally), `files <tag>` (items carrying a tag),
+`show <hash>` / `set <hash> [tags…]` (per-item tags), and `untagged
+[--type <tie-type>]` (items with a tie-type but no tag). Tags attach to a
+content hash, so `del`/`rename`/`set` change the tag everywhere that content
+appears. `untagged` is backed by the server-side `MissingRelation` query
+predicate (see below), so only untagged rows cross the wire.
+
+## Query: MissingRelation ("has no X") predicate
+
+The association algebra's `Exclude` removes a *specific value*; it cannot express
+"lacks any triple under relation R". `QuerySpec.MissingRelation` (→
+`api` `missingRelation` → `tiedb.TagQuery.MissingRelation`) fills that gap: after
+the normal Include/Exclude/Scope resolution, `Collection.filterMissingRelation`
+keeps only seed subjects whose *forward* index has no entry under R (via
+`AssociationSet.HasRelation`, an early-exit scan over a subject's small metadata
+set). Cost is O(candidates) forward point-lookups, memory O(result) — no
+full-collection scan or client-side download, so it holds to the memory-over-load
+weighting. `UntaggedFiles`/`tag untagged` set `MissingRelation="tag"` scoped to a
+`tie-type`; any client (e.g. imgview) can pass the field on a normal `Query`.
+
 ## FUSE read path (perf-relevant)
 
 `mount` → `NewTieDBFuse`/`NewTieFuse` with a `--cache` size in GB (default 1).
