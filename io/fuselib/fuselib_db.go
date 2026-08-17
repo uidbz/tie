@@ -24,7 +24,7 @@ import (
 //	                            token scopes to a tie-type (default: all types);
 //	                            a custom dir-type label (e.g. "type:live-album")
 //	                            works too.
-//	/files/<path>/...           the path-based virtual directory tree (file:/...)
+//	/files/<path>/...           the path-based virtual directory tree (tie:/...)
 //	/tags/<path>/...            mirrors /files, but each leaf is a small writable
 //	                            text file whose contents are the file's tags (one
 //	                            per line). Editing the file re-tags the content.
@@ -616,7 +616,7 @@ func (d *taggedDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	return nil, syscall.ENOENT
 }
 
-// pathDir exposes the path-based virtual directory tree (the file:/... hierarchy
+// pathDir exposes the path-based virtual directory tree (the tie:/... hierarchy
 // built by import/MkTieDir). Each node resolves its slash path to a DirUID and
 // lists that directory's children live on every readdir.
 type pathDir struct {
@@ -647,7 +647,7 @@ func (d *pathDir) read() (client.Directory, error) {
 	return client.ReadTieDir(d.state.tie, uid)
 }
 
-// baseName returns the last segment of a file:/-prefixed virtual path.
+// baseName returns the last segment of a tie:/-prefixed virtual path.
 func baseName(p string) string {
 	p = strings.TrimPrefix(p, client.FileURIScheme)
 	p = strings.TrimRight(p, "/")

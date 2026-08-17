@@ -62,15 +62,15 @@ func TestTieDirAncestors(t *testing.T) {
 		in   string
 		want []string
 	}{
-		{"file:/a/b/c", []string{"file:/a", "file:/a/b", "file:/a/b/c"}},
-		{"/a/b/c", []string{"file:/a", "file:/a/b", "file:/a/b/c"}},
-		{"/a/b", []string{"file:/a", "file:/a/b"}},
-		{"a/b", []string{"file:/a", "file:/a/b"}}, // relative treated as absolute
-		{"file:/", nil},
+		{"tie:/a/b/c", []string{"tie:/a", "tie:/a/b", "tie:/a/b/c"}},
+		{"/a/b/c", []string{"tie:/a", "tie:/a/b", "tie:/a/b/c"}},
+		{"/a/b", []string{"tie:/a", "tie:/a/b"}},
+		{"a/b", []string{"tie:/a", "tie:/a/b"}}, // relative treated as absolute
+		{"tie:/", nil},
 		{"/", nil},
-		{"file:/a//b/", []string{"file:/a", "file:/a/b"}},    // redundant separators
-		{"file:/a/./b", []string{"file:/a", "file:/a/b"}},    // "." collapsed
-		{"file:/a/x/../b", []string{"file:/a", "file:/a/b"}}, // ".." collapsed
+		{"tie:/a//b/", []string{"tie:/a", "tie:/a/b"}},    // redundant separators
+		{"tie:/a/./b", []string{"tie:/a", "tie:/a/b"}},    // "." collapsed
+		{"tie:/a/x/../b", []string{"tie:/a", "tie:/a/b"}}, // ".." collapsed
 	}
 	for _, c := range cases {
 		got := tieDirAncestors(c.in)

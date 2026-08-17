@@ -70,8 +70,15 @@ const (
 	TieDirUID                          // dir-uid
 )
 
+// FileURIScheme prefixes the virtual path stored in every (uid, "path", …)
+// triple, namespacing the tag/path tree. It is a private URI scheme conforming
+// to RFC 3986 generic syntax ("tie" is a valid scheme name; "tie:/a/b" is a
+// well-formed URI with no authority) — deliberately NOT the RFC 8089 "file:"
+// scheme, since these are tie-internal tree nodes, not local-filesystem paths.
+// The value is persisted, so changing it requires migrating existing path
+// triples (see cmd/tie migration notes / test-env/migrate-scheme.sh).
 const (
-	FileURIScheme string = "file:"
+	FileURIScheme string = "tie:"
 )
 
 // tagDateFormat is the layout for the single-valued tag-date (last import time).
@@ -1670,13 +1677,13 @@ func (tie *TieClient) RelationsFrom(hash string) ([]MediaRelation, error) {
 
 // tieDirAncestors returns the virtual directory paths that make up p, from the
 // top-level directory down to p itself, each prefixed with FileURIScheme. The
-// root "file:/" is not included (it is created separately). Virtual paths are
+// root "tie:/" is not included (it is created separately). Virtual paths are
 // always absolute, so a leading slash is assumed and the input is cleaned to
 // collapse "." / ".." and redundant separators.
 //
-//	"file:/a/b/c" -> ["file:/a", "file:/a/b", "file:/a/b/c"]
-//	"/a/b"        -> ["file:/a", "file:/a/b"]
-//	"file:/"      -> [] (root only)
+//	"tie:/a/b/c" -> ["tie:/a", "tie:/a/b", "tie:/a/b/c"]
+//	"/a/b"        -> ["tie:/a", "tie:/a/b"]
+//	"tie:/"      -> [] (root only)
 func tieDirAncestors(p string) []string {
 	p = strings.TrimPrefix(p, FileURIScheme)
 	if !strings.HasPrefix(p, "/") {

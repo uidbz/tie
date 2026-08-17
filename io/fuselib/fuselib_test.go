@@ -105,10 +105,10 @@ func TestDisambiguateFiles(t *testing.T) {
 
 func TestBaseName(t *testing.T) {
 	tests := []struct{ in, want string }{
-		{"file:/music", "music"},
-		{"file:/music/jazz", "jazz"},
-		{"file:/music/jazz/", "jazz"},
-		{"file:/", ""},
+		{"tie:/music", "music"},
+		{"tie:/music/jazz", "jazz"},
+		{"tie:/music/jazz/", "jazz"},
+		{"tie:/", ""},
 		{"music", "music"},
 	}
 	for _, tt := range tests {
