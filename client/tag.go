@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"git.sr.ht/~uid/tie/api"
 	"git.sr.ht/~uid/tie/io/putlib"
 	"git.sr.ht/~uid/tie/metadata"
 )
@@ -377,6 +378,24 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		return uid, nil
 	}
 
+	// Tagging is the dominant request count on a large import: one Batch per file
+	// would be thousands of tiny sequential POSTs. Accumulate the per-item tag ops
+	// into one batch and flush in chunks, collapsing them into a handful of
+	// requests. flushThreshold bounds the in-flight batch size (memory + request
+	// size); api.Batch applies every op under a single Sync (api/batch.go).
+	const flushThreshold = 1000
+	batch := tie.NewBatchIn(collection)
+	flush := func() error {
+		if len(batch.Ops) == 0 {
+			return nil
+		}
+		if _, err := tie.Batch(batch); err != nil {
+			return err
+		}
+		batch = tie.NewBatchIn(collection)
+		return nil
+	}
+
 	for _, x := range status.UploadedItems {
 		rel, err := filepath.Rel(dir, x.Filename)
 		if err != nil {
@@ -403,15 +422,14 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 				// path for the name.
 				dirname = filepath.Base(strings.TrimPrefix(rootPath, FileURIScheme))
 			}
-			if err := tagDir(tie, uid, dirname, x.Size, tags, collection); err != nil {
-				return err
-			}
+			appendTagDirOps(batch, uid, dirname, x.Size, tags)
 			// Link the DirUID to its immutable tiedir snapshot blob so the
 			// content-addressed snapshot remains reachable from the live node.
-			batch := tie.NewBatchIn(collection)
 			batch.Add(string(uid), str(TieTiedirHash), x.Hash)
-			if _, err := tie.Batch(batch); err != nil {
-				return err
+			if len(batch.Ops) >= flushThreshold {
+				if err := flush(); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -434,13 +452,23 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			Tags:      tags,
 			Metadata:  fileMeta[x.Filename],
 		}
-		if err := Tag(tie, info, collection); err != nil {
-			return err
+		fmt.Println("tagging", info.Hash)
+		appendTagOps(batch, info)
+		if len(batch.Ops) >= flushThreshold {
+			if err := flush(); err != nil {
+				return err
+			}
 		}
 		if want[parent] == nil {
 			want[parent] = make(map[string]bool)
 		}
 		want[parent][x.Hash] = true
+	}
+
+	// Persist all buffered tag ops before reconciliation: reconcileDir queries the
+	// committed children of each touched directory, so nothing may stay buffered.
+	if err := flush(); err != nil {
+		return err
 	}
 
 	rootUID, err := dirUID(".")
@@ -740,6 +768,18 @@ func existingValues(tie *TieClient, key, relation string) ([]string, error) {
 func Tag(tie *TieClient, info TagInfo, collection string) error {
 	fmt.Println("tagging", info.Hash)
 	batch := tie.NewBatchIn(collection)
+	appendTagOps(batch, info)
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// appendTagOps appends the write ops that tag a single item (file) onto batch,
+// without sending anything. Callers that tag many items reuse one batch to cut
+// round-trips (see ImportDir); Tag is the single-item wrapper.
+func appendTagOps(batch *api.Batch, info TagInfo) {
 	filename := filepath.Base(info.File)
 	hash := info.Hash
 	name := strings.TrimRight(filename, filepath.Ext(filename)) // Remove extension
@@ -784,12 +824,6 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 	if info.Directory != "" {
 		batch.Add(hash, str(TieParent), str(info.Directory))
 	}
-
-	if _, err := tie.Batch(batch); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // tagDir writes a directory's queryable metadata onto its DirUID: display name,
@@ -800,6 +834,17 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 // touch the tiedir content hash — a directory's identity for tagging is its DirUID.
 func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string, collection string) error {
 	batch := tie.NewBatchIn(collection)
+	appendTagDirOps(batch, uid, dirname, size, tags)
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+	return nil
+}
+
+// appendTagDirOps appends a directory's queryable metadata ops onto batch
+// without sending. See tagDir for the semantics; ImportDir reuses one batch
+// across many directories to cut round-trips.
+func appendTagDirOps(batch *api.Batch, uid DirUID, dirname string, size int, tags []string) {
 	batch.Add(str(uid), str(TieFilename), dirname)
 	batch.Add(str(uid), str(TieName), dirname)
 	batch.Add(str(uid), str(TieFilesize), strconv.Itoa(size))
@@ -816,10 +861,6 @@ func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string,
 			}
 		}
 	}
-	if _, err := tie.Batch(batch); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
