@@ -38,6 +38,10 @@ func main() {
 			"from a content-addressed filehost, imports and tags directory trees, and\n" +
 			"mounts collections as a FUSE filesystem.",
 		EnableShellCompletion: true,
+		// Surface the auto-generated `completion` command (bash/zsh/fish/pwsh) in
+		// help; cli registers it hidden by default. Its own description documents
+		// the setup one-liner, e.g. `source <(tie completion bash)`.
+		ConfigureShellCompletionCommand: func(c *cli.Command) { c.Hidden = false },
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
 		},

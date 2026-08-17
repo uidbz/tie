@@ -76,6 +76,11 @@ cd test-env
 `tie upload <file>` prints the content hash. `mount --db <mnt>` for the live tag
 tree; `mount <hash> <mnt>` for an immutable content-addressed dir.
 
+`completion <bash|zsh|fish|pwsh>` prints a shell-completion script (the
+urfave/cli built-in, un-hidden in `cmd/tie/main.go` via
+`ConfigureShellCompletionCommand`); enable it with e.g.
+`source <(tie completion bash)` in `.bashrc`.
+
 `tag` groups tag management: `list` (registry names), `add <tag>` (register a
 name only), `del <tag>` / `rename <old> <new>` (rewrite the tag on every item +
 the `(tags,"all",…)` registry, globally), `files <tag>` (items carrying a tag),
