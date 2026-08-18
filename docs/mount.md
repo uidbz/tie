@@ -207,6 +207,75 @@ mints a `DirUID` and writes its `parent` / `path` / `tie-type` triples. After
 `Sync`, it returns a fresh `pathDir` inode so the new directory is immediately
 listable and can be populated by further `mkdir`s.
 
+## Creating and editing files (`/files`)
+
+`pathDir` implements `fs.NodeCreater`, and its file children are `dbFileNode`s
+(writable), so a file can be copied in (`cp`, a file-manager drag) or opened,
+edited, and saved through the mount. Both funnel through one client method,
+`client.WriteFile` (`client/write.go`), so the mount and direct client callers
+(e.g. tie-fm) behave identically.
+
+The content-addressed store makes "write" a create-new-then-repoint operation:
+the bytes are staged, uploaded, and the file's triples rewritten only on close,
+because the content hash — the file's very identity — isn't known until the last
+byte is written. The flow mirrors the read cache and `metaFile`:
+
+- **Staging is on disk, not in memory.** `NewTieDBFuse` makes a
+  `tie-fuse-write-*` temp dir (removed by `Close`, next to the read cache). A
+  writable open (or `Create`) stages bytes to a temp file via
+  `writeHandle.Write` → `WriteAt`, so a multi-GB write stays memory-bounded like
+  a read.
+- **`Create`** returns a `dbFileNode` + `writeHandle` immediately, keyed on a
+  transient inode (`parentPath + "\x00" + name`) since no hash exists yet.
+  Copying onto an existing name is allowed — the overwrite is versioned on commit
+  (below), so there is no `EEXIST`.
+- **Editing an existing file.** `dbFileNode.Open` for read serves bytes from the
+  shared blob cache (unchanged from the read-only path). For write it stages a
+  temp file and, unless the open truncated, **seeds** it with the current content
+  (one cache download → `io.Copy`) so a partial in-place edit (seek + write)
+  preserves the untouched bytes.
+- **The truncate gotcha (again).** A full-rewrite save (`cp` over an existing
+  file, most editors) opens with `O_TRUNC`; go-fuse delivers that as a
+  `SETATTR(size=0)` *before* `Open` (see the `metaFile` section), so
+  `dbFileNode.Setattr` records it and the subsequent write-open skips seeding and
+  starts empty. `FOPEN_DIRECT_IO` keeps the kernel from serving a stale size
+  across the truncate/rewrite.
+- **Commit on close.** `writeHandle.Flush` resolves the parent DirUID
+  (`DirUIDFromPath`, creating ancestors with `MkTieDirAll` if the tree is empty)
+  and calls `client.WriteFile(host, "", parentUID, name, tmpPath, nil)`. `Release`
+  removes the temp file. Commit is guarded so a dup'd fd can't double-commit.
+
+`client.WriteFile` uploads the staged bytes (`putlib.Upload` → hash → `PUT
+/upload/<hash>`), then:
+
+- **finds a superseded same-named child** via `fileChildren` (not `ReadTieDir`,
+  which filters to media types — a plain file must still be found);
+- **unchanged bytes are a no-op** — if the new hash equals the old file's hash,
+  nothing is written (no spurious `_prev` entry), so re-saving an unmodified file
+  is cheap;
+- **writes the new file's triples** through the same `appendTagOps` import uses
+  (filename/name/media-type/tie-type/filesize/`tag-date`(now)/parent), and
+  **carries the superseded version's tags and every other descriptive attribute**
+  (title/artist/album/…) onto the new hash — only the content-derived fields are
+  set fresh;
+- **versions the old content** into a `<name>_prev` history dir, reusing
+  `ImportDir`'s exact helpers (`moveChildToPrev`, `retentionDrops`,
+  `detachChild`, `removeEmptyPrevDir`) capped at `Config.PrevVersions` (default
+  3, oldest dropped first). At `PrevVersions == 0` the old edge is removed
+  outright and orphaned metadata garbage-collected — no blob is ever deleted from
+  the filehost (that is the retention reaper's job; see `cmd/tie-filehost/`).
+
+Two caveats:
+
+- **Only media/document/archive files appear in listings.** `ReadTieDir` surfaces
+  image/video/audio/document/archive tie-types; a plain-text or otherwise
+  unrecognized file is stored correctly (its triples and blob exist) but is
+  invisible in `/files`, `/tags`, and `/query`. This is the store's pre-existing
+  read-side policy, not specific to the write path.
+- **`O_APPEND` is unsupported.** Appending (`>>`) to a file in the mount is a
+  no-op — a known limitation of `O_APPEND` under FUSE direct I/O. Save the whole
+  file instead (the common editor/`cp` path).
+
 ## The `/tags` tree — editing tags as text files
 
 `tagsDir` mirrors `pathDir`'s navigation exactly (resolve path → DirUID, list
@@ -346,13 +415,32 @@ tag edits. After a `.type` edit, `tie dump | grep <DirUID>` must still show the
 `tie-type directory` marker alongside the edited labels. `/query` must reject
 writes (`mv` there returns "Operation not supported").
 
+Creating and editing files (use a media file — a plain `.txt` is stored but not
+listed, see the caveat above):
+
+```sh
+mkdir mnt/files/wtest
+cp some.png mnt/files/wtest/photo.png        # copy-in: uploads + writes triples
+cat mnt/files/wtest/photo.png | sha256sum    # bytes round-trip
+tie dump | grep photo.png                    # filename/parent/media-type/tie-type
+
+printf 'jazz\n' > mnt/tags/wtest/photo.png   # tag it
+cp other.png mnt/files/wtest/photo.png       # edit-save: new hash, old -> _prev
+ls  mnt/files/wtest/photo.png_prev/          # prior version kept
+cat mnt/tags/wtest/photo.png                 # still shows jazz (carried forward)
+
+# retention: PrevVersions saves keep at most that many in _prev (oldest dropped)
+# no-op re-save (identical bytes) adds no _prev entry
+```
+
 ## Future work
 
-- **Creating files through the mount.** `mkdir` creates directory nodes, but
-  there is no `Create`/`Write` path for new *files* — that needs a filehost
-  upload plus tagging, a larger change. `touch`/copy-in are unsupported.
 - **Deleting through the mount.** No node implements `Unlink`/`Rmdir`, so `rm`
   inside the mount fails. Superseded versions are pruned automatically by import's
   `PrevVersions` retention; deleting a single version (or an empty `_prev` dir) by
   hand from the mount would need an `Unlink`/`Rmdir` path wired to a client
   triple-delete helper.
+- **Surfacing non-media files.** `ReadTieDir` lists only media/document/archive
+  tie-types, so a plain-text file written through the mount is stored but not
+  listed. Widening the listing would touch every tree (`/files`, `/tags`,
+  `/query`) and is a read-side policy change, not part of the write path.

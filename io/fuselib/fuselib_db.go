@@ -2,9 +2,11 @@ package fuselib
 
 import (
 	"context"
+	"io"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 
 	"git.sr.ht/~uid/tie/client"
@@ -35,22 +37,31 @@ import (
 // re-tagging is visible without remounting.
 type TieDBFuse struct {
 	tie      *client.TieClient
-	fuseTree *TieFuse // reused for content-addressed file/dir bytes + cache
-	uid      uint32   // owner uid for all files
-	gid      uint32   // owner gid for all files
+	fuseTree *TieFuse        // reused for content-addressed file/dir bytes + cache
+	host     client.FileHost // filehost that receives uploads from the write path
+	writeDir string          // temp dir staging in-flight writes (no hash until commit)
+	uid      uint32          // owner uid for all files
+	gid      uint32          // owner gid for all files
 }
 
 func NewTieDBFuse(tie *client.TieClient, host client.FileHost, cacheSizeGB int, verify bool) *TieDBFuse {
+	writeDir, _ := os.MkdirTemp("", "tie-fuse-write-*")
 	return &TieDBFuse{
 		tie:      tie,
 		fuseTree: NewTieFuse(host, cacheSizeGB, verify),
+		host:     host,
+		writeDir: writeDir,
 		uid:      uint32(os.Getuid()),
 		gid:      uint32(os.Getgid()),
 	}
 }
 
-// Close releases the on-disk blob cache. Call once after the mount is torn down.
+// Close releases the on-disk blob cache and the write-staging dir. Call once
+// after the mount is torn down.
 func (state *TieDBFuse) Close() error {
+	if state.writeDir != "" {
+		os.RemoveAll(state.writeDir)
+	}
 	return state.fuseTree.Close()
 }
 
@@ -400,6 +411,218 @@ func fileNode(state *TieDBFuse, f client.File) *node {
 	}
 }
 
+// dbFileNode is a writable file in the /files path tree. Reads serve the stored
+// content by hash from the shared blob cache (identical to the read-only path);
+// a writable open stages bytes to a temp file and, on close, uploads them and
+// rewrites the file's triples via client.WriteFile (versioning any prior content
+// into <name>_prev). file.Uid is empty for a not-yet-committed Create.
+type dbFileNode struct {
+	fs.Inode
+	state      *TieDBFuse
+	parentPath string      // slash path of the containing directory (e.g. "/music")
+	name       string      // this file's name within parentPath
+	file       client.File // current stored file; zero Uid before the first commit
+
+	mu        sync.Mutex
+	truncated bool // a SETATTR(size=0) arrived before the next writable Open
+}
+
+var (
+	_ = (fs.NodeOpener)((*dbFileNode)(nil))
+	_ = (fs.NodeGetattrer)((*dbFileNode)(nil))
+	_ = (fs.NodeSetattrer)((*dbFileNode)(nil))
+)
+
+func (n *dbFileNode) newWriteHandle() (*writeHandle, error) {
+	tmp, err := os.CreateTemp(n.state.writeDir, "w-*")
+	if err != nil {
+		return nil, err
+	}
+	return &writeHandle{node: n, tmp: tmp, tmpPath: tmp.Name()}, nil
+}
+
+// seed copies the current stored content into tmp so a partial in-place edit
+// (write at an offset without a preceding truncate) preserves the untouched
+// bytes. Bounded memory: io.Copy streams through its buffer.
+func (n *dbFileNode) seed(tmp *os.File) error {
+	e, err := n.state.fuseTree.cache.blob(n.file.Uid)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(tmp, io.NewSectionReader(e.file, 0, e.size))
+	return err
+}
+
+func (n *dbFileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	out.Mode = 0644 | fuse.S_IFREG
+	out.Uid = n.state.uid
+	out.Gid = n.state.gid
+	if wh, ok := fh.(*writeHandle); ok {
+		if fi, err := wh.tmp.Stat(); err == nil {
+			out.Size = uint64(fi.Size())
+		}
+	} else {
+		out.Size = uint64(n.file.Size)
+	}
+	if !n.file.TagDate.IsZero() {
+		out.SetTimes(nil, &n.file.TagDate, &n.file.TagDate)
+	}
+	return 0
+}
+
+// Setattr handles the truncate the kernel issues before a rewrite open. go-fuse
+// does not advertise ATOMIC_O_TRUNC, so O_TRUNC arrives as a SETATTR(size=0)
+// before Open rather than as an open flag (same gotcha metaFile handles). When a
+// write handle is already open the temp file is truncated directly; otherwise
+// the request is remembered so the next writable Open starts empty instead of
+// seeding the old content. Non-size attrs (chmod/utimes) are accepted as no-ops.
+func (n *dbFileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	if sz, ok := in.GetSize(); ok {
+		if wh, ok := fh.(*writeHandle); ok {
+			if err := wh.tmp.Truncate(int64(sz)); err != nil {
+				return syscall.EIO
+			}
+			wh.dirty = true
+		} else if sz == 0 {
+			n.mu.Lock()
+			n.truncated = true
+			n.mu.Unlock()
+		}
+		out.Size = sz
+		return 0
+	}
+	out.Size = uint64(n.file.Size)
+	return 0
+}
+
+// Open serves reads from the shared blob cache and writes through a temp-file
+// staging handle. FOPEN_DIRECT_IO on write keeps the kernel from caching a stale
+// size across the truncate/rewrite (same reason as metaFile).
+func (n *dbFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	if flags&(syscall.O_WRONLY|syscall.O_RDWR) == 0 {
+		if n.file.Uid == "" {
+			return &writeHandle{}, fuse.FOPEN_DIRECT_IO, 0 // uncommitted create; nothing to read yet
+		}
+		return &bytesFileHandle{hash: n.file.Uid, cache: n.state.fuseTree.cache}, fuse.FOPEN_KEEP_CACHE, 0
+	}
+	wh, err := n.newWriteHandle()
+	if err != nil {
+		return nil, 0, syscall.EIO
+	}
+	n.mu.Lock()
+	truncated := n.truncated
+	n.truncated = false
+	n.mu.Unlock()
+	if !truncated && n.file.Uid != "" {
+		if err := n.seed(wh.tmp); err != nil {
+			wh.tmp.Close()
+			os.Remove(wh.tmpPath)
+			return nil, 0, syscall.EIO
+		}
+	}
+	return wh, fuse.FOPEN_DIRECT_IO, 0
+}
+
+// writeHandle stages a file's bytes to a temp file and commits them on close.
+// Backing the buffer with a file (not memory) keeps large writes memory-bounded,
+// like the read cache.
+type writeHandle struct {
+	node    *dbFileNode
+	tmp     *os.File
+	tmpPath string
+
+	mu        sync.Mutex
+	dirty     bool
+	committed bool
+}
+
+var (
+	_ = (fs.FileWriter)((*writeHandle)(nil))
+	_ = (fs.FileReader)((*writeHandle)(nil))
+	_ = (fs.FileFlusher)((*writeHandle)(nil))
+	_ = (fs.FileReleaser)((*writeHandle)(nil))
+	_ = (fs.FileFsyncer)((*writeHandle)(nil))
+)
+
+func (h *writeHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+	if h.tmp == nil {
+		return 0, syscall.EBADF
+	}
+	written, err := h.tmp.WriteAt(data, off)
+	if err != nil {
+		return uint32(written), syscall.EIO
+	}
+	h.dirty = true
+	return uint32(written), 0
+}
+
+func (h *writeHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	if h.tmp == nil {
+		return fuse.ReadResultData(nil), 0
+	}
+	nread, err := h.tmp.ReadAt(dest, off)
+	if err != nil && err != io.EOF {
+		return nil, syscall.EIO
+	}
+	return fuse.ReadResultData(dest[:nread]), 0
+}
+
+// Flush commits the staged bytes on close: upload them and (re)write the file's
+// triples via client.WriteFile, which versions any superseded content into
+// <name>_prev and no-ops when the bytes are unchanged (identical hash). Guarded
+// so a dup'd fd committing twice is harmless.
+func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
+	if h.tmp == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.committed {
+		return 0
+	}
+	h.committed = true
+
+	if err := h.tmp.Sync(); err != nil {
+		return syscall.EIO
+	}
+	n := h.node
+	parentUID, err := n.state.tie.DirUIDFromPath(n.parentPath)
+	if err != nil {
+		return syscall.EIO
+	}
+	if parentUID == "" {
+		if parentUID, err = n.state.tie.MkTieDirAll(client.FileURIScheme + n.parentPath); err != nil {
+			return syscall.EIO
+		}
+	}
+	newHash, err := n.state.tie.WriteFile(n.state.host, "", parentUID, n.name, h.tmpPath, nil)
+	if err != nil {
+		return syscall.EIO
+	}
+	n.file.Uid = newHash
+	if fi, err := h.tmp.Stat(); err == nil {
+		n.file.Size = int(fi.Size())
+	}
+	return 0
+}
+
+// Release closes and removes the staging temp file at end of life.
+func (h *writeHandle) Release(ctx context.Context) syscall.Errno {
+	if h.tmp == nil {
+		return 0
+	}
+	h.tmp.Close()
+	os.Remove(h.tmpPath)
+	h.tmp = nil
+	return 0
+}
+
+// Fsync is a no-op success: Flush commits, and the daemon owns durability
+// (mirrors metaFileHandle.Fsync).
+func (h *writeHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	return 0
+}
+
 // suffixName inserts a "~<short>" disambiguator into name, before the final
 // extension if there is one, using the first 8 characters of subject (a DirUID or
 // content hash). "SomeDir" -> "SomeDir~42e55dcf"; "a.jpg" -> "a~0f4098fb.jpg".
@@ -630,6 +853,7 @@ var (
 	_ = (fs.NodeLookuper)((*pathDir)(nil))
 	_ = (fs.NodeRenamer)((*pathDir)(nil))
 	_ = (fs.NodeMkdirer)((*pathDir)(nil))
+	_ = (fs.NodeCreater)((*pathDir)(nil))
 )
 
 // renameNoReplace is the renameat2 RENAME_NOREPLACE flag (fail if the
@@ -713,12 +937,32 @@ func (d *pathDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 		if f.Filename != name {
 			continue
 		}
-		child := fileNode(d.state, f)
+		child := &dbFileNode{state: d.state, parentPath: d.path, name: name, file: f}
 		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(f.Uid)}
 		out.Size = uint64(f.Size)
 		return d.NewInode(ctx, child, stable), 0
 	}
 	return nil, syscall.ENOENT
+}
+
+// Create makes a new file in this directory: it stages an empty temp file and
+// returns a writable handle. The content is uploaded and its triples written on
+// close (see writeHandle.Flush), so the real content hash — and the file's
+// inode identity — is only known after the bytes are written. Copying onto an
+// existing name is allowed: the overwrite is versioned into <name>_prev on
+// commit (client.WriteFile), so there is no EEXIST here.
+func (d *pathDir) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	child := &dbFileNode{state: d.state, parentPath: d.path, name: name}
+	wh, err := child.newWriteHandle()
+	if err != nil {
+		return nil, nil, 0, syscall.EIO
+	}
+	stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.fuseTree.inodeID(d.path + "\x00" + name)}
+	inode := d.NewInode(ctx, child, stable)
+	out.Mode = 0644 | fuse.S_IFREG
+	out.Uid = d.state.uid
+	out.Gid = d.state.gid
+	return inode, wh, fuse.FOPEN_DIRECT_IO, 0
 }
 
 // Mkdir creates a subdirectory of this directory in the path tree, writing the
