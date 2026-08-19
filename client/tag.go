@@ -882,11 +882,19 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 		return "", errors.New("error:'" + err.Error() + "'")
 	}
 	if len(rows) > 1 {
-		return "", errors.New("Multiple (" + strconv.Itoa(len(rows)) + ") UIDs found for path. Expected 1.")
+		// Data inconsistency: more than one UID claims this path (can happen
+		// after a botched migration or a repeated import that created extra
+		// directory nodes).  Warn on stderr and return the first entry so that
+		// callers can continue rather than hard-failing.  Use the dedup script
+		// (scripts/dedup-tie-paths.py) to clean the DB offline.
+		fmt.Fprintf(os.Stderr,
+			"warning: %d UIDs found for path %q; expected 1 — using %s (run dedup script to fix)\n",
+			len(rows), path, rows[0].Key)
 	}
 	var uid DirUID
 	for _, row := range rows {
 		uid = DirUID(row.Key)
+		break
 	}
 
 	return uid, nil
@@ -894,7 +902,10 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 
 func (tie *TieClient) CreateTieRootDir() error {
 	rootpath := FileURIScheme + "/"
-	uid, _ := tie.DirUIDFromPath(rootpath)
+	uid, err := tie.DirUIDFromPath(rootpath)
+	if err != nil {
+		return err
+	}
 	if uid != "" {
 		return errors.New("Root dir already exists, with UID: " + uid.String())
 	}
@@ -1725,7 +1736,10 @@ func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
 	if !strings.HasPrefix(path, FileURIScheme) {
 		path = FileURIScheme + path
 	}
-	uid, _ := tie.DirUIDFromPath(path)
+	uid, err := tie.DirUIDFromPath(path)
+	if err != nil {
+		return "", err
+	}
 	if uid != "" { // Dir already exists
 		return uid, errors.New("Cannot create directory '" + path + "': Directory exists")
 	}
