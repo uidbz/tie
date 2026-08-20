@@ -2,6 +2,7 @@ package fuselib
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path"
@@ -545,6 +546,8 @@ var (
 )
 
 func (h *writeHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if h.tmp == nil {
 		return 0, syscall.EBADF
 	}
@@ -567,21 +570,14 @@ func (h *writeHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.Re
 	return fuse.ReadResultData(dest[:nread]), 0
 }
 
-// Flush commits the staged bytes on close: upload them and (re)write the file's
-// triples via client.WriteFile, which versions any superseded content into
-// <name>_prev and no-ops when the bytes are unchanged (identical hash). Guarded
-// so a dup'd fd committing twice is harmless.
-func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
-	if h.tmp == nil {
-		return 0
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
+// commit uploads the staged bytes and (re)writes the file's triples via
+// client.WriteFile, which versions any superseded content and no-ops when the
+// bytes are unchanged (identical hash). It is idempotent via h.committed. The
+// caller must hold h.mu and guarantee h.tmp != nil.
+func (h *writeHandle) commit() syscall.Errno {
 	if h.committed {
 		return 0
 	}
-	h.committed = true
-
 	if err := h.tmp.Sync(); err != nil {
 		return syscall.EIO
 	}
@@ -599,6 +595,7 @@ func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
 	if err != nil {
 		return syscall.EIO
 	}
+	h.committed = true
 	n.file.Uid = newHash
 	if fi, err := h.tmp.Stat(); err == nil {
 		n.file.Size = int(fi.Size())
@@ -606,15 +603,40 @@ func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
 	return 0
 }
 
-// Release closes and removes the staging temp file at end of life.
+// Flush commits on close(2), but only once a write has actually landed (dirty).
+// The kernel can deliver FLUSH *before* WRITE for a truncating open (e.g. shell
+// `echo >file`), so an unconditional commit here would upload an empty file and
+// then ignore the real bytes. Committing only when dirty keeps the common
+// write-then-close path synchronous with close (so a read right after close sees
+// the content); the reordered case and an intentionally-empty file are handled
+// by Release, the guaranteed-final op.
+func (h *writeHandle) Flush(ctx context.Context) syscall.Errno {
+	if h.tmp == nil {
+		return 0
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.dirty {
+		return 0
+	}
+	return h.commit()
+}
+
+// Release is the last op on the handle: the kernel sends it only after every
+// WRITE and FLUSH has completed, so it is the safe place to commit a write that
+// FLUSH could not (a write reordered after flush, or an empty file that never
+// received one). Then it drops the staging temp file.
 func (h *writeHandle) Release(ctx context.Context) syscall.Errno {
 	if h.tmp == nil {
 		return 0
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	errno := h.commit()
 	h.tmp.Close()
 	os.Remove(h.tmpPath)
 	h.tmp = nil
-	return 0
+	return errno
 }
 
 // Fsync is a no-op success: Flush commits, and the daemon owns durability
@@ -883,6 +905,12 @@ func baseName(p string) string {
 
 func (d *pathDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	dir, err := d.read()
+	if errors.Is(err, syscall.ENOENT) {
+		// A path dir with no triples yet (e.g. the /files root on a fresh store)
+		// is a real, writable directory that simply holds nothing — list it empty
+		// rather than failing, so it can be populated with mkdir/create.
+		return fs.NewListDirStream(nil), 0
+	}
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -913,6 +941,9 @@ func (d *pathDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 func (d *pathDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	dir, err := d.read()
+	if errors.Is(err, syscall.ENOENT) {
+		return nil, syscall.ENOENT // empty/absent dir has no children (yet)
+	}
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -966,16 +997,19 @@ func (d *pathDir) Create(ctx context.Context, name string, flags uint32, mode ui
 }
 
 // Mkdir creates a subdirectory of this directory in the path tree, writing the
-// directory's triples (parent/path/tie-type) to the store via MkTieDir. The new
-// directory is materialized as a pathDir inode so it can be listed and further
-// populated immediately.
+// directory's triples (parent/path/tie-type) to the store via MkTieDirAll. The
+// new directory is materialized as a pathDir inode so it can be listed and
+// further populated immediately. MkTieDirAll (not MkTieDir) is used so the "/"
+// root — and any not-yet-materialized ancestor — is created too; on a fresh
+// store the root does not exist yet, and MkTieDir would parent the new dir under
+// an empty root UID, orphaning it from the /files view.
 func (d *pathDir) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	tie := d.state.tie
 	childSlash := childPath(d.path, name)
 	if existing, err := tie.DirUIDFromPath(childSlash); err == nil && existing != "" {
 		return nil, syscall.EEXIST
 	}
-	if _, err := tie.MkTieDir(client.FileURIScheme + childSlash); err != nil {
+	if _, err := tie.MkTieDirAll(client.FileURIScheme + childSlash); err != nil {
 		return nil, syscall.EIO
 	}
 	if err := tie.Sync(); err != nil {
@@ -1129,6 +1163,9 @@ func (d *tagsDir) read() (client.Directory, error) {
 
 func (d *tagsDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	dir, err := d.read()
+	if errors.Is(err, syscall.ENOENT) {
+		return fs.NewListDirStream(nil), 0 // empty/absent path dir: nothing to aggregate
+	}
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -1164,6 +1201,9 @@ func (d *tagsDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 func (d *tagsDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	dir, err := d.read()
+	if errors.Is(err, syscall.ENOENT) {
+		return nil, syscall.ENOENT // empty/absent dir has no children (yet)
+	}
 	if err != nil {
 		return nil, syscall.EIO
 	}
