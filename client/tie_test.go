@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -249,4 +250,38 @@ func TestBatchArrayOrder(t *testing.T) {
 	// cleanup
 	tie.Delete("orderkey", "x", "v")
 	tie.Sync()
+}
+
+func TestFavorites(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	if err := tie.RegisterFavorite("blue"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tie.RegisterFavorite("amber"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := tie.ListFavorites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"amber", "blue"}; !slices.Equal(got, want) {
+		t.Errorf("ListFavorites = %v, want %v (sorted)", got, want)
+	}
+
+	if err := tie.UnregisterFavorite("blue"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = tie.ListFavorites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"amber"}; !slices.Equal(got, want) {
+		t.Errorf("after unregister, ListFavorites = %v, want %v", got, want)
+	}
+
+	// cleanup
+	tie.UnregisterFavorite("amber")
 }

@@ -70,6 +70,7 @@ const (
 	TieDirUID                          // dir-uid
 	TieVersionOf                       // version-of
 	TieVersionDate                     // version-date
+	TieFavorite                        // favorite
 )
 
 // FileURIScheme prefixes the virtual path stored in every (uid, "path", …)
