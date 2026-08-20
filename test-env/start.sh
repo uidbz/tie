@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Start the tie-daemon (triple store, :1161) and tie-filehost (blob store, :1162)
-# in the background, both in insecure HTTP mode. Idempotent-ish: refuses to start
-# if a PID file points at a live process.
+# Start the tie-daemon (triple store) and tie-filehost (blob store) in the
+# background, both in insecure HTTP mode, on the ports set in env.sh (2161/2162
+# by default — off the systemd defaults so both can run at once). Idempotent-ish:
+# refuses to start if a PID file points at a live process.
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
@@ -41,7 +42,7 @@ start_one() { # name binary pidfile logfile args...
 # is left untouched. DbPath is relative to $TIE_ENV, matching start_one's cwd.
 if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
 	cat >"$TIE_DAEMON_CONFIG" <<-EOF
-		ListenOn = ":1161"
+		ListenOn = ":${TIE_WEBSERVICE_PORT}"
 		Insecure = true
 		DbPath = "db"
 
@@ -50,8 +51,8 @@ if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
 		Password = "defaultpassword"
 
 		# Default relations indexed in reverse for every collection. Omit to use
-		# the built-in default (tag, path, parent, tie-type).
-		# ReverseRelations = ["tag", "path", "parent", "tie-type"]
+		# the built-in default (tag, path, parent, tie-type, version-of).
+		# ReverseRelations = ["tag", "path", "parent", "tie-type", "version-of"]
 
 		# Per-collection override of ReverseRelations (needs a daemon restart):
 		# [[Collections]]
@@ -66,7 +67,7 @@ fi
 # the expired-blob reaper for the sandbox.
 if [[ ! -f "$TIE_FILEHOST_CONFIG" ]]; then
 	cat >"$TIE_FILEHOST_CONFIG" <<-EOF
-		ListenOn = ":1162"
+		ListenOn = ":${TIE_FILEHOST_PORT}"
 		Insecure = true
 		BlobPath = "data"
 		ReapInterval = "0"
@@ -81,8 +82,8 @@ start_one "tie-filehost" "$TIE_BIN/tie-filehost" "$TIE_FILEHOST_PID" "$TIE_LOGS/
 
 echo "Waiting for services to accept connections ..."
 for i in $(seq 1 30); do
-	if curl -s -o /dev/null "http://localhost:1161/" && \
-	   curl -s -o /dev/null "http://localhost:1162/"; then
+	if curl -s -o /dev/null "$TIE_WEBSERVICE/" && \
+	   curl -s -o /dev/null "$TIE_FILEHOST_URL/"; then
 		echo "Both services are up."
 		echo "  webservice: $TIE_WEBSERVICE"
 		echo "  filehost:   $TIE_FILEHOST_URL"

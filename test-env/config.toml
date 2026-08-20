@@ -2,12 +2,12 @@ Username = 'defaultuser'
 Password = 'defaultpassword'
 Namespace = 'Collections'
 Collection = 'Main'
-Webservice = 'http://localhost:1161'
+Webservice = 'http://localhost:2161'
 DefaultFileHosts = ['default']
 PrevVersions = 3
 
 [FileHosts.default]
-URL = 'http://localhost:1162'
+URL = 'http://localhost:2162'
 Insecure = false
 # Optional HTTP Basic Auth for a filehost that requires it (AnonymousAccess
 # "read" or "none"). Leave unset for an open filehost.

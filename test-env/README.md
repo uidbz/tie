@@ -15,7 +15,7 @@ Everything runs on localhost over plain HTTP — no TLS, no external services.
 ```bash
 cd test-env     # from the repo root
 ./build.sh      # compile the tie binaries into ./bin
-./start.sh      # launch the daemon (:1161) and filehost (:1162)
+./start.sh      # launch the daemon (:2161) and filehost (:2162)
 ./seed.sh       # upload + tag sample files and a directory
 ./mount-db.sh   # mount the live tag-derived filesystem at ./mnt
 ```
@@ -96,10 +96,10 @@ at a config with a different `Collection` value.
 
 ## How it's wired
 
-- **Daemon** (`tie-daemon`, `:1161`) — the triple store. Data in `db/`. It
+- **Daemon** (`tie-daemon`, `:2161`) — the triple store. Data in `db/`. It
   auto-creates the user `defaultuser` / `defaultpassword`, which is what
   `config.toml` authenticates as.
-- **Filehost** (`tie-filehost`, `:1162`) — content-addressed blob store. Data
+- **Filehost** (`tie-filehost`, `:2162`) — content-addressed blob store. Data
   in `data/`. Files are addressed by their highwayhash; directories are stored
   as `tiedir` blobs.
 - **`config.toml`** — the `tie` CLI config, pointing both endpoints at local

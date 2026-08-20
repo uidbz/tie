@@ -10,9 +10,13 @@ export TIE_ENV="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # from a checkout elsewhere.
 export TIE_SRC="${TIE_SRC:-$(cd "$TIE_ENV/.." && pwd)}"
 
-# Local, insecure endpoints.
-export TIE_WEBSERVICE="http://localhost:1161"
-export TIE_FILEHOST_HOST="localhost:1162"        # host:port, for -server flags
+# Local, insecure endpoints. Ports are deliberately off the systemd defaults
+# (1161/1162) so the test-env can run alongside a live system daemon/filehost
+# without a port clash. Everything downstream derives from these two vars.
+export TIE_WEBSERVICE_PORT="2161"
+export TIE_FILEHOST_PORT="2162"
+export TIE_WEBSERVICE="http://localhost:${TIE_WEBSERVICE_PORT}"
+export TIE_FILEHOST_HOST="localhost:${TIE_FILEHOST_PORT}"  # host:port, for -server flags
 export TIE_FILEHOST_URL="http://${TIE_FILEHOST_HOST}"
 
 # Data locations.
