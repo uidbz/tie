@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tie-client"
+version = "0.1.0"
+description = "Pure-Python client and CLI for the tie triple-store and content-addressed filehost"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "tie" }]
+dependencies = []
+
+[project.scripts]
+tie = "tie_client.cli:main"
+
+[tool.setuptools]
+packages = ["tie_client"]
