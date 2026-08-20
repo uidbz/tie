@@ -15,8 +15,8 @@ import (
 // callers (e.g. tie-fm copy-in).
 //
 // If parent already holds a file named name with different content, the
-// superseded version's parent edge is versioned into a "<name>_prev" history
-// directory, keeping at most Config.PrevVersions of it (oldest dropped first) —
+// superseded version is recorded in the isolated "<Collection>_prev" history
+// collection, keeping at most Config.PrevVersions of it (oldest dropped first) —
 // the same reconciliation ImportDir performs, but scoped to this one file so
 // other children of parent are never disturbed. When PrevVersions is 0 the old
 // edge is removed outright (and the content garbage-collected if unreferenced).
@@ -114,39 +114,10 @@ func (tc *TieClient) WriteFile(host FileHost, collection string, parent DirUID, 
 		return newHash, nil
 	}
 
-	// Version (or, at PrevVersions<=0, drop) the superseded child, reusing the
-	// exact helpers ImportDir's reconcileDir uses.
-	if tc.Config.PrevVersions <= 0 {
-		if err := detachChild(tc, collection, oldHash, parent); err != nil {
-			return "", err
-		}
-		return newHash, nil
-	}
-
-	basePath, err := dirPath(tc, parent)
-	if err != nil {
+	// Version (or, at PrevVersions<=0, drop) the superseded content into the
+	// isolated history collection. Same helper reconcileDir uses.
+	if err := supersedeToPrev(tc, collection, parent, name, oldHash); err != nil {
 		return "", err
 	}
-	prevPath := basePath + "/" + name + prevDirSuffix
-	prevUID, err := tc.MkTieDirAll(prevPath)
-	if err != nil {
-		return "", err
-	}
-	if err := moveChildToPrev(tc, collection, oldHash, parent, prevUID); err != nil {
-		return "", err
-	}
-	versions, err := fileChildren(tc, prevUID)
-	if err != nil {
-		return "", err
-	}
-	for _, drop := range retentionDrops(versions, tc.Config.PrevVersions) {
-		if err := detachChild(tc, collection, drop.Hash, prevUID); err != nil {
-			return "", err
-		}
-	}
-	if err := removeEmptyPrevDir(tc, collection, prevUID, prevPath); err != nil {
-		return "", err
-	}
-
 	return newHash, nil
 }

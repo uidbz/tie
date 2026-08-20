@@ -68,6 +68,8 @@ const (
 	TieTrack                           // track
 	TieTiedirHash                      // tiedir-hash
 	TieDirUID                          // dir-uid
+	TieVersionOf                       // version-of
+	TieVersionDate                     // version-date
 )
 
 // FileURIScheme prefixes the virtual path stored in every (uid, "path", …)
@@ -498,10 +500,6 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	return tie.SetDirType(rootUID, dirType)
 }
 
-// prevDirSuffix is appended to a file's name to form its per-file version-history
-// directory, e.g. "file1.txt" -> "file1.txt_prev".
-const prevDirSuffix = "_prev"
-
 // childEntry is one file child of a directory during reconciliation: its content
 // hash, recorded display filename, and last-import date (for retention ordering).
 type childEntry struct {
@@ -552,8 +550,7 @@ func retentionDrops(versions []childEntry, keep int) []childEntry {
 // parent-edge lookup. Unlike ReadTieDir it does NOT filter by media tie-type, so
 // plain "file"/"unknown-file" children are included (they must be, or a
 // superseded .txt would be invisible to reconciliation). Directory-marked
-// children (subdirs, including _prev dirs) and children with no recorded filename
-// are skipped.
+// children (subdirs) and children with no recorded filename are skipped.
 func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 	rows, _, err := tie.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Filter: str(TieParent), Expand: true})
 	if errors.Is(err, ErrNotFound) {
@@ -568,9 +565,8 @@ func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 			continue // subdir, not a file
 		}
 		// A hash can carry several filenames (identical bytes shared under
-		// different names). Pick one deterministically for display/history-dir
-		// naming; reconciliation itself keys on the hash, so the choice only
-		// affects the _prev directory name.
+		// different names). Pick one deterministically for display and the
+		// version location key; reconciliation itself keys on the hash.
 		names := RowValues(row, str(TieFilename))
 		if len(names) == 0 {
 			continue // cannot reconcile a child with no recorded name
@@ -583,18 +579,6 @@ func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 		})
 	}
 	return out, nil
-}
-
-// dirPath returns the (uid,"path") value of a directory DirUID, or "" if none.
-func dirPath(tie *TieClient, uid DirUID) (string, error) {
-	row, err := tie.Get(string(uid))
-	if errors.Is(err, ErrNotFound) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return RowFirst(row, str(TiePath)), nil
 }
 
 // parentCount returns how many (hash,"parent",*) edges hash currently has.
@@ -648,53 +632,12 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 	return tie.Sync()
 }
 
-// moveChildToPrev swaps a superseded file's parent edge from its directory into
-// that file's _prev history DirUID. The content hash and its shared metadata are
-// untouched — only the edge for this directory moves.
-func moveChildToPrev(tie *TieClient, collection string, hash string, fromDir, prevUID DirUID) error {
-	b := tie.NewBatchIn(collection)
-	b.Delete(hash, str(TieParent), str(fromDir))
-	b.Add(hash, str(TieParent), str(prevUID))
-	if _, err := tie.Batch(b); err != nil {
-		return err
-	}
-	return tie.Sync()
-}
-
-// removeEmptyPrevDir deletes a _prev directory's own structural triples once it
-// holds no file children, so an empty history dir stops appearing in listings.
-func removeEmptyPrevDir(tie *TieClient, collection string, uid DirUID, path string) error {
-	children, err := fileChildren(tie, uid)
-	if err != nil {
-		return err
-	}
-	if len(children) > 0 {
-		return nil
-	}
-	parents, err := existingValues(tie, str(uid), str(TieParent))
-	if err != nil {
-		return err
-	}
-	b := tie.NewBatchIn(collection)
-	for _, p := range parents {
-		b.Delete(str(uid), str(TieParent), p)
-	}
-	if path != "" {
-		b.Delete(str(uid), str(TiePath), path)
-	}
-	b.Delete(str(uid), str(TieTypeProperty), str(TieDirectory))
-	if _, err := tie.Batch(b); err != nil {
-		return err
-	}
-	return tie.Sync()
-}
-
 // reconcileDir makes dir's file children match what this import placed there
 // (want: the set of content hashes placed in this directory). Superseded/orphaned
-// children are moved into a per-file "<name>_prev" history directory, keeping at
-// most prevVersions of each (oldest dropped first); when prevVersions is 0 the old
-// edge is removed outright and the content is garbage-collected if no directory
-// still references it. Diagnostics go to stderr so stdout stays clean.
+// children are recorded in the isolated "<Collection>_prev" history collection,
+// keeping at most prevVersions of each (oldest dropped first); when prevVersions
+// is 0 the old edge is removed outright and the content is garbage-collected if
+// no directory still references it. Diagnostics go to stderr so stdout stays clean.
 func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string]bool, prevVersions int) error {
 	children, err := fileChildren(tie, uid)
 	if err != nil {
@@ -705,71 +648,13 @@ func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string
 		return nil
 	}
 
-	basePath, err := dirPath(tie, uid)
-	if err != nil {
-		return err
-	}
-
-	// Group superseded children by their filename: all versions of one logical
-	// file share a single _prev directory.
-	byName := make(map[string][]childEntry)
 	for _, c := range superseded {
-		byName[c.Filename] = append(byName[c.Filename], c)
-	}
-
-	for name, olds := range byName {
-		if prevVersions <= 0 {
-			for _, c := range olds {
-				fmt.Fprintf(os.Stderr, "reconcile: removing superseded %s (%s) from %s\n", name, c.Hash, uid)
-				if err := detachChild(tie, collection, c.Hash, uid); err != nil {
-					return err
-				}
-			}
-			continue
-		}
-
-		prevPath := basePath + "/" + name + prevDirSuffix
-		prevUID, err := tie.MkTieDirAll(prevPath)
-		if err != nil {
-			return err
-		}
-		for _, c := range olds {
-			fmt.Fprintf(os.Stderr, "reconcile: versioning superseded %s (%s) into %s\n", name, c.Hash, prevPath)
-			if err := moveChildToPrev(tie, collection, c.Hash, uid, prevUID); err != nil {
-				return err
-			}
-		}
-
-		versions, err := fileChildren(tie, prevUID)
-		if err != nil {
-			return err
-		}
-		for _, drop := range retentionDrops(versions, prevVersions) {
-			fmt.Fprintf(os.Stderr, "reconcile: retention dropping %s (%s) from %s\n", drop.Filename, drop.Hash, prevPath)
-			if err := detachChild(tie, collection, drop.Hash, prevUID); err != nil {
-				return err
-			}
-		}
-		if err := removeEmptyPrevDir(tie, collection, prevUID, prevPath); err != nil {
+		fmt.Fprintf(os.Stderr, "reconcile: versioning superseded %s (%s) from %s\n", c.Filename, c.Hash, uid)
+		if err := supersedeToPrev(tie, collection, uid, c.Filename, c.Hash); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// existingValues returns the value2s currently stored for (key, relation). It is
-// used to make a scalar field single-valued: delete every existing value in a
-// batch before adding the new one (a batch runs deletes before adds). A missing
-// key yields no values and no error.
-func existingValues(tie *TieClient, key, relation string) ([]string, error) {
-	row, err := tie.Get(key)
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return RowValues(row, relation), nil
 }
 
 func Tag(tie *TieClient, info TagInfo, collection string) error {
@@ -1035,13 +920,14 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 				Size:     size,
 				TagDate:  parseTagDate(RowFirst(row, str(TieTagDate))),
 			})
-		case slices.Contains(types, str(TieImageFile)):
-			fallthrough
-		case slices.Contains(types, str(TieVideoFile)):
-			fallthrough
-		case slices.Contains(types, str(TieAudioFile)):
-			fallthrough
-		case slices.Contains(types, str(TieDocumentFile)):
+		default:
+			// Any child that is neither a subdirectory nor a browsable archive is
+			// a plain file. This covers every media type (image/video/audio/
+			// document) and, crucially, structural "file"/"unknown-file" children
+			// (e.g. a copied-in .txt): without this case they were stored but
+			// invisible in every listing. Since children reach a DirUID only via a
+			// parent edge (dir/archive/file), a default match cannot pick up a
+			// non-child row.
 			size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
 			filename := RowFirst(row, str(TieFilename))
 			if filename == "" {
@@ -1056,7 +942,6 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 				TagDate:   parseTagDate(RowFirst(row, str(TieTagDate))),
 			}
 			dir.Files = append(dir.Files, f)
-
 		}
 	}
 

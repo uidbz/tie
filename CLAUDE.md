@@ -60,7 +60,9 @@ cd test-env
   `client.HTTPClientFor`.
 - **Reverse-relation config.** `ReverseRelations` sets which relations (value1)
   every collection indexes in reverse; omit it for the built-in default
-  (`tag`, `path`, `parent`, `tie-type`). Add a `[[Collections]]` block
+  (`tag`, `path`, `parent`, `tie-type`, `version-of`). `version-of` powers
+  `tie versions list` in the `<Collection>_prev` history collection and costs
+  nothing on collections holding no version records. Add a `[[Collections]]` block
   (`Namespace`, `Collection`, `ReverseRelations`) to override the set for one
   collection. The reverse index is rebuilt from forward triples at collection
   load time, so a change needs a **daemon restart** to take effect for existing

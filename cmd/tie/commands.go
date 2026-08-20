@@ -719,6 +719,57 @@ func cmdTag() *cli.Command {
 	}
 }
 
+// cmdVersions groups file version-history subcommands. Superseded content lives
+// in the isolated "<Collection>_prev" history collection; these commands list it
+// and restore a prior version as the live file. (The top-level `restore` command
+// is the TSV-backup restore, so version restore lives under this group.)
+func cmdVersions() *cli.Command {
+	return &cli.Command{
+		Name:  "versions",
+		Usage: "Inspect and restore file version history: versions list, restore",
+		Commands: []*cli.Command{
+			{
+				Name:  "list",
+				Usage: "List the superseded versions of a file (newest first): versions list [path]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need 1 arg: path")
+					}
+					versions, err := tie.ListVersions("", ctx.Args().First())
+					if err != nil {
+						return errors.New("Versions list Error: " + err.Error())
+					}
+					for _, v := range versions {
+						fmt.Printf("%s\t%s\t%d\t%s\n", v.Hash, v.Date.Format(time.RFC3339), v.Size, v.Filename)
+					}
+					return nil
+				},
+			},
+			{
+				Name:  "restore",
+				Usage: "Restore a prior version as the live file (defaults to newest): versions restore [path] [hash]",
+				Action: func(_ context.Context, ctx *cli.Command) error {
+					if tie == nil {
+						return errors.New("Error: Config not loaded")
+					}
+					if ctx.Args().Len() < 1 {
+						return errors.New("Need at least 1 arg: path (optional 2nd arg: version hash)")
+					}
+					hash, err := tie.RestoreVersion("", ctx.Args().Get(0), ctx.Args().Get(1))
+					if err != nil {
+						return errors.New("Versions restore Error: " + err.Error())
+					}
+					fmt.Println(hash)
+					return nil
+				},
+			},
+		},
+	}
+}
+
 // importFlags are shared by the bare `import` command and every dir-type
 // subcommand.
 func importFlags() []cli.Flag {

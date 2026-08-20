@@ -73,12 +73,15 @@ type CollectionConfig struct {
 
 // defaultReverseRelations is the built-in default when the config sets none.
 // Only these relations are ever queried in reverse: tag lookups, path->UID, UID
-// children via parent, and media-type set-scoping (all hashes of a tie-type, so
-// media queries can intersect a type with tag results). Restricting the reverse
-// index to them keeps the bulk of file metadata (filename, size, ...) from
-// doubling association memory. The reverse index is rebuilt from forward triples
-// on startup, so changing this takes effect for existing data after one restart.
-var defaultReverseRelations = []string{"tag", "path", "parent", "tie-type"}
+// children via parent, media-type set-scoping (all hashes of a tie-type, so
+// media queries can intersect a type with tag results), and version-of (listing
+// a file's history in the "<Collection>_prev" collection). Restricting the
+// reverse index to them keeps the bulk of file metadata (filename, size, ...)
+// from doubling association memory; version-of costs nothing on collections that
+// hold no version records (an empty reverse bucket). The reverse index is
+// rebuilt from forward triples on startup, so changing this takes effect for
+// existing data after one restart.
+var defaultReverseRelations = []string{"tag", "path", "parent", "tie-type", "version-of"}
 
 func defaultConfig() DaemonConfig {
 	return DaemonConfig{

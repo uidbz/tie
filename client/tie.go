@@ -269,8 +269,13 @@ func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
 
 // Wait until all changes has been committed to the collection
 func (tc *TieClient) Sync() error {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
-	request := col.NewSyncRequest()
+	return tc.SyncIn("")
+}
+
+// SyncIn waits until all changes have been committed to a specific collection.
+// An empty collection falls back to the configured default.
+func (tc *TieClient) SyncIn(collection string) error {
+	request := tc.collectionInfo(collection).NewSyncRequest()
 
 	if _, err := tc.client.Run(request); err != nil {
 		return err
@@ -295,8 +300,13 @@ func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 // paginated per spec), the total match count before pagination, and an error.
 // Returns ErrNotFound (with nil rows) when nothing matches.
 func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
-	request := col.NewQueryRequest()
+	return tc.QueryIn("", spec)
+}
+
+// QueryIn runs a Query against a specific collection. An empty collection falls
+// back to the configured default.
+func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, error) {
+	request := tc.collectionInfo(collection).NewQueryRequest()
 	request.Terms = spec.Terms
 	request.Exclude = spec.Exclude
 	request.Scope = spec.Scope
@@ -320,7 +330,13 @@ func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 // the key has no associated values. It is Expand for one key; use Query to
 // search for keys by their associations.
 func (tc *TieClient) Get(key string) (Row, error) {
-	rows, err := tc.Expand([]string{key})
+	return tc.GetIn("", key)
+}
+
+// GetIn fetches the forward attributes of a single key from a specific
+// collection. An empty collection falls back to the configured default.
+func (tc *TieClient) GetIn(collection, key string) (Row, error) {
+	rows, err := tc.ExpandIn(collection, []string{key})
 	if err != nil {
 		return Row{}, err
 	}
@@ -333,8 +349,14 @@ func (tc *TieClient) Get(key string) (Row, error) {
 // Expand fetches the forward attributes of many keys in one round trip, one Row
 // per key that exists (missing keys are omitted). Order follows keys.
 func (tc *TieClient) Expand(keys []string) ([]Row, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
-	request := col.NewExpandRequest(keys, "")
+	return tc.ExpandIn("", keys)
+}
+
+// ExpandIn fetches the forward attributes of many keys from a specific
+// collection in one round trip. An empty collection falls back to the
+// configured default.
+func (tc *TieClient) ExpandIn(collection string, keys []string) ([]Row, error) {
+	request := tc.collectionInfo(collection).NewExpandRequest(keys, "")
 
 	reply, err := run[api.ExpandReply](tc, request)
 	if err != nil {
