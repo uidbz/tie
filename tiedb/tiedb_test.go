@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 )
 
@@ -616,5 +617,74 @@ func TestQueryTagsMissingRelation(t *testing.T) {
 	})
 	if len(got) != 0 {
 		t.Errorf("after tagging fileB, untagged files = %v, want empty", got)
+	}
+}
+
+// TestReadYourWritesRace guards against the read-before-write race that silently
+// dropped triples from query results. Collection.Add reserves a disk slot and
+// inserts the association into the in-memory index (making it visible to
+// queries) BEFORE the FILE_ADD is persisted. A query that resolves that slot's
+// position and reads it from disk before the writer extends the file used to get
+// EOF; the old read path swallowed that EOF and returned the triple as absent,
+// which in turn drove import reconciliation to delete live directories. With the
+// read-your-writes fix (drain queued writes before serving a read, then retry
+// while the slot is allocated) every freshly Added triple must be readable
+// immediately, with no intervening Sync.
+func TestReadYourWritesRace(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	const n = 5000
+	for i := 0; i < n; i++ {
+		key := "k" + strconv.Itoa(i)
+		val := "v" + strconv.Itoa(i)
+		col.Add(key, "rel", val)
+		// Query immediately, WITHOUT Sync, to hit the window where the slot is
+		// allocated and index-visible but the disk write is still queued.
+		got := getVal2s(t, col, key, "rel")
+		if !got[val] {
+			t.Fatalf("triple %d dropped: Get(%q,rel)=%v, want %q (read-before-write race)", i, key, got, val)
+		}
+	}
+}
+
+// TestReadYourWritesConcurrent stresses the same guarantee under concurrent
+// readers hammering keys the writer is still persisting.
+func TestReadYourWritesConcurrent(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	const n = 3000
+	errCh := make(chan string, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		key := "k" + strconv.Itoa(i)
+		val := "v" + strconv.Itoa(i)
+		col.Add(key, "rel", val)
+		wg.Add(1)
+		go func(key, val string) {
+			defer wg.Done()
+			res, found := col.Get(key, "rel")
+			ok := false
+			if found {
+				if v1, has := res[key]; has {
+					if set, has := v1["rel"]; has {
+						set.ForEach(func(v2 string) {
+							if v2 == val {
+								ok = true
+							}
+						})
+					}
+				}
+			}
+			if !ok {
+				errCh <- key
+			}
+		}(key, val)
+	}
+	wg.Wait()
+	close(errCh)
+	if len(errCh) > 0 {
+		t.Fatalf("%d triples dropped under concurrent read-your-writes", len(errCh))
 	}
 }

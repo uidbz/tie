@@ -310,6 +310,62 @@ func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
 	}
 }
 
+// drainWriteQueue applies every write currently queued, without blocking. The
+// writer goroutine calls it before serving a read (read-your-writes) and on
+// shutdown so no acknowledged Add is lost.
+func (ic *Collection) drainWriteQueue(db *os.File) {
+	for {
+		select {
+		case file_mod := <-ic.dBWriteQueue:
+			ic.applyFileMod(db, file_mod)
+		default:
+			return
+		}
+	}
+}
+
+// readSlot reads and decodes the record at pos, guaranteeing read-your-writes.
+// Collection.Add reserves a slot with allocSlot, inserts the association into
+// the in-memory index at that offset (making it visible to queries), and only
+// then queues the FILE_ADD. A query can therefore ask to read a slot the file
+// does not yet cover. readSlot first drains all queued writes so every reserved
+// slot is on disk before the read. If the slot is within the allocated range
+// (pos < db_size) but the record is still absent — the producer inserted into
+// the index and has not yet pushed the write onto the channel — it briefly
+// retries, draining as the write arrives. Dropping the triple instead (the old
+// behavior) silently corrupted query results, which led reconciliation to
+// delete live directories. A read genuinely outside the allocated range is a
+// hard failure.
+func (ic *Collection) readSlot(db *os.File, pos int64) (Triple, bool) {
+	b := make([]byte, ENTRY_SIZE)
+	for attempt := 0; ; attempt++ {
+		ic.drainWriteQueue(db)
+		n, err := db.ReadAt(b, pos)
+		if err == nil {
+			a, decodeErr := ic.bufToAssociation([ENTRY_SIZE]byte(b))
+			if decodeErr != nil {
+				slog.Error("decode error", "position", pos, "err", decodeErr)
+				return Triple{}, false
+			}
+			return a, true
+		}
+		ic.freespaceMutex.Lock()
+		allocated := pos >= 0 && pos < ic.db_size
+		ic.freespaceMutex.Unlock()
+		if !allocated {
+			slog.Error("read error", "err", err, "bytesRead", n, "expected", ENTRY_SIZE, "position", pos)
+			return Triple{}, false
+		}
+		// Slot is allocated but its FILE_ADD is still in flight (inserted into
+		// the index, not yet queued). Yield and retry, draining as it arrives.
+		if attempt >= 100000 {
+			slog.Error("read error: allocated slot never materialized", "position", pos, "db_size", ic.db_size)
+			return Triple{}, false
+		}
+		time.Sleep(10 * time.Microsecond)
+	}
+}
+
 func (ic *Collection) dBWriter() {
 	ic.dBWriteQueue = make(chan FileMod, 100000)
 	ic.dBReadQueue = make(chan ReadRequest, 100000)
@@ -336,19 +392,11 @@ func (ic *Collection) dBWriter() {
 		for {
 			select {
 			case req := <-ic.dBReadQueue:
-				b := make([]byte, ENTRY_SIZE)
-				n, err := db.ReadAt(b, req.Position)
-				if err != nil {
-					slog.Error("read error", "err", err, "bytesRead", n, "expected", ENTRY_SIZE)
-					close(req.ReplyChan) // signal failure to readTripleAt
+				a, ok := ic.readSlot(db, req.Position)
+				if ok {
+					req.ReplyChan <- a
 				} else {
-					a, decodeErr := ic.bufToAssociation([ENTRY_SIZE]byte(b))
-					if decodeErr != nil {
-						slog.Error("decode error", "position", req.Position, "err", decodeErr)
-						close(req.ReplyChan)
-					} else {
-						req.ReplyChan <- a
-					}
+					close(req.ReplyChan) // signal failure to readTripleAt
 				}
 
 			case file_mod := <-ic.dBWriteQueue:
@@ -362,14 +410,7 @@ func (ic *Collection) dBWriter() {
 			case <-ic.dBCloseWriter:
 				// Drain any writes already queued so no acknowledged Add is lost,
 				// then sync and close. Reads are best-effort and can be dropped.
-				for drained := false; !drained; {
-					select {
-					case file_mod := <-ic.dBWriteQueue:
-						ic.applyFileMod(db, file_mod)
-					default:
-						drained = true
-					}
-				}
+				ic.drainWriteQueue(db)
 				if err := db.Sync(); err != nil {
 					slog.Error("DB sync error on close", "err", err)
 				}
