@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"git.sr.ht/~uid/tie/io/putlib"
@@ -27,12 +28,19 @@ import (
 // tie-type) and the parent edge are set fresh. An unchanged re-save (identical
 // bytes → identical hash) is a no-op. Returns the new content hash.
 func (tc *TieClient) WriteFile(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string) (string, error) {
+	return tc.WriteFileWithProgress(host, collection, parent, name, srcPath, extraTags, nil)
+}
+
+// WriteFileWithProgress behaves exactly like WriteFile but, when progress is
+// non-nil, writes each chunk of uploaded bytes to it so callers can render an
+// upload progress bar. The total byte count equals srcPath's size.
+func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string, progress io.Writer) (string, error) {
 	stat, err := os.Stat(srcPath)
 	if err != nil {
 		return "", err
 	}
 
-	status := putlib.Upload(host.URL, srcPath, putlib.PutConfig{Client: HTTPClientFor(host)})
+	status := putlib.Upload(host.URL, srcPath, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress})
 	if status.ErrorMsg != "" {
 		return "", fmt.Errorf("upload failed for %q: %s", name, status.ErrorMsg)
 	}
