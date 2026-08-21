@@ -56,6 +56,8 @@ class TieType:
     DOCUMENT_ARCHIVE = "document-archive"
     DIRECTORY = "directory"
     FILE = "file"
+    TABLE = "table"
+    TABLE_ROW = "table-row"
 
 
 # Archive tie-types, most specific first (mirrors client.archiveTypes).

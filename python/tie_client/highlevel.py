@@ -1127,3 +1127,126 @@ def relations_from(self: TieClient, hash: str) -> list[MediaRelation]:
 
 TieClient.relate_files = relate_files
 TieClient.relations_from = relations_from
+
+
+# ---------------------------------------------------------------------------
+# Tables (mirrors client/table.go)
+# ---------------------------------------------------------------------------
+#
+# A table entity T stores column and row order as ordinal-prefixed list values
+# (the store returns a subject's multi-values sorted, so a zero-padded ordinal
+# reproduces insertion order):
+#
+#   (T,  "tie-type", "table")
+#   (T,  "columns",  ["<ord>\x00<header>", ...])
+#   (T,  "rows",     ["<ord>\x00<row-uid>", ...])
+#   (Ri, "tie-type", "table-row")
+#   (Ri, <header>,   <cell>)          # one triple per non-empty cell
+#
+# A column named "tie-type" is unsupported (collides with the row type marker).
+
+_TABLE_COLUMNS_REL = "columns"
+_TABLE_ROWS_REL = "rows"
+_ORDER_SEP = "\x00"
+
+
+def _encode_ordered(i: int, s: str) -> str:
+    return f"{i:08d}{_ORDER_SEP}{s}"
+
+
+def _decode_ordered_list(values: list[str]) -> list[str]:
+    items = []
+    for v in values:
+        idx, sep, payload = v.partition(_ORDER_SEP)
+        if not sep:
+            continue
+        try:
+            n = int(idx)
+        except ValueError:
+            continue
+        items.append((n, payload))
+    items.sort(key=lambda t: t[0])
+    return [p for _, p in items]
+
+
+def _append_clear_table(self: TieClient, batch: Batch, uid: str, collection: str) -> None:
+    try:
+        row = self.get(uid, collection=collection)
+    except NotFound:
+        return
+    old_row_uids = _decode_ordered_list(row.values(_TABLE_ROWS_REL))
+    if not old_row_uids:
+        return
+    for r in self.expand(old_row_uids, collection=collection):
+        for rel in list(r.attributes.keys()):
+            batch.set(r.key, rel, [])
+
+
+def insert_table(
+    self: TieClient,
+    uid: str,
+    headers: list[str],
+    rows: list[list[str]],
+    collection: str = "",
+) -> str:
+    """Write headers + rows as a table entity and return its uid.
+
+    An empty uid mints a fresh one; a non-empty uid replaces the table stored
+    there (idempotent re-import), clearing its old row entities first. rows are
+    row-major in header order; short rows are padded and extra cells ignored.
+    Empty cells are not stored (read_table reconstructs them as "").
+    """
+    if Relation.TIE_TYPE in headers:
+        raise ValueError(
+            f"column name {Relation.TIE_TYPE!r} is reserved and cannot be used as a table header"
+        )
+    if len(set(headers)) != len(headers):
+        raise ValueError("table headers must be unique")
+
+    minted = not uid
+    if minted:
+        uid = self.new_dir_uid()
+
+    batch = self.new_batch(collection)
+    if not minted:
+        _append_clear_table(self, batch, uid, collection)
+
+    columns = [_encode_ordered(j, h) for j, h in enumerate(headers)]
+    batch.set(uid, Relation.TIE_TYPE, [TieType.TABLE])
+    batch.set(uid, _TABLE_COLUMNS_REL, columns)
+
+    row_refs = []
+    for i, cells in enumerate(rows):
+        row_uid = self.new_dir_uid()
+        row_refs.append(_encode_ordered(i, row_uid))
+        batch.set(row_uid, Relation.TIE_TYPE, [TieType.TABLE_ROW])
+        for j, header in enumerate(headers):
+            if j < len(cells) and cells[j] != "":
+                batch.add(row_uid, header, cells[j])
+    batch.set(uid, _TABLE_ROWS_REL, row_refs)
+
+    self.run_batch(batch)
+    return uid
+
+
+def read_table(self: TieClient, uid: str, collection: str = "") -> tuple[list[str], list[list[str]]]:
+    """Return (headers, rows) for a table, row-major in header order.
+
+    Raises NotFound if uid holds no table entity.
+    """
+    row = self.get(uid, collection=collection)
+    headers = _decode_ordered_list(row.values(_TABLE_COLUMNS_REL))
+    row_uids = _decode_ordered_list(row.values(_TABLE_ROWS_REL))
+    if not row_uids:
+        return headers, []
+
+    by_key = {r.key: r for r in self.expand(row_uids, collection=collection)}
+    rows = []
+    for ru in row_uids:
+        r = by_key.get(ru)
+        rows.append([r.first(h) if r else "" for h in headers])
+    return headers, rows
+
+
+TieClient.insert_table = insert_table
+TieClient.read_table = read_table

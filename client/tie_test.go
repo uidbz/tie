@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -250,6 +251,115 @@ func TestBatchArrayOrder(t *testing.T) {
 	// cleanup
 	tie.Delete("orderkey", "x", "v")
 	tie.Sync()
+}
+
+// TestInsertReadTable round-trips a table, including an empty cell (which is not
+// stored but must read back as "").
+func TestInsertReadTable(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	headers := []string{"Name", "Age", "City"}
+	rows := [][]string{
+		{"Alice", "30", "NYC"},
+		{"Bob", "25", "LA"},
+		{"Carol", "", "SF"}, // empty cell
+	}
+
+	uid, err := tie.InsertTable("", headers, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uid == "" {
+		t.Fatal("InsertTable returned empty uid")
+	}
+
+	gotH, gotR, err := tie.ReadTable(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotH, headers) {
+		t.Errorf("headers = %v, want %v", gotH, headers)
+	}
+	if !reflect.DeepEqual(gotR, rows) {
+		t.Errorf("rows = %v, want %v", gotR, rows)
+	}
+}
+
+// TestInsertTableReplace verifies that re-inserting at the same uid replaces the
+// table in place and leaves no orphaned row entities behind.
+func TestInsertTableReplace(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	const uid = "tabletest_replace_uid"
+
+	if _, err := tie.InsertTable(uid, []string{"A", "B"}, [][]string{
+		{"1", "2"}, {"3", "4"}, {"5", "6"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := tie.Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRowUIDs := RowValues(first, tableRowsRel)
+	if len(oldRowUIDs) != 3 {
+		t.Fatalf("first insert = %d rows, want 3", len(oldRowUIDs))
+	}
+
+	newHeaders := []string{"X", "Y", "Z"}
+	newRows := [][]string{{"a", "b", "c"}, {"d", "e", "f"}}
+	if _, err := tie.InsertTable(uid, newHeaders, newRows); err != nil {
+		t.Fatal(err)
+	}
+
+	gotH, gotR, err := tie.ReadTable(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotH, newHeaders) {
+		t.Errorf("headers = %v, want %v", gotH, newHeaders)
+	}
+	if !reflect.DeepEqual(gotR, newRows) {
+		t.Errorf("rows = %v, want %v", gotR, newRows)
+	}
+
+	// The first insert's row entities must be fully cleared: no cells and no
+	// lingering table-row type marker (an empty ghost key is acceptable).
+	orphans, err := tie.Expand(oldRowUIDs)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	for _, r := range orphans {
+		if len(r.Attributes) != 0 {
+			t.Errorf("old row %s not cleared: %v", r.Key, r.Attributes)
+		}
+	}
+}
+
+// TestInsertTableReservedHeader verifies a "tie-type" column is rejected up
+// front rather than silently corrupting a row entity's type marker.
+func TestInsertTableReservedHeader(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	_, err := tie.InsertTable("", []string{"Name", "tie-type"}, [][]string{{"Alice", "person"}})
+	if err == nil {
+		t.Fatal("expected error for reserved 'tie-type' header, got nil")
+	}
+}
+
+// TestInsertTableDuplicateHeader verifies duplicate column names are rejected
+// (they would otherwise silently merge cells under one relation).
+func TestInsertTableDuplicateHeader(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	_, err := tie.InsertTable("", []string{"Name", "Name"}, [][]string{{"Alice", "Bob"}})
+	if err == nil {
+		t.Fatal("expected error for duplicate header, got nil")
+	}
 }
 
 func TestFavorites(t *testing.T) {
