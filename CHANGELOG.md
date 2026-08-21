@@ -6,6 +6,49 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+## [v0.4.3] - 2026-08-21
+
+### Added
+
+- **First-class table insert/read API.** `TieClient.InsertTable(uid, headers,
+  rows)` and `ReadTable(uid)` store a rectangular grid of string cells as a table
+  entity and read it back, so tabular data (Excel sheets, CSVs) no longer needs a
+  hand-rolled triple encoding per script. Built purely on the existing
+  Query/Set/Get/Expand/Batch primitives — no server changes. Column and row order
+  are stored as ordinal-prefixed list values (the store returns a subject's
+  multi-values sorted, not in insertion order). An empty uid mints a fresh one; a
+  supplied uid replaces in place (idempotent re-import). Headers must be unique
+  and none may be named `tie-type` (it would collide with the row type marker);
+  either case is rejected with an error. Mirrored in the Python client
+  (`insert_table`/`read_table`).
+- **Pure-stdlib Python client and CLI** (`python/`), mirroring the Go
+  `TieClient` facade (triples, queries, batches, files, tags, dirs, imports,
+  versions, favorites, relations) with no third-party dependencies.
+- **Favorite-tags API.** `RegisterFavorite`/`UnregisterFavorite`/`ListFavorites`
+  mark tags as favorites via a `(favorite,"all",…)` registry.
+- **Writable file path.** FUSE `Create` and edit-save now write blobs back
+  through the filehost and tag them; superseded content is versioned into the
+  `_prev` history collection.
+- **Shell-completion command** exposed in `tie` help (`completion
+  <bash|zsh|fish|pwsh>`).
+
+### Changed
+
+- **File version-history moved to an isolated `<Collection>_prev` collection**,
+  powered by a new `version-of` default reverse relation; adds `tie versions
+  list/restore`.
+- **Virtual-path scheme switched from `file:` to `tie:`** for the internal
+  tag/path tree (a private URI scheme, not RFC 8089 `file:`).
+- **Imports survive large directories** by chunking oversized requests.
+
+### Fixed
+
+- **tiedb read-before-write race** that could silently drop triples.
+- **FUSE 0-byte writes** on truncating opens and empty path-tree roots.
+- **Duplicate-UID path handling** (with a `contrib` dedup script).
+
+## [v0.4.2] - 2026-08-16
+
 ### Added
 
 - **`tie tag` command group for tag management.** A new CLI command groups tag
@@ -183,4 +226,5 @@ reworked CLI. All three binaries now report a build version (`tie --version`,
 - The `certmagic` dependency (filehost), the `gods` v1 dependency, and dead
   code across client/getlib.
 
+[v0.4.3]: https://git.sr.ht/~uid/tie/refs/v0.4.3
 [v0.4.0]: https://git.sr.ht/~uid/tie/refs/v0.4.0
