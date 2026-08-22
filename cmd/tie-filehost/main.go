@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"git.sr.ht/~uid/conf"
@@ -269,6 +270,34 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	http.ServeFile(w, r, PathFromHash(destination, hash))
+}
+
+// StatHandler reports whether a blob exists in the store, without transferring
+// it. It answers HEAD /{hash}: 200 with a Content-Length when the blob is
+// present, 404 when absent. Existence is checked against the primary store
+// (BlobPath) directly — a blob is the durable content of record, so a blob that
+// happens to be only in the cache still counts as existing, and a never-uploaded
+// or reaped blob is a clean 404. The blob is never copied into the cache for a
+// stat, and no body is read or written, so a full-store sweep costs one stat per
+// hash.
+func StatHandler(w http.ResponseWriter, r *http.Request) {
+	hash := r.PathValue("hash")
+	if len(hash) != 64 {
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(PathFromHash(destination, hash))
+	if err != nil {
+		if os.IsNotExist(err) {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		slog.Error("stat blob", "hash", hash, "err", err)
+		http.Error(w, "Error stat blob", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(http.StatusOK)
 }
 
 func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {

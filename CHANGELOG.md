@@ -6,6 +6,27 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`tie verify` — a consistency check (fsck) for the virtual file tree.** Scans
+  a whole collection and reports lost or incomplete nodes: orphaned
+  directories/files (no `parent` edge, so unreachable from the root), dangling
+  parent references, parent cycles, duplicate path claims, files missing core
+  metadata, and — with `--check-blobs` — files whose content is absent from the
+  filehost. Bare `verify` is read-only and exits non-zero when any problem is
+  found, so it is cron-able. `verify --repair` re-homes only the orphans under
+  `tie:/restored/<date>/` (one added `parent` edge each; all other metadata
+  untouched) and re-scans so the exit code reflects the post-repair state; every
+  other problem class is reported but never auto-fixed. A `tiedir` snapshot blob
+  carries `tie-type: directory` but no `path`, so the scan partitions on the
+  `path` triple and checks such blobs as files, not orphaned dirs. See
+  docs/verify.md.
+- **`HEAD /{hash}` on tie-filehost** — a cheap blob-existence check backing
+  `verify --check-blobs`: 200 with the blob's `Content-Length` when present,
+  404 when absent, 400 for a malformed hash. It stats the primary store
+  (`BlobPath`) directly, so it never copies into the read cache and transfers no
+  body — one filesystem stat per hash for a full-store sweep.
+
 ## [v0.4.3] - 2026-08-21
 
 ### Added

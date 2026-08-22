@@ -11,7 +11,7 @@ mounts collections as a FUSE filesystem.
 | `cmd/tie/`           | CLI (`commands.go` has every subcommand). |
 | `cmd/tie-daemon/`    | Triple-store server. TOML-configured. |
 | `cmd/tie-filehost/`  | Content-addressed blob store. TOML-configured. |
-| `client/`            | `TieClient` — the Go API the CLI and fuselib call. |
+| `client/`            | `TieClient` — the Go API the CLI and fuselib call. `verify.go` = the `tie verify` consistency check. |
 | `io/fuselib/`        | FUSE. `fuselib.go` = content-addressed mount; `fuselib_db.go` = live tag-derived mount (`--db`). |
 | `io/putlib/`, `io/getlib/` | Upload / download plumbing. |
 | `tiedb/`             | The triple-store engine (association index; memory-sensitive — see auto-memory). |
@@ -77,6 +77,20 @@ cd test-env
 `mount` (FUSE), `dump`/`restore` (TSV backup). There is no `put` — use `upload`.
 `tie upload <file>` prints the content hash. `mount --db <mnt>` for the live tag
 tree; `mount <hash> <mnt>` for an immutable content-addressed dir.
+
+`verify` is the store's fsck (see docs/verify.md). Bare `tie verify` is a
+read-only scan of the whole collection for lost or incomplete nodes: orphaned
+dirs/files (no `parent` edge — unreachable from the root), dangling parent
+references, parent cycles, duplicate path claims, and files missing core
+metadata; it exits non-zero if anything is found, so it is cron-able. A
+`tiedir` snapshot blob carries `tie-type: directory` but no `path`, so verify
+partitions on the `path` triple and checks such blobs as files, never as
+orphaned dirs. `verify --repair` re-homes only the orphans under
+`tie:/restored/<date>/` (one added parent edge each; metadata untouched) and
+re-scans so the exit code is post-repair — every other problem class is reported
+but never auto-fixed. `verify --check-blobs` additionally confirms each file's
+content exists on the filehost via a cheap `HEAD /{hash}` stat endpoint (200/
+404, no body, no cache copy).
 
 `completion <bash|zsh|fish|pwsh>` prints a shell-completion script (the
 urfave/cli built-in, un-hidden in `cmd/tie/main.go` via
