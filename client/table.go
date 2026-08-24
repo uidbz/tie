@@ -171,6 +171,20 @@ func (tc *TieClient) ReadTable(uid string) (headers []string, rows [][]string, e
 	return headers, rows, nil
 }
 
+// DeleteTable removes a table and all its row entities. It is idempotent:
+// deleting a missing or already-deleted table is a no-op that returns nil.
+func (tc *TieClient) DeleteTable(uid string) error {
+	batch := tc.NewBatch()
+	if err := tc.appendClearTable(batch, uid); err != nil {
+		return err
+	}
+	batch.Set(uid, tableColumnsRel, nil)
+	batch.Set(uid, tableRowsRel, nil)
+	batch.Set(uid, str(TieTypeProperty), nil)
+	_, err := tc.Batch(batch)
+	return err
+}
+
 // appendClearTable appends ops that wipe an existing table's row entities so a
 // re-import at the same uid leaves no orphaned rows. The table entity's own
 // columns/rows/tie-type relations are overwritten by the caller's Set ops.

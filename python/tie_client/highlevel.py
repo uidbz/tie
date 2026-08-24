@@ -1248,5 +1248,19 @@ def read_table(self: TieClient, uid: str, collection: str = "") -> tuple[list[st
     return headers, rows
 
 
+def delete_table(self: TieClient, uid: str, collection: str = "") -> None:
+    """Remove a table and all its row entities.
+
+    Idempotent: deleting a missing or already-deleted table is a no-op.
+    """
+    batch = self.new_batch(collection)
+    _append_clear_table(self, batch, uid, collection)
+    batch.set(uid, _TABLE_COLUMNS_REL, [])
+    batch.set(uid, _TABLE_ROWS_REL, [])
+    batch.set(uid, Relation.TIE_TYPE, [])
+    self.run_batch(batch)
+
+
 TieClient.insert_table = insert_table
 TieClient.read_table = read_table
+TieClient.delete_table = delete_table
