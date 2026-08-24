@@ -59,6 +59,7 @@ func main() {
 			cmdDump(),
 			cmdRestore(),
 			cmdVerify(),
+			cmdStat(),
 		},
 	}
 	if err := cmd.Run(context.Background(), os.Args); err != nil {

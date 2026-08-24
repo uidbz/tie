@@ -379,6 +379,40 @@ func blobExists(hc *http.Client, baseURL, hash string) (bool, error) {
 	}
 }
 
+// StatBlob issues a HEAD for hash against the first configured default filehost
+// and reports whether the blob is present and its on-disk byte size (from the
+// Content-Length header). A 404 returns (false, 0, nil); any other non-200
+// status or transport error is surfaced as an error.
+func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) {
+	hosts := tc.Config.DefaultFileHosts
+	if len(hosts) == 0 {
+		return false, 0, errors.New("no DefaultFileHosts configured for blob stat")
+	}
+	host, ok := tc.Config.FileHosts[hosts[0]]
+	if !ok {
+		return false, 0, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
+	}
+	hc := HTTPClientFor(host)
+
+	req, err := http.NewRequest(http.MethodHead, host.URL+"/"+hash, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false, 0, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, resp.ContentLength, nil
+	case http.StatusNotFound:
+		return false, 0, nil
+	default:
+		return false, 0, fmt.Errorf("filehost stat %s: unexpected status %s", hash, resp.Status)
+	}
+}
+
 // RepairOrphans re-homes every orphan in rep under a timestamped restored/
 // directory, making them reachable from the tree root again. It is the explicit,
 // mutating counterpart to Verify and is only ever called at the user's request
