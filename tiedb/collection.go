@@ -182,6 +182,29 @@ func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
 	}
 }
 
+// firstValueOf returns the smallest value the key holds under relation, or ""
+// if it holds none. Used by Sort's value-based ordering (SortByValue); picking
+// the smallest keeps the ordering deterministic for multi-valued relations.
+func (ic *Collection) firstValueOf(key, relation string) string {
+	data, found := ic.Get(key, relation)
+	if !found {
+		return ""
+	}
+	values, ok := data[key][relation]
+	if !ok {
+		return ""
+	}
+	best := ""
+	first := true
+	values.ForEach(func(v string) {
+		if first || v < best {
+			best = v
+			first = false
+		}
+	})
+	return best
+}
+
 func (ic *Collection) GetAssociations(value string) (*AssociationSet, bool) {
 	if entryID, level, found := ic.getEntryFromString(value); !found {
 		return newAssociationSet(), false
@@ -673,6 +696,13 @@ type SortOptions struct {
 	Offset int
 	Limit  int
 	SortBy string // Value1 to sort by
+	// SortByValue orders matched keys by the VALUE each key holds under this
+	// relation (a forward lookup per key), rather than by the matched triple.
+	// Empty means no value-based ordering. Example: "gendb-imported-at" to sort
+	// tables chronologically. Multi-valued relations sort by their smallest value.
+	SortByValue string
+	// Descending reverses the final ordering (applies to any sort mode).
+	Descending bool
 }
 
 func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOptions) (sorted []StringTriple, totalCount int) {
@@ -692,27 +722,47 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 		sorted = append(sorted, t)
 	}
 
+	// When ordering by a relation's value, resolve each key's value once and
+	// cache it — the comparator runs O(n log n) times but the forward lookup
+	// runs at most once per distinct key.
+	var valueOf func(key string) string
+	if o.SortByValue != "" {
+		cache := make(map[string]string, len(sorted))
+		valueOf = func(key string) string {
+			if v, ok := cache[key]; ok {
+				return v
+			}
+			v := ic.firstValueOf(key, o.SortByValue)
+			cache[key] = v
+			return v
+		}
+	}
+
 	slices.SortFunc(sorted, func(a, b StringTriple) int {
-		if o.SortBy == "" {
-			if n := cmp.Compare(a.Key, b.Key); n != 0 {
-				return n
+		var n int
+		if o.SortByValue != "" {
+			if n = cmp.Compare(valueOf(a.Key), valueOf(b.Key)); n == 0 {
+				n = cmp.Compare(a.Key, b.Key)
 			}
-			if n := cmp.Compare(a.Value1, b.Value1); n != 0 {
-				return n
+		} else if o.SortBy == "" {
+			if n = cmp.Compare(a.Key, b.Key); n == 0 {
+				if n = cmp.Compare(a.Value1, b.Value1); n == 0 {
+					n = cmp.Compare(a.Value2, b.Value2)
+				}
 			}
-			return cmp.Compare(a.Value2, b.Value2)
 		} else {
 			if a.Value1 != o.SortBy {
-				return 1
+				n = 1
+			} else if b.Value1 != o.SortBy {
+				n = -1
+			} else if n = cmp.Compare(a.Key, b.Key); n == 0 {
+				n = cmp.Compare(a.Value2, b.Value2)
 			}
-			if a.Value1 == o.SortBy && b.Value1 != o.SortBy {
-				return -1
-			}
-			if n := cmp.Compare(a.Key, b.Key); n != 0 {
-				return n
-			}
-			return cmp.Compare(a.Value2, b.Value2)
 		}
+		if o.Descending {
+			return -n
+		}
+		return n
 	})
 
 	count := len(sorted)

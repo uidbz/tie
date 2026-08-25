@@ -308,6 +308,54 @@ func TestSortedPagination(t *testing.T) {
 	}
 }
 
+// TestSortByValue verifies that SortByValue orders matched keys by the value
+// each holds under the named relation (not by key), and that Descending
+// reverses that order.
+func TestSortByValue(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	const n = 10
+	// key i carries the query tag plus an "imported-at" value that is the
+	// REVERSE of i, so sorting by value ascending must yield keys in descending
+	// index order — proving it sorts by value, not by key.
+	for i := 0; i < n; i++ {
+		key := "key" + padded(i)
+		col.Add(key, "tag", "gendb-table")
+		col.Add(key, "imported-at", "t"+padded(n-1-i))
+	}
+	col.Sync()
+
+	set, found := col.GetReverseAssociations("gendb-table")
+	if !found {
+		t.Fatal("GetReverseAssociations(gendb-table) not found")
+	}
+
+	_, asc, total := col.GetPage(set, "", SortOptions{SortByValue: "imported-at", Limit: -1})
+	if total != n {
+		t.Errorf("total = %d, want %d", total, n)
+	}
+	if len(asc) != n {
+		t.Fatalf("len(asc) = %d, want %d", len(asc), n)
+	}
+	for i := 0; i < n; i++ {
+		wantKey := "key" + padded(n-1-i)
+		if asc[i].Key != wantKey {
+			t.Errorf("asc[%d].Key = %q, want %q", i, asc[i].Key, wantKey)
+		}
+	}
+
+	_, desc, _ := col.GetPage(set, "", SortOptions{SortByValue: "imported-at", Descending: true, Limit: -1})
+	if len(desc) != n {
+		t.Fatalf("len(desc) = %d, want %d", len(desc), n)
+	}
+	for i := 0; i < n; i++ {
+		if desc[i].Key != asc[n-1-i].Key {
+			t.Errorf("desc[%d].Key = %q, want %q (asc reversed)", i, desc[i].Key, asc[n-1-i].Key)
+		}
+	}
+}
+
 // TestTornWriteRecovery appends a partial (sub-record) tail to a DB file and
 // confirms reopening loads prior data instead of panicking.
 func TestTornWriteRecovery(t *testing.T) {
