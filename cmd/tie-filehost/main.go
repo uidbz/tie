@@ -18,6 +18,7 @@ import (
 	"git.sr.ht/~uid/tie/auth"
 	"git.sr.ht/~uid/tie/tielog"
 	"git.sr.ht/~uid/tie/version"
+	"github.com/h2non/filetype"
 	"github.com/minio/highwayhash"
 )
 
@@ -261,15 +262,43 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("serving blob", "hash", hash)
+	path := PathFromHash(destination, hash)
 	if filecache != nil {
 		if cached, err := filecache.get(hash); err == nil {
-			http.ServeFile(w, r, cached)
-			return
+			path = cached
 		} else {
 			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
 		}
 	}
-	http.ServeFile(w, r, PathFromHash(destination, hash))
+	// Blobs are stored under their hash with no extension, so http.ServeFile
+	// falls back to net/http's content sniffer, whose signature table omits
+	// common formats (e.g. FLAC), yielding application/octet-stream. Sniff the
+	// magic number ourselves so the store serves a correct type; ServeFile
+	// honours a Content-Type we set here rather than re-detecting.
+	if ct := sniffContentType(path); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	http.ServeFile(w, r, path)
+}
+
+// sniffContentType returns a MIME type detected from the file's leading bytes
+// via magic-number matching, or "" when the type is unrecognised or the file
+// cannot be read. filetype inspects at most the first 262 bytes.
+func sniffContentType(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	head := make([]byte, 262)
+	n, _ := io.ReadFull(f, head)
+	if n == 0 {
+		return ""
+	}
+	if t, err := filetype.Get(head[:n]); err == nil && t != filetype.Unknown {
+		return t.MIME.Value
+	}
+	return ""
 }
 
 // StatHandler reports whether a blob exists in the store, without transferring
