@@ -339,6 +339,57 @@ func (tie *TieClient) importRootPath(dir, dest, dirType string, meta []metadata.
 // Member order is left implicit: filesystem order already matches the tiedir
 // manifest order. An explicit position triple is only written when a user later
 // reorders members (future work).
+// albumMeta aggregates album-level tags across the audio files of one imported
+// directory so the directory node can carry a clean album title, artist, and
+// year instead of only its folder name (which often embeds "Artist - Album").
+// album stays empty when the files carry different album tags; a mixed artist
+// collapses to "Various Artists".
+type albumMeta struct {
+	album, artist       string
+	albumSet, artistSet bool
+	albumMixed          bool
+	artistMixed         bool
+	year                int
+}
+
+func (a *albumMeta) add(m metadata.Media) {
+	if m.Album != "" {
+		if !a.albumSet {
+			a.album, a.albumSet = m.Album, true
+		} else if a.album != m.Album {
+			a.albumMixed = true
+		}
+	}
+	if m.Artist != "" {
+		if !a.artistSet {
+			a.artist, a.artistSet = m.Artist, true
+		} else if a.artist != m.Artist {
+			a.artistMixed = true
+		}
+	}
+	if a.year == 0 && m.Year != 0 {
+		a.year = m.Year
+	}
+}
+
+// writeOps adds the resolved album/artist/year triples to a directory node,
+// using Set so a re-import replaces rather than accumulates.
+func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
+	if a.albumSet && !a.albumMixed {
+		batch.Set(str(uid), str(TieAlbum), []string{a.album})
+	}
+	if a.artistSet {
+		artist := a.artist
+		if a.artistMixed {
+			artist = "Various Artists"
+		}
+		batch.Set(str(uid), str(TieArtist), []string{artist})
+	}
+	if a.year != 0 {
+		batch.Set(str(uid), str(TieYear), []string{strconv.Itoa(a.year)})
+	}
+}
+
 func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string, forcedArchive TieType) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host)})
 	if status.ErrorMsg != "" {
@@ -349,6 +400,10 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	// so it feeds both the root-path template (aggregated) and per-file tagging.
 	fileMeta := make(map[string]metadata.Media)
 	allMeta := make([]metadata.Media, 0, len(status.UploadedItems))
+	// dirAlbums aggregates album-level metadata per directory, keyed by the
+	// directory's path relative to the import root (the same key dirUID uses),
+	// so each imported dir node can carry its album title/artist/year.
+	dirAlbums := make(map[string]*albumMeta)
 	for _, x := range status.UploadedItems {
 		if x.MediaType == "inode/directory" {
 			continue
@@ -356,6 +411,15 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		m := ExtractMediaMetadata(x.Filename)
 		fileMeta[x.Filename] = m
 		allMeta = append(allMeta, m)
+		if rel, err := filepath.Rel(dir, x.Filename); err == nil {
+			key := filepath.Dir(rel)
+			dm := dirAlbums[key]
+			if dm == nil {
+				dm = &albumMeta{}
+				dirAlbums[key] = dm
+			}
+			dm.add(m)
+		}
 	}
 
 	rootPath, err := tie.importRootPath(dir, dest, dirType, allMeta)
@@ -433,6 +497,11 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 				dirname = filepath.Base(strings.TrimPrefix(rootPath, FileURIScheme))
 			}
 			appendTagDirOps(batch, uid, dirname, x.Size, tags)
+			// Give the dir node a clean album title/artist/year aggregated from
+			// its audio children, so browsers need not scrape them off tracks.
+			if dm := dirAlbums[rel]; dm != nil {
+				dm.writeOps(batch, uid)
+			}
 			// Link the DirUID to its immutable tiedir snapshot blob so the
 			// content-addressed snapshot remains reachable from the live node.
 			batch.Add(string(uid), str(TieTiedirHash), x.Hash)
