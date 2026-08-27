@@ -176,7 +176,13 @@ func (tc *TieClient) stat(subject, knownPath string, opts StatOptions) (StatInfo
 	}
 
 	if opts.Recursive {
-		if host, err := tc.ResolveHost(""); err == nil {
+		if info.Kind == StatDirectory {
+			// A DirUID is not a filehost blob, so it cannot be sized via the
+			// content-addressed DownloadSize path. Walk the live tag-derived tree
+			// and sum recorded filesizes instead — triples only, no blob fetches.
+			seen := map[DirUID]bool{}
+			info.TotalSize = tc.dirTotalSize(DirUID(subject), seen, 0)
+		} else if host, err := tc.ResolveHost(""); err == nil {
 			if total, err := DownloadSize(host, subject); err == nil {
 				info.TotalSize = total
 			}
@@ -201,6 +207,38 @@ func (tc *TieClient) stat(subject, knownPath string, opts StatOptions) (StatInfo
 	}
 
 	return info, nil
+}
+
+// statMaxDirDepth caps directory recursion in dirTotalSize as a backstop against
+// a pathological (or maliciously constructed) parent cycle the seen-set misses.
+const statMaxDirDepth = 100
+
+// dirTotalSize sums the recorded filesizes of every file and archive reachable
+// under uid, recursing into subdirectories. It reads only triples (via
+// ReadTieDir) — no filehost round-trips. The seen set guards against parent
+// cycles so a cyclic graph is counted once, not infinitely; a read error on any
+// subtree contributes 0 rather than failing the whole stat.
+func (tc *TieClient) dirTotalSize(uid DirUID, seen map[DirUID]bool, depth int) int64 {
+	if depth > statMaxDirDepth || seen[uid] {
+		return 0
+	}
+	seen[uid] = true
+
+	dir, err := ReadTieDir(tc, uid)
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, f := range dir.Files {
+		total += int64(f.Size)
+	}
+	for _, a := range dir.Archives {
+		total += int64(a.Size)
+	}
+	for _, sub := range dir.SubDirs {
+		total += tc.dirTotalSize(sub.Uid, seen, depth+1)
+	}
+	return total
 }
 
 // fillBlob HEADs the filehost for subject and records existence + on-disk size.
