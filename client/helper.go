@@ -6,7 +6,7 @@ import (
 
 	"git.sr.ht/~uid/tie/io/archivelib"
 	"git.sr.ht/~uid/tie/metadata"
-	"github.com/dhowden/tag"
+	"git.sr.ht/~uid/tie/metadata/tag"
 	"github.com/h2non/filetype"
 )
 
@@ -73,10 +73,11 @@ func ArchiveTieType(k archivelib.Kind) TieType {
 }
 
 // ExtractMediaMetadata reads embedded media tags from a local file. Audio files
-// yield title/artist/album/year/track via dhowden/tag; other types yield an
-// empty Media (only placement templates and metadata triples consume this, and
-// only audio currently carries usable tags). A read/parse failure is not fatal —
-// it just means no metadata, so the caller falls back to path-based placement.
+// yield title/artist/album/year/track and playing-time duration via the vendored
+// tie/tag fork; other types yield an empty Media (only placement templates and
+// metadata triples consume this, and only audio currently carries usable tags).
+// A read/parse failure is not fatal — it just means no metadata, so the caller
+// falls back to path-based placement.
 func ExtractMediaMetadata(path string) metadata.Media {
 	f, err := os.Open(path)
 	if err != nil {
@@ -98,10 +99,11 @@ func ExtractMediaMetadata(path string) metadata.Media {
 	}
 	track, _ := m.Track()
 	return metadata.Media{
-		Title:  m.Title(),
-		Artist: m.Artist(),
-		Album:  m.Album(),
-		Year:   m.Year(),
-		Track:  track,
+		Title:    m.Title(),
+		Artist:   m.Artist(),
+		Album:    m.Album(),
+		Year:     m.Year(),
+		Track:    track,
+		Duration: m.Duration().Seconds(),
 	}
 }

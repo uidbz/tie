@@ -1,8 +1,9 @@
 package metadata
 
 // Media carries per-file media metadata extracted client-side at import time
-// (currently audio tags via dhowden/tag). It feeds import-destination templates
-// and per-file metadata triples; absent fields stay zero.
+// (audio tags via the vendored tie/tag fork of dhowden/tag). It feeds
+// import-destination templates and per-file metadata triples; absent fields
+// stay zero.
 type Media struct {
 	Hash      string
 	MediaType string
@@ -11,4 +12,5 @@ type Media struct {
 	Album     string
 	Year      int
 	Track     int
+	Duration  float64 // audio playing time in seconds, 0 when unknown
 }

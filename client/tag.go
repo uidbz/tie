@@ -709,6 +709,11 @@ func appendTagOps(batch *api.Batch, info TagInfo) {
 	if info.Metadata.Track != 0 {
 		batch.Add(hash, str(TieTrack), strconv.Itoa(info.Metadata.Track))
 	}
+	// Audio playing time in seconds. Written under a raw "duration" property so
+	// no stringer-backed TieProperty enum value has to be regenerated.
+	if info.Metadata.Duration > 0 {
+		batch.Add(hash, "duration", strconv.FormatFloat(info.Metadata.Duration, 'f', 3, 64))
+	}
 	if info.IsDir {
 		batch.Add(hash, str(TieTypeProperty), str(TieDirectory))
 	} else {
