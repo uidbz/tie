@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	"git.sr.ht/~uid/tie/client"
+	"github.com/uidbz/tie/client"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )

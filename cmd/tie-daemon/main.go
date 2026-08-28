@@ -8,12 +8,12 @@ import (
 	"os"
 
 	"git.sr.ht/~uid/conf"
-	"git.sr.ht/~uid/tie/api"
-	"git.sr.ht/~uid/tie/auth"
-	"git.sr.ht/~uid/tie/tiedb"
-	"git.sr.ht/~uid/tie/tielog"
-	"git.sr.ht/~uid/tie/version"
-	"git.sr.ht/~uid/tie/webservice"
+	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/auth"
+	"github.com/uidbz/tie/tiedb"
+	"github.com/uidbz/tie/tielog"
+	"github.com/uidbz/tie/version"
+	"github.com/uidbz/tie/webservice"
 )
 
 var (

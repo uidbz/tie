@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/metadata"
 )
 
 // verify_test.go exercises Verify and RepairOrphans against a real daemon

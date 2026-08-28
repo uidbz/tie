@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"git.sr.ht/~uid/tie/client"
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/metadata"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 

@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"git.sr.ht/~uid/tie/auth"
-	"git.sr.ht/~uid/tie/metadata"
-	"git.sr.ht/~uid/tie/tiedb"
+	"github.com/uidbz/tie/auth"
+	"github.com/uidbz/tie/metadata"
+	"github.com/uidbz/tie/tiedb"
 )
 
 type Webservice struct {

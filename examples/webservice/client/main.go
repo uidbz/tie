@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"git.sr.ht/~uid/tie/examples/webservice/api"
+	"github.com/uidbz/tie/examples/webservice/api"
 
-	ws "git.sr.ht/~uid/tie/webservice"
+	ws "github.com/uidbz/tie/webservice"
 )
 
 func main() {

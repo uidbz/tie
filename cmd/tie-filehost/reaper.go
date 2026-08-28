@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/metadata"
 )
 
 // startReaper launches the background sweep of expired blobs. interval <= 0

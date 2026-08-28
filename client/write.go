@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"git.sr.ht/~uid/tie/io/putlib"
+	"github.com/uidbz/tie/io/putlib"
 )
 
 // WriteFile uploads srcPath's bytes to host and places the content as name

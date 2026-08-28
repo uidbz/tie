@@ -143,12 +143,11 @@ packages offline inside a network sandbox. Whenever you tag a release:
 # 1. Build the deps tarball for the tag.
 contrib/gentoo/scripts/make-deps-tarball.sh v0.4.0
 
-# 2. Attach tie-0.4.0-deps.tar.xz to the git tag as a release artifact, so the
-#    ebuild's second SRC_URI can fetch it. sourcehut's per-tag download area is
-#    populated with the hut CLI (dev-vcs/hut); it is not auto-generated:
-hut git artifact upload --rev v0.4.0 tie-0.4.0-deps.tar.xz
+# 2. Attach tie-0.4.0-deps.tar.xz to the GitHub release as an asset, so the
+#    ebuild's second SRC_URI can fetch it. Upload with the gh CLI:
+gh release upload v0.4.0 tie-0.4.0-deps.tar.xz
 #    After upload the ebuild's URL resolves:
-#      https://git.sr.ht/~uid/tie/refs/download/v0.4.0/tie-0.4.0-deps.tar.xz
+#      https://github.com/uidbz/tie/releases/download/v0.4.0/tie-0.4.0-deps.tar.xz
 
 # 3. Copy the ebuild for the new version and regenerate the Manifest.
 cd contrib/gentoo/net-misc/tie
@@ -180,7 +179,7 @@ Before submitting, on an actual Gentoo system:
   built binary; audit and expand `LICENSE` accordingly before submitting.
 - Once accepted, the deps tarball is mirrored on Gentoo's distfiles, and the
   `SRC_URI` typically points at a dev-space URL your proxy-maint sponsor sets
-  up; the sr.ht artifact URL is the pre-acceptance self-hosting option.
+  up; the GitHub release asset URL is the pre-acceptance self-hosting option.
 - Drop `KEYWORDS` to a single arch you can actually test (e.g. `~amd64`) unless
   you have arm64 hardware to verify on.
 

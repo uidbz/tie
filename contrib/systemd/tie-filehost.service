@@ -1,6 +1,6 @@
 [Unit]
 Description=tie content-addressed filehost
-Documentation=https://sr.ht/~uid/tie
+Documentation=https://github.com/uidbz/tie
 After=network-online.target
 Wants=network-online.target
 

@@ -3,7 +3,7 @@ package main
 import (
 	"net/http"
 
-	"git.sr.ht/~uid/tie/auth"
+	"github.com/uidbz/tie/auth"
 )
 
 func routes(r *http.ServeMux, store *auth.Store) {

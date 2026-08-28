@@ -35,7 +35,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "==> cloning tie at ${TAG}"
-git clone --quiet --depth 1 --branch "$TAG" https://git.sr.ht/~uid/tie "$WORK/src"
+git clone --quiet --depth 1 --branch "$TAG" https://github.com/uidbz/tie "$WORK/src"
 
 echo "==> downloading Go modules into a clean module cache"
 # -modcacherw leaves the cache writable so the tarball can be unpacked and

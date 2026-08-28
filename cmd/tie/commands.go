@@ -21,13 +21,13 @@ import (
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/term"
 
-	"git.sr.ht/~uid/tie/metadata"
-	"git.sr.ht/~uid/tie/tiedb"
+	"github.com/uidbz/tie/metadata"
+	"github.com/uidbz/tie/tiedb"
 
 	"git.sr.ht/~uid/conf"
 
-	"git.sr.ht/~uid/tie/client"
-	"git.sr.ht/~uid/tie/io/fuselib"
+	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/io/fuselib"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/urfave/cli/v3"

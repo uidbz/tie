@@ -11,8 +11,8 @@ import (
 	"sync"
 	"testing"
 
-	"git.sr.ht/~uid/tie/io/getlib"
-	"git.sr.ht/~uid/tie/io/putlib"
+	"github.com/uidbz/tie/io/getlib"
+	"github.com/uidbz/tie/io/putlib"
 )
 
 // blobStore is an in-memory content-addressed filehost: PUT /upload/<hash>

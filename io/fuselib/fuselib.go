@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	"git.sr.ht/~uid/tie/client"
-	"git.sr.ht/~uid/tie/io/archivelib"
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/metadata"
 	"github.com/h2non/filetype"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"

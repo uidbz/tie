@@ -6,22 +6,22 @@ EAPI=8
 inherit go-module systemd
 
 DESCRIPTION="Triple-store client with a content-addressed filehost and FUSE mount"
-HOMEPAGE="https://sr.ht/~uid/tie"
+HOMEPAGE="https://github.com/uidbz/tie"
 
 # Two source artifacts:
-#   1. the release source archive from sourcehut, and
+#   1. the release source archive from GitHub, and
 #   2. a dependency tarball with every Go module the build needs, so the build
 #      runs fully offline inside Portage's network sandbox (the ::gentoo way).
 #
 # Regenerate the deps tarball for a new release with:
 #     contrib/gentoo/scripts/make-deps-tarball.sh v0.4.0
-# then host it and update the second SRC_URI line to point at it. See
+# then attach it to the GitHub release so the second SRC_URI line resolves. See
 # contrib/gentoo/README.md.
 SRC_URI="
-	https://git.sr.ht/~uid/tie/archive/v${PV}.tar.gz -> ${P}.tar.gz
-	https://git.sr.ht/~uid/tie/refs/download/v${PV}/${P}-deps.tar.xz
+	https://github.com/uidbz/tie/archive/refs/tags/v${PV}.tar.gz -> ${P}.tar.gz
+	https://github.com/uidbz/tie/releases/download/v${PV}/${P}-deps.tar.xz
 "
-S="${WORKDIR}/${PN}-v${PV}"
+S="${WORKDIR}/${PN}-${PV}"
 
 LICENSE="BSD"
 SLOT="0"
@@ -41,7 +41,7 @@ DEPEND="${RDEPEND}"
 DOCS=( README.md CHANGELOG.md docs/ )
 
 src_compile() {
-	local ldflags="-X git.sr.ht/~uid/tie/version.Version=v${PV}"
+	local ldflags="-X github.com/uidbz/tie/version.Version=v${PV}"
 	local cmd
 	for cmd in tie tie-daemon tie-filehost; do
 		ego build -ldflags "${ldflags}" -o "${cmd}" "./cmd/${cmd}"

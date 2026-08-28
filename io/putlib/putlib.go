@@ -14,7 +14,7 @@ import (
 
 	"github.com/h2non/filetype"
 
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/metadata"
 )
 
 type PutConfig struct {

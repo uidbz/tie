@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.sr.ht/~uid/tie/api"
+	"github.com/uidbz/tie/api"
 )
 
 // A table is a client-side convenience over the triple store: a rectangular

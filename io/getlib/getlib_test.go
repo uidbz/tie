@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/metadata"
 )
 
 // blobServer is an in-memory filehost. Blobs may be stored under a wrong key on

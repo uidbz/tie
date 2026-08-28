@@ -27,7 +27,7 @@
 			<email>j@uid.bz</email>
 			<name>Johan Straarup</name>
 		</maintainer>
-		<bugs-to>https://todo.sr.ht/~uid/tie</bugs-to>
-		<doc>https://sr.ht/~uid/tie</doc>
+		<bugs-to>https://github.com/uidbz/tie/issues</bugs-to>
+		<doc>https://github.com/uidbz/tie</doc>
 	</upstream>
 </pkgmetadata>

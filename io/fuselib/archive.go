@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
-	"git.sr.ht/~uid/tie/io/archivelib"
+	"github.com/uidbz/tie/io/archivelib"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )

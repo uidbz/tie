@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/metadata"
 )
 
 // retentionFileName is the reserved index file in the datastore root. The

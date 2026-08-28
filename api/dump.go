@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"io"
 
-	"git.sr.ht/~uid/tie/tiedb"
-	ws "git.sr.ht/~uid/tie/webservice"
+	"github.com/uidbz/tie/tiedb"
+	ws "github.com/uidbz/tie/webservice"
 )
 
 const (

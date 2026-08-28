@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strconv"
 
-	ws "git.sr.ht/~uid/tie/webservice"
+	ws "github.com/uidbz/tie/webservice"
 )
 
 const (

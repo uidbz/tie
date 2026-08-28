@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"git.sr.ht/~uid/tie/client"
-	"git.sr.ht/~uid/tie/version"
+	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/version"
 
 	"github.com/urfave/cli/v3"
 )

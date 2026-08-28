@@ -86,7 +86,7 @@ package main
 import (
 	"fmt"
 
-	"git.sr.ht/~uid/tie/client"
+	"github.com/uidbz/tie/client"
 )
 
 func main() {

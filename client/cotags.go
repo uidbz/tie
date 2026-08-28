@@ -3,7 +3,7 @@ package client
 import (
 	"errors"
 
-	"git.sr.ht/~uid/tie/api"
+	"github.com/uidbz/tie/api"
 )
 
 // CoTagsForQuery returns all unique tags carried by entries that match ALL of

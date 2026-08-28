@@ -1,4 +1,4 @@
-module git.sr.ht/~uid/tie
+module github.com/uidbz/tie
 
 go 1.25.0
 

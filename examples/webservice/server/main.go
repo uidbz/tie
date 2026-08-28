@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"os"
 
-	"git.sr.ht/~uid/tie/auth"
-	"git.sr.ht/~uid/tie/examples/webservice/api"
+	"github.com/uidbz/tie/auth"
+	"github.com/uidbz/tie/examples/webservice/api"
 
-	"git.sr.ht/~uid/tie/webservice"
+	"github.com/uidbz/tie/webservice"
 )
 
 func main() {

@@ -4,8 +4,8 @@ import (
 	"errors"
 	"io"
 
-	"git.sr.ht/~uid/tie/io/getlib"
-	"git.sr.ht/~uid/tie/io/putlib"
+	"github.com/uidbz/tie/io/getlib"
+	"github.com/uidbz/tie/io/putlib"
 )
 
 // ResolveHost looks up a filehost by name. An empty name selects the first

@@ -7,9 +7,9 @@ import (
 	"io"
 	"net/http"
 
-	"git.sr.ht/~uid/tie/api"
-	"git.sr.ht/~uid/tie/tiedb"
-	ws "git.sr.ht/~uid/tie/webservice"
+	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/tiedb"
+	ws "github.com/uidbz/tie/webservice"
 )
 
 // ErrNotFound is returned when a key exists in no triple (the server reports

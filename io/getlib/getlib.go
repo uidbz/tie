@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/metadata"
 )
 
 // Used for cache path

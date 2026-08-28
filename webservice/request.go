@@ -3,7 +3,7 @@ package webservice
 import (
 	"io"
 
-	"git.sr.ht/~uid/tie/tiedb"
+	"github.com/uidbz/tie/tiedb"
 )
 
 const (

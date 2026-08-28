@@ -6,13 +6,13 @@ EAPI=8
 inherit go-module git-r3 systemd
 
 DESCRIPTION="Triple-store client with a content-addressed filehost and FUSE mount"
-HOMEPAGE="https://sr.ht/~uid/tie"
+HOMEPAGE="https://github.com/uidbz/tie"
 
 # Live ebuild: builds from the master branch. There is no fixed release tarball
 # to attach pre-vendored deps to, so Go fetches modules over the network during
 # the build. This requires disabling the network sandbox for this package
 # (RESTRICT below); see contrib/gentoo/README.md.
-EGIT_REPO_URI="https://git.sr.ht/~uid/tie"
+EGIT_REPO_URI="https://github.com/uidbz/tie"
 
 LICENSE="BSD"
 SLOT="0"
@@ -33,7 +33,7 @@ DOCS=( README.md CHANGELOG.md docs/ )
 src_compile() {
 	local ver
 	ver="$(git -C "${S}" describe --tags --always --dirty 2>/dev/null || echo 9999)"
-	local ldflags="-X git.sr.ht/~uid/tie/version.Version=${ver}"
+	local ldflags="-X github.com/uidbz/tie/version.Version=${ver}"
 	local cmd
 	for cmd in tie tie-daemon tie-filehost; do
 		ego build -ldflags "${ldflags}" -o "${cmd}" "./cmd/${cmd}"

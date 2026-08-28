@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"git.sr.ht/~uid/tie/api"
-	"git.sr.ht/~uid/tie/io/putlib"
-	"git.sr.ht/~uid/tie/metadata"
+	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/putlib"
+	"github.com/uidbz/tie/metadata"
 )
 
 //go:generate stringer -type=TieType -linecomment

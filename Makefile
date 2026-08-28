@@ -5,7 +5,7 @@ CMDS    := tie tie-daemon tie-filehost
 # Version embedded in the binaries. Defaults to the current git description
 # (nearest tag + commits-since), overridable with `make build VERSION=v0.4.0`.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X git.sr.ht/~uid/tie/version.Version=$(VERSION)
+LDFLAGS := -X github.com/uidbz/tie/version.Version=$(VERSION)
 
 .PHONY: build install install-server tls-keys push release clean
 

@@ -11,9 +11,9 @@ in plaintext, so keep the file readable only by the daemon's user.
 
 ### Installation & run
 ```
-go get git.sr.ht/~uid/tie-daemon ...
-cd $GOPATH/src/git.sr.ht/~uid/tie-daemon
-go build
+git clone https://github.com/uidbz/tie
+cd tie
+go build ./cmd/tie-daemon
 ./tie-daemon -config tie-daemon.toml
 ```
 
@@ -29,6 +29,6 @@ See the root `README.md` and `contrib/` for running as system services
 (systemd / OpenRC).
 
 ### Interaction
-* For CLI use: [tie](https://sr.ht/~uid/tie)
-* For GUI use: [tie-gui](https://sr.ht/~uid/tie-gui)
-* For Golang pkg use: [tie-client](https://sr.ht/~uid/tie-client)
+* For CLI use: [tie](https://github.com/uidbz/tie)
+* For GUI use: [tie-gui](https://github.com/uidbz/tie-gui)
+* For Golang pkg use: [tie-client](https://github.com/uidbz/tie-client)

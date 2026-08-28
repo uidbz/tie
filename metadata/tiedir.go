@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"git.sr.ht/~uid/tie/tiedb"
+	"github.com/uidbz/tie/tiedb"
 	"github.com/h2non/filetype"
 	"github.com/minio/highwayhash"
 )

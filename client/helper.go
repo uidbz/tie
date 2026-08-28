@@ -4,9 +4,9 @@ import (
 	"io"
 	"os"
 
-	"git.sr.ht/~uid/tie/io/archivelib"
-	"git.sr.ht/~uid/tie/metadata"
-	"git.sr.ht/~uid/tie/metadata/tag"
+	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/metadata"
+	"github.com/uidbz/tie/metadata/tag"
 	"github.com/h2non/filetype"
 )
 

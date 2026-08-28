@@ -5,7 +5,7 @@ import "runtime/debug"
 
 // Version is the build version. It is overridden at build time via
 //
-//	-ldflags "-X git.sr.ht/~uid/tie/version.Version=v0.4.0"
+//	-ldflags "-X github.com/uidbz/tie/version.Version=v0.4.0"
 //
 // (see the Makefile). When built without that flag — e.g. `go install` from a
 // tagged module — it falls back to the version baked into the build info.

@@ -1,7 +1,7 @@
 package api
 
 import (
-	ws "git.sr.ht/~uid/tie/webservice"
+	ws "github.com/uidbz/tie/webservice"
 )
 
 const (
