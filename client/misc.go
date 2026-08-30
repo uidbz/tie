@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"git.sr.ht/~uid/conf"
+	"github.com/uidbz/conf"
 )
 
 func DefaultConfig() Config {

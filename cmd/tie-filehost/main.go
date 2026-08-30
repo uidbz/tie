@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	"git.sr.ht/~uid/conf"
+	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/tielog"
 	"github.com/uidbz/tie/version"

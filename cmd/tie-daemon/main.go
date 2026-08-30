@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"git.sr.ht/~uid/conf"
+	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/tiedb"

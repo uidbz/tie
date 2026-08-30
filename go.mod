@@ -3,12 +3,12 @@ module github.com/uidbz/tie
 go 1.25.0
 
 require (
-	git.sr.ht/~uid/conf v1.1.5
 	github.com/h2non/filetype v1.1.3
 	github.com/hanwen/go-fuse/v2 v2.11.0
 	github.com/mholt/archives v0.1.5
 	github.com/minio/highwayhash v1.0.3
 	github.com/schollz/progressbar/v3 v3.19.1
+	github.com/uidbz/conf v1.1.6-0.20260830150407-08bf80e17ef6
 	github.com/urfave/cli/v3 v3.10.1
 	golang.org/x/term v0.44.0
 )

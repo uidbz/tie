@@ -24,7 +24,7 @@ import (
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tiedb"
 
-	"git.sr.ht/~uid/conf"
+	"github.com/uidbz/conf"
 
 	"github.com/uidbz/tie/client"
 	"github.com/uidbz/tie/io/fuselib"
