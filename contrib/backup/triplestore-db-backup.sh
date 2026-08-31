@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Back up a tie-daemon triple-store (its DbPath directory) to a remote host.
+# Back up a tie-triplestore triple-store (its DbPath directory) to a remote host.
 #
-# Unlike the filehost, the daemon's on-disk files are MUTABLE: each collection
-# is a "<namespace>/<collection>.tie" file of fixed-width records that the daemon
-# appends to and rewrites in place. So --size-only is NOT safe here (a file can
-# grow or change without a size delta at record boundaries); this script lets
-# rsync decide by mtime+size (default) or full checksum (TIE_DB_CHECKSUM=1).
+# Unlike the filehost, the triplestore's on-disk files are MUTABLE: each
+# collection is a "<namespace>/<collection>.tie" file of fixed-width records that
+# the server appends to and rewrites in place. So --size-only is NOT safe here (a
+# file can grow or change without a size delta at record boundaries); this script
+# lets rsync decide by mtime+size (default) or full checksum (TIE_DB_CHECKSUM=1).
 #
-# The daemon trims any partial trailing record on load, so a copy taken while the
-# daemon is running is still openable — but for a guaranteed point-in-time image
-# prefer a filesystem snapshot (BTRFS/LVM) of DbPath, or stop the daemon briefly.
+# The server trims any partial trailing record on load, so a copy taken while the
+# server is running is still openable — but for a guaranteed point-in-time image
+# prefer a filesystem snapshot (BTRFS/LVM) of DbPath, or stop the server briefly.
 # For a portable, engine-independent backup, use the logical `tie dump` path
-# instead (see docs/filehost-storage-and-backup.md, "Daemon triple-store").
+# instead (see docs/filehost-storage-and-backup.md, "Triple-store").
 #
 # See docs/filehost-storage-and-backup.md for the full rationale.
 set -euo pipefail
 
 # ---- Configuration (override via environment) -------------------------------
-# Local daemon DbPath (directory of <namespace>/<collection>.tie files).
-SRC="${TIE_DAEMON_DB:-/var/lib/tie/db}"
+# Local triplestore DbPath (directory of <namespace>/<collection>.tie files).
+SRC="${TIE_TRIPLESTORE_DB:-/var/lib/tie/db}"
 # Remote target: user@host:/path the DB is mirrored into.
 REMOTE="${TIE_BACKUP_REMOTE:-backup@backup-host}"
 REMOTE_DIR="${TIE_BACKUP_REMOTE_DIR:-/var/lib/tie-backup/db}"

@@ -21,7 +21,7 @@ var ErrNotFound = errors.New("key has no associated values")
 var defaultConfig = Config{
 	Username:         "defaultuser",
 	Password:         "defaultpassword",
-	DaemonURL:        "http://localhost:1161",
+	TripleStoreURL:   "http://localhost:1161",
 	Namespace:        "Collections",
 	Collection:       "Main",
 	DefaultFileHosts: []string{"default"},
@@ -99,7 +99,7 @@ func RowHas(r Row, relation, value string) bool {
 type TieClient struct {
 	client *ws.Client
 	Config Config
-	// active is the resolved collection this client operates on (daemon,
+	// active is the resolved collection this client operates on (triplestore,
 	// namespace, collection id, credentials, filehosts), chosen at construction.
 	active ResolvedCollection
 }
@@ -114,26 +114,26 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// ResolveCollection resolves a collection name to the concrete daemon,
+// ResolveCollection resolves a collection name to the concrete triplestore,
 // namespace, collection id, credentials and filehosts to use, applying
 // top-level fallbacks for any field the named entry leaves unset. An empty name
 // selects DefaultCollection; a name matching no entry is treated as a bare
-// collection id on the top-level daemon/namespace.
+// collection id on the top-level triplestore/namespace.
 func (c Config) ResolveCollection(name string) ResolvedCollection {
 	if name == "" {
 		name = c.DefaultCollection
 	}
-	daemon := firstNonEmpty(c.DaemonURL, c.Webservice)
+	store := firstNonEmpty(c.TripleStoreURL, c.Webservice)
 	entry, ok := c.Collections[name]
 	if !ok {
 		return ResolvedCollection{
-			Namespace:  c.Namespace,
-			Collection: firstNonEmpty(name, c.Collection),
-			DaemonURL:  daemon,
-			Username:   c.Username,
-			Password:   c.Password,
-			Insecure:   c.WebserviceInsecure,
-			FileHosts:  c.DefaultFileHosts,
+			Namespace:      c.Namespace,
+			Collection:     firstNonEmpty(name, c.Collection),
+			TripleStoreURL: store,
+			Username:       c.Username,
+			Password:       c.Password,
+			Insecure:       c.WebserviceInsecure,
+			FileHosts:      c.DefaultFileHosts,
 		}
 	}
 	user, pass := c.Username, c.Password
@@ -145,13 +145,13 @@ func (c Config) ResolveCollection(name string) ResolvedCollection {
 		hosts = c.DefaultFileHosts
 	}
 	return ResolvedCollection{
-		Namespace:  firstNonEmpty(entry.Namespace, c.Namespace),
-		Collection: firstNonEmpty(entry.Collection, name, c.Collection),
-		DaemonURL:  firstNonEmpty(entry.DaemonURL, daemon),
-		Username:   user,
-		Password:   pass,
-		Insecure:   entry.Insecure || c.WebserviceInsecure,
-		FileHosts:  hosts,
+		Namespace:      firstNonEmpty(entry.Namespace, c.Namespace),
+		Collection:     firstNonEmpty(entry.Collection, name, c.Collection),
+		TripleStoreURL: firstNonEmpty(entry.TripleStoreURL, store),
+		Username:       user,
+		Password:       pass,
+		Insecure:       entry.Insecure || c.WebserviceInsecure,
+		FileHosts:      hosts,
 	}
 }
 
@@ -161,14 +161,14 @@ type Config struct {
 	Password   string
 	Namespace  string
 	Collection string
-	// Webservice is the daemon URL. Deprecated: use DaemonURL. It is still
-	// honored (LoadConfig copies it into DaemonURL when the latter is empty) so
-	// pre-existing configs keep working.
+	// Webservice is the triplestore URL. Deprecated: use TripleStoreURL. It is
+	// still honored (LoadConfig copies it into TripleStoreURL when the latter is
+	// empty) so pre-existing configs keep working.
 	Webservice string
-	// DaemonURL is the tie-daemon endpoint. It supersedes Webservice; when unset
-	// LoadConfig falls back to Webservice.
-	DaemonURL string
-	// WebserviceInsecure enables TLS InsecureSkipVerify for the daemon
+	// TripleStoreURL is the tie-triplestore endpoint. It supersedes Webservice;
+	// when unset LoadConfig falls back to Webservice.
+	TripleStoreURL string
+	// WebserviceInsecure enables TLS InsecureSkipVerify for the triplestore
 	// connection (accept self-signed certificates).
 	WebserviceInsecure bool
 	DefaultFileHosts   []string
@@ -177,7 +177,7 @@ type Config struct {
 	// is given. Empty falls back to the flat Collection field.
 	DefaultCollection string
 	// Collections holds named collection bindings so one config can address
-	// several collections. Each entry may override the top-level daemon,
+	// several collections. Each entry may override the top-level triplestore,
 	// namespace, credentials and filehosts; unset fields fall back to the
 	// top-level values. When empty, LoadConfig synthesizes a single entry from
 	// the flat Namespace/Collection/DefaultFileHosts fields.
@@ -221,7 +221,7 @@ func (c Config) Path() string {
 type CollectionEntry struct {
 	Namespace        string
 	Collection       string
-	DaemonURL        string
+	TripleStoreURL   string
 	Username         string
 	Password         string
 	Insecure         bool
@@ -230,16 +230,16 @@ type CollectionEntry struct {
 }
 
 // ResolvedCollection is a CollectionEntry with all top-level fallbacks applied:
-// the concrete daemon/namespace/collection/credentials/filehosts to use for one
-// operation.
+// the concrete triplestore/namespace/collection/credentials/filehosts to use
+// for one operation.
 type ResolvedCollection struct {
-	Namespace  string
-	Collection string
-	DaemonURL  string
-	Username   string
-	Password   string
-	Insecure   bool
-	FileHosts  []string
+	Namespace      string
+	Collection     string
+	TripleStoreURL string
+	Username       string
+	Password       string
+	Insecure       bool
+	FileHosts      []string
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
@@ -299,14 +299,14 @@ func NewTieClient(config Config) (client *TieClient) {
 }
 
 // NewTieClientFor builds a client bound to the named collection (empty selects
-// the default). The transport targets that collection's resolved daemon and
+// the default). The transport targets that collection's resolved triplestore and
 // credentials.
 func NewTieClientFor(config Config, collection string) (client *TieClient) {
 	active := config.ResolveCollection(collection)
 	client = &TieClient{
 		Config: config,
 		active: active,
-		client: ws.NewClient(active.DaemonURL, active.Username, active.Password, active.Insecure),
+		client: ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure),
 	}
 
 	return client

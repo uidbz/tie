@@ -1,9 +1,9 @@
-# tie-daemon configuration
+# tie-triplestore configuration
 #
-# Copy to tie-daemon.toml (or pass -config <path>) and edit.
+# Copy to tie-triplestore.toml (or pass -config <path>) and edit.
 # Access management is done here: add or remove [[Users]] entries.
 # Passwords are stored in plaintext, so keep this file readable only by the
-# daemon's user (e.g. chmod 600).
+# server's user (e.g. chmod 600).
 
 ListenOn = ":1161"
 DbPath = "/data"

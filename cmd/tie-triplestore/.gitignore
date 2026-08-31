@@ -25,4 +25,4 @@ _testmain.go
 *.prof
 
 #tie specific
-tie-daemon
+tie-triplestore

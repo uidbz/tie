@@ -9,17 +9,17 @@ import (
 	"testing"
 )
 
-// requireServer skips the test unless a tie-daemon is reachable on the
-// configured Webservice. These are integration tests over real HTTP+JSON; run
-// them against the test-env daemon (test-env/start.sh).
+// requireServer skips the test unless a tie-triplestore is reachable on the
+// configured TripleStoreURL. These are integration tests over real HTTP+JSON;
+// run them against the test-env triplestore (test-env/start.sh).
 func requireServer(t *testing.T, tie *TieClient) {
 	t.Helper()
-	addr := tie.Config.Webservice
+	addr := tie.Config.TripleStoreURL
 	addr = strings.TrimPrefix(addr, "http://")
 	addr = strings.TrimPrefix(addr, "https://")
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		t.Skipf("no daemon at %s: %v", tie.Config.Webservice, err)
+		t.Skipf("no triplestore at %s: %v", tie.Config.TripleStoreURL, err)
 	}
 	conn.Close()
 }

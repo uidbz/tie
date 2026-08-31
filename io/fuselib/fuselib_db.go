@@ -639,7 +639,7 @@ func (h *writeHandle) Release(ctx context.Context) syscall.Errno {
 	return errno
 }
 
-// Fsync is a no-op success: Flush commits, and the daemon owns durability
+// Fsync is a no-op success: Flush commits, and the triplestore owns durability
 // (mirrors metaFileHandle.Fsync).
 func (h *writeHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	return 0
@@ -1376,7 +1376,7 @@ func (h *metaFileHandle) Flush(ctx context.Context) syscall.Errno {
 
 // Fsync is called by editors (e.g. vim) to ensure data is persisted. Since Flush
 // already commits the buffered text to the triple store, Fsync is a no-op: the
-// backing store (tie-daemon) handles its own durability. Returning success lets
+// backing store (tie-triplestore) handles its own durability. Returning success lets
 // editors save without E667: Fsync failed errors.
 func (h *metaFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	return 0

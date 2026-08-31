@@ -1,6 +1,6 @@
 # Running tie as system services
 
-`tie-daemon` (triple store, port 1161) and `tie-filehost` (blob store, port
+`tie-triplestore` (triple store, port 1161) and `tie-filehost` (blob store, port
 1162) are two separate services. This directory has everything to install them
 as long-running services.
 
@@ -18,26 +18,26 @@ sudo ./contrib/install.sh
 ```
 
 (`make install` on its own installs just the `tie` client, rootless, into your
-`GOBIN` — use `install-server` for the daemon and filehost.)
+`GOBIN` — use `install-server` for the triplestore and filehost.)
 
 The installer:
 
-- builds all three binaries (`tie`, `tie-daemon`, `tie-filehost`) and installs
+- builds all three binaries (`tie`, `tie-triplestore`, `tie-filehost`) and installs
   them to `/usr/local/bin`,
 - creates a dedicated `tie` system user,
 - writes config to `/etc/tie/` (from the `*.toml.example` files, if not already
   present) and data dirs to `/var/lib/tie/`,
 - detects systemd or OpenRC and installs + enables the matching service files.
 
-Then edit `/etc/tie/tie-daemon.toml` (at least the `[[Users]]` account) and
+Then edit `/etc/tie/tie-triplestore.toml` (at least the `[[Users]]` account) and
 start the services:
 
 ```
 # systemd
-sudo systemctl start tie-daemon tie-filehost
+sudo systemctl start tie-triplestore tie-filehost
 
 # OpenRC
-sudo rc-service tie-daemon start
+sudo rc-service tie-triplestore start
 sudo rc-service tie-filehost start
 ```
 
@@ -50,7 +50,7 @@ upgrade binaries is safe.
 |-----------------------------|------------------------------------------|
 | `/usr/local/bin/tie-*`      | binaries                                 |
 | `/etc/tie/*.toml`           | config (owned by `tie`, mode 0640)       |
-| `/var/lib/tie/db`           | daemon triple-store data                 |
+| `/var/lib/tie/db`           | triplestore data                         |
 | `/var/lib/tie/data`         | filehost content-addressed blobs         |
 
 ## Network exposure and TLS
@@ -76,7 +76,7 @@ only the proxy reaches the service.
 
 Both services log to stderr, and under an init system that is all you need:
 
-- **systemd** captures stderr into the journal — `journalctl -u tie-daemon`
+- **systemd** captures stderr into the journal — `journalctl -u tie-triplestore`
   (or `-u tie-filehost`). Because stderr is not a terminal, the output is plain
   `time=… level=INFO msg=…` text (no color escapes).
 - **OpenRC** sends stderr to `/var/log/tie/${RC_SVCNAME}.log` (see the service
@@ -94,8 +94,8 @@ it under `/var/lib/tie` if you use it. (OpenRC runs unsandboxed, so any
 
 ## Files
 
-- `systemd/tie-daemon.service`, `systemd/tie-filehost.service`
-- `openrc/tie-daemon`, `openrc/tie-filehost`
+- `systemd/tie-triplestore.service`, `systemd/tie-filehost.service`
+- `openrc/tie-triplestore`, `openrc/tie-filehost`
 - `install.sh` — the installer
 - `gentoo/` — Gentoo ebuilds (`net-misc/tie`, `acct-user/tie`,
   `acct-group/tie`) and install instructions
@@ -105,7 +105,7 @@ it under `/var/lib/tie` if you use it. (OpenRC runs unsandboxed, so any
   snapshot + send/receive to a remote BTRFS host
 - `backup/rsync-backup.sh` — filehost backup via rsync mirror, for non-BTRFS
   hosts
-- `backup/daemon-db-backup.sh` — tie-daemon triple-store (`DbPath`) backup via
+- `backup/triplestore-db-backup.sh` — tie-triplestore (`DbPath`) backup via
   rsync; complements the logical `tie dump` path
 
 ## Filehost storage and backup

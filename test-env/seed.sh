@@ -71,7 +71,7 @@ add_tag "$DIR_HASH" vacation
 echo "  holiday-pics/  -> $DIR_HASH  [vacation]  (dir)"
 
 echo "== Syncing =="
-# nudge the daemon to flush; a Get triggers a sync path, but Sync is explicit:
+# nudge the triplestore to flush; a Get triggers a sync path, but Sync is explicit:
 tie_cli get -f all tags >/dev/null 2>&1 || true
 
 echo

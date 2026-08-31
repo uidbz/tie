@@ -37,7 +37,7 @@ type WebserviceConfig struct {
 
 	// Auth resolves each request's role from its Basic Auth credentials and gates
 	// read vs write operations. Access management is done by populating it from
-	// the daemon's config file; it is read-only at runtime.
+	// the server's config file; it is read-only at runtime.
 	Auth *auth.Store
 
 	// ReverseRelations restricts which relations (value1) collections index in
@@ -133,7 +133,7 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 }
 
 // Close flushes and closes every collection's disk writer. Call it on shutdown
-// (e.g. from a SIGTERM handler) so the daemon durably persists its tail of
+// (e.g. from a SIGTERM handler) so the server durably persists its tail of
 // writes rather than relying on the kernel to flush the page cache after exit.
 func (ws *Webservice) Close() {
 	ws.db.Close()

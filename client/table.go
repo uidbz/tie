@@ -13,7 +13,7 @@ import (
 // A table is a client-side convenience over the triple store: a rectangular
 // grid of string cells with ordered column headers, built entirely on the
 // existing Query/Set/Get/Expand/Batch primitives. There is no server-side table
-// type — the daemon still sees only triples.
+// type — the triplestore still sees only triples.
 //
 // A table entity T carries its column and row order as lists:
 //
@@ -31,7 +31,7 @@ import (
 // order, so each entry in the columns/rows lists is prefixed with a zero-padded
 // ordinal: the server's lexicographic sort then reproduces the original order.
 // Reads are a forward Get(T) + Expand(rowUIDs) — no reverse-index dependency and
-// no daemon config. The trade-off is that "rows" is a single multi-value
+// no triplestore config. The trade-off is that "rows" is a single multi-value
 // attribute, so this targets sheet-sized tables (hundreds to low thousands of
 // rows), not very large ones. Headers must be unique and none may be named
 // "tie-type" (it would collide with a row entity's type marker); either case is

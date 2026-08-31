@@ -12,7 +12,7 @@ def _client_capturing(captured):
         captured.append((request_id, body))
         return {"Success": True, "rows": [], "totalCount": 0, "tags": []}
 
-    tie._daemon.run = fake_run
+    tie._triplestore.run = fake_run
     return tie
 
 

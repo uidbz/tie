@@ -1,6 +1,6 @@
-"""TieClient: the full client facade over the daemon and filehost.
+"""TieClient: the full client facade over the triplestore and filehost.
 
-Method names mirror client.TieClient (Go). The daemon request envelopes are
+Method names mirror client.TieClient (Go). The triplestore request envelopes are
 built to match the JSON field casing of each api/*.go request type exactly
 (some fields are PascalCase, some lowercase-tagged).
 """
@@ -18,7 +18,7 @@ from .config import Config, FileHost, default_config, load_config
 from .errors import NotFound, ServerError
 from .filehost import FilehostClient, UploadResult
 from .metadata_extract import Media, extract_media_metadata
-from .transport import DaemonClient
+from .transport import TripleStoreClient
 from .vocab import FILE_URI_SCHEME, TAG_DATE_FORMAT, Relation, TieType
 
 
@@ -166,7 +166,7 @@ def _now_tag_date() -> str:
 class TieClient:
     def __init__(self, config: Config):
         self.config = config
-        self._daemon = DaemonClient(
+        self._triplestore = TripleStoreClient(
             config.webservice, config.username, config.password, config.webservice_insecure
         )
         self._filehosts: dict[str, FilehostClient] = {}
@@ -204,17 +204,17 @@ class TieClient:
     def add(self, key: str, value1: str, value2: str, collection: str = "") -> None:
         body = self._envelope("Add", collection)
         body.update({"Key": key, "Value1": value1, "Value2": value2})
-        _check(self._daemon.run("Add", body))
+        _check(self._triplestore.run("Add", body))
 
     def delete(self, key: str, value1: str, value2: str, collection: str = "") -> None:
         body = self._envelope("Delete", collection)
         body.update({"Key": key, "Value1": value1, "Value2": value2})
-        _check(self._daemon.run("Delete", body))
+        _check(self._triplestore.run("Delete", body))
 
     def set_values(self, key: str, relation: str, values: list[str], collection: str = "") -> None:
         body = self._envelope("Set", collection)
         body.update({"key": key, "relation": relation, "values": values})
-        _check(self._daemon.run("Set", body))
+        _check(self._triplestore.run("Set", body))
 
     def update(self, u: Update, collection: str = "") -> None:
         body = self._envelope("Update", collection)
@@ -227,10 +227,10 @@ class TieClient:
                 "AddOnFailure": u.add_on_failure,
             }
         )
-        _check(self._daemon.run("Update", body))
+        _check(self._triplestore.run("Update", body))
 
     def sync(self, collection: str = "") -> None:
-        self._daemon.run("Sync", self._envelope("Sync", collection))
+        self._triplestore.run("Sync", self._envelope("Sync", collection))
 
     def new_batch(self, collection: str = "") -> Batch:
         ns, col = self._collection(collection)
@@ -244,7 +244,7 @@ class TieClient:
                 "ops": batch.ops,
             },
         }
-        _check(self._daemon.run("Batch", body))
+        _check(self._triplestore.run("Batch", body))
 
     def query(self, spec: QuerySpec, collection: str = "") -> tuple[list[Row], int]:
         """Run a query. Raises NotFound when nothing matches."""
@@ -261,7 +261,7 @@ class TieClient:
                 "sort": {"Offset": spec.offset, "Limit": spec.limit, "SortBy": spec.sort_by},
             }
         )
-        reply = self._daemon.run("Query", body)
+        reply = self._triplestore.run("Query", body)
         _check(reply)
         rows = [_row_from_json(r) for r in (reply.get("rows") or [])]
         return rows, reply.get("totalCount", 0)
@@ -269,7 +269,7 @@ class TieClient:
     def expand(self, keys: list[str], filter: str = "", collection: str = "") -> list[Row]:
         body = self._envelope("Expand", collection)
         body.update({"keys": keys, "filter": filter})
-        reply = self._daemon.run("Expand", body)
+        reply = self._triplestore.run("Expand", body)
         _check(reply)
         return [_row_from_json(r) for r in (reply.get("rows") or [])]
 
@@ -283,18 +283,18 @@ class TieClient:
     def associated(self, key: str, match_value1: str = "", collection: str = "") -> dict:
         body = self._envelope("Associated", collection)
         body.update({"Key": key, "MatchValue1": match_value1})
-        reply = self._daemon.run("Associated", body)
+        reply = self._triplestore.run("Associated", body)
         _check(reply)
         return reply.get("Result") or {}
 
     def dump(self, collection: str = "") -> Iterator[tuple[str, str, str]]:
         """Yield every forward triple (key, value1, value2) as NDJSON stream."""
         body = self._envelope("Dump", collection)
-        for t in self._daemon.run_stream("Dump", body):
+        for t in self._triplestore.run_stream("Dump", body):
             yield t.get("Key", ""), t.get("Value1", ""), t.get("Value2", "")
 
     def drop_collection(self, collection: str = "") -> None:
-        _check(self._daemon.run("Drop", self._envelope("Drop", collection)))
+        _check(self._triplestore.run("Drop", self._envelope("Drop", collection)))
 
     def restore(self, triples: list[tuple[str, str, str]], collection: str = "") -> None:
         if not triples:

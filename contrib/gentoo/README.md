@@ -1,6 +1,6 @@
 # Installing tie on Gentoo
 
-These ebuilds install `tie`, `tie-daemon`, and `tie-filehost` as a normal
+These ebuilds install `tie`, `tie-triplestore`, and `tie-filehost` as a normal
 Gentoo package: binaries in `/usr/bin`, config in `/etc/tie/`, data in
 `/var/lib/tie/`, plus OpenRC and systemd service files and a dedicated `tie`
 service user/group.
@@ -88,17 +88,17 @@ Re-emerge any time to track the latest `master`.
 |--------|---------|-----------------------------------------------------------|
 | `fuse` | on      | pulls in `sys-fs/fuse:3`, required for `tie mount`        |
 
-Disable it (`USE="-fuse"`) if you only need the CLI/daemon/filehost and not the
-FUSE mount.
+Disable it (`USE="-fuse"`) if you only need the CLI/triplestore/filehost and not
+the FUSE mount.
 
 ## 4. Configure and start
 
 The package installs default config to `/etc/tie/` (protected by
 `CONFIG_PROTECT`, so upgrades never overwrite your edits). Before starting,
-edit at least the daemon's `[[Users]]` account:
+edit at least the triplestore's `[[Users]]` account:
 
 ```sh
-sudo nano /etc/tie/tie-daemon.toml     # set [[Users]] Username/Password
+sudo nano /etc/tie/tie-triplestore.toml     # set [[Users]] Username/Password
 sudo nano /etc/tie/tie-filehost.toml
 ```
 
@@ -107,16 +107,16 @@ Start the services.
 OpenRC:
 
 ```sh
-sudo rc-update add tie-daemon default
+sudo rc-update add tie-triplestore default
 sudo rc-update add tie-filehost default
-sudo rc-service tie-daemon start
+sudo rc-service tie-triplestore start
 sudo rc-service tie-filehost start
 ```
 
 systemd:
 
 ```sh
-sudo systemctl enable --now tie-daemon tie-filehost
+sudo systemctl enable --now tie-triplestore tie-filehost
 ```
 
 Then point the CLI at them. Running `tie` with no config writes a default one

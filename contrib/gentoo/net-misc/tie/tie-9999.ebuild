@@ -35,27 +35,27 @@ src_compile() {
 	ver="$(git -C "${S}" describe --tags --always --dirty 2>/dev/null || echo 9999)"
 	local ldflags="-X github.com/uidbz/tie/version.Version=${ver}"
 	local cmd
-	for cmd in tie tie-daemon tie-filehost; do
+	for cmd in tie tie-triplestore tie-filehost; do
 		ego build -ldflags "${ldflags}" -o "${cmd}" "./cmd/${cmd}"
 	done
 }
 
 src_install() {
-	dobin tie tie-daemon tie-filehost
+	dobin tie tie-triplestore tie-filehost
 
 	insinto /etc/tie
-	newins cmd/tie-daemon/tie-daemon.toml.example tie-daemon.toml
+	newins cmd/tie-triplestore/tie-triplestore.toml.example tie-triplestore.toml
 	newins cmd/tie-filehost/tie-filehost.toml.example tie-filehost.toml
 
 	# The shared service files target /usr/local/bin (used by install.sh);
 	# dobin installs to /usr/bin, so retarget them for the packaged layout.
 	sed -i 's|/usr/local/bin/|/usr/bin/|g' \
-		contrib/openrc/tie-daemon contrib/openrc/tie-filehost \
-		contrib/systemd/tie-daemon.service contrib/systemd/tie-filehost.service || die
+		contrib/openrc/tie-triplestore contrib/openrc/tie-filehost \
+		contrib/systemd/tie-triplestore.service contrib/systemd/tie-filehost.service || die
 
-	newinitd contrib/openrc/tie-daemon tie-daemon
+	newinitd contrib/openrc/tie-triplestore tie-triplestore
 	newinitd contrib/openrc/tie-filehost tie-filehost
-	systemd_dounit contrib/systemd/tie-daemon.service
+	systemd_dounit contrib/systemd/tie-triplestore.service
 	systemd_dounit contrib/systemd/tie-filehost.service
 
 	keepdir /var/lib/tie/db /var/lib/tie/data
@@ -66,11 +66,11 @@ src_install() {
 }
 
 pkg_postinst() {
-	elog "tie-daemon (triple store) listens on :1161 and tie-filehost"
+	elog "tie-triplestore (triple store) listens on :1161 and tie-filehost"
 	elog "(blob store) on :1162, both plain HTTP on all interfaces by default."
 	elog
 	elog "Before starting, edit the config, especially the [[Users]] account:"
-	elog "    /etc/tie/tie-daemon.toml"
+	elog "    /etc/tie/tie-triplestore.toml"
 	elog "    /etc/tie/tie-filehost.toml"
 	elog
 	elog "The default HTTP ports bind 0.0.0.0, so every host on your LAN can"

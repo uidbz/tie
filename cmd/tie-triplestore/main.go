@@ -21,8 +21,8 @@ var (
 	dbPath string
 )
 
-// User is a single account entry in the daemon config. Passwords are stored in
-// plaintext, so the config file must be tightly permissioned.
+// User is a single account entry in the triplestore config. Passwords are
+// stored in plaintext, so the config file must be tightly permissioned.
 type User struct {
 	Username string
 	Password string
@@ -31,10 +31,11 @@ type User struct {
 	Role string
 }
 
-// DaemonConfig is the full tie-daemon configuration, loaded from TOML. It holds
-// both the server settings and the list of accounts allowed to authenticate.
-// Access management is done by editing this file, not through the wire protocol.
-type DaemonConfig struct {
+// TripleStoreConfig is the full tie-triplestore configuration, loaded from TOML.
+// It holds both the server settings and the list of accounts allowed to
+// authenticate. Access management is done by editing this file, not through the
+// wire protocol.
+type TripleStoreConfig struct {
 	ListenOn string
 	Insecure bool
 	CertFile string
@@ -51,7 +52,7 @@ type DaemonConfig struct {
 	Users                 []User
 	// AnonymousAccess is the role granted to a request with no valid credentials:
 	// "none" (require auth for everything), "read", or "write". Empty defaults to
-	// "none", preserving the daemon's always-authenticated behavior.
+	// "none", preserving the always-authenticated behavior.
 	AnonymousAccess string
 	// ReverseRelations is the default set of relations (value1) indexed in
 	// reverse for every collection. Empty falls back to defaultReverseRelations
@@ -83,19 +84,19 @@ type CollectionConfig struct {
 // existing data after one restart.
 var defaultReverseRelations = []string{"tag", "path", "parent", "tie-type", "version-of"}
 
-func defaultConfig() DaemonConfig {
-	return DaemonConfig{
+func defaultConfig() TripleStoreConfig {
+	return TripleStoreConfig{
 		ListenOn: ":1161",
 	}
 }
 
 func main() {
-	var configPath = flag.String("config", "tie-daemon.toml", "Path to TOML config file.")
+	var configPath = flag.String("config", "tie-triplestore.toml", "Path to TOML config file.")
 	var showVersion = flag.Bool("version", false, "Print version and exit.")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `tie daemon
+		fmt.Fprintf(os.Stderr, `tie triplestore
 -----------------------------
 Configuration (server settings and user accounts) is read from a TOML file.
 `)
@@ -104,7 +105,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("tie-daemon", version.String())
+		fmt.Println("tie-triplestore", version.String())
 		return
 	}
 

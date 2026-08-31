@@ -1,6 +1,6 @@
 # tie-client
 
-A pure-Python client and CLI for the [`tie`](../) triple-store (`tie-daemon`)
+A pure-Python client and CLI for the [`tie`](../) triple-store (`tie-triplestore`)
 and content-addressed blob store (`tie-filehost`). No third-party
 dependencies — it uses only the standard library (`urllib`, `tomllib`, `ssl`,
 `zipfile`, `struct`) and targets Python **3.11+**.
@@ -58,7 +58,7 @@ audio-dir = '{artist}/{album}'
 
 Key fields:
 
-- **`Webservice`** / **`WebserviceInsecure`** — daemon URL; `Insecure` is
+- **`Webservice`** / **`WebserviceInsecure`** — triplestore URL; `Insecure` is
   `InsecureSkipVerify` for HTTPS (does not swap the scheme).
 - **`FileHosts.<name>`** — blob stores, keyed by name. `DefaultFileHosts[0]`
   is used when no `--host` is given. `Username`/`Password` ride every filehost
@@ -260,7 +260,7 @@ with a real message).
 |--------|----------------|
 | `client.py` | `TieClient` core: triples, queries, batches, file up/download; value types (`Row`, `QuerySpec`, `Update`, `Batch`, `TaggedFile`, `VersionInfo`, `MediaRelation`). |
 | `highlevel.py` | Tag/dir/import/version/favorite/cotag/relation methods bound onto `TieClient` at import. |
-| `transport.py` | `DaemonClient` — `POST {webservice}/{Id}` with Basic Auth, retry+backoff, NDJSON streaming for `Dump`. |
+| `transport.py` | `TripleStoreClient` — `POST {webservice}/{Id}` with Basic Auth, retry+backoff, NDJSON streaming for `Dump`. |
 | `filehost.py` | `FilehostClient` — `PUT /upload`, blob GET, recursive dir up/download, retention. |
 | `config.py` | `Config`/`FileHost` model, TOML load (stdlib `tomllib`) + hand-rolled writer, search paths. |
 | `vocab.py` | Wire vocabulary: `Relation`, `TieType`, archive/dir type sets, `tie:` scheme, tag-date format. |
@@ -275,7 +275,7 @@ with a real message).
 These are load-bearing for cross-client compatibility — change them only in
 lockstep with the Go side:
 
-- **Daemon request envelopes** match the JSON field casing of each `api/*.go`
+- **Triplestore request envelopes** match the JSON field casing of each `api/*.go`
   request type exactly (some fields PascalCase, some lowercase-tagged).
 - **`tiedir-v2` manifest bytes** (`tiedir.py`) are byte-identical to
   `metadata/tiedir.go` — that identity is what makes identical directory trees
@@ -291,7 +291,7 @@ cd python
 python -m pytest                       # unit tests always run
 ```
 
-`tests/test_e2e.py` runs against a live test-env (daemon `:2161`,
+`tests/test_e2e.py` runs against a live test-env (triplestore `:2161`,
 filehost `:2162`) and **skips automatically** when the servers are unreachable.
 To exercise it, start the sandbox first:
 

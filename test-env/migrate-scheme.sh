@@ -5,7 +5,7 @@
 # other triple is preserved verbatim.
 #
 # Mechanism: dump the collection, rewrite the path values, then `restore --drop`
-# to overwrite the collection with the rewritten data. The daemon must be
+# to overwrite the collection with the rewritten data. The triplestore must be
 # running (dump/restore go through it). Run once per collection you have — the
 # collection is the one named in the given tie CLI config (Namespace/Collection).
 #

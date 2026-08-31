@@ -1,4 +1,4 @@
-"""End-to-end tests against a running test-env (daemon :2161, filehost :2162).
+"""End-to-end tests against a running test-env (triplestore :2161, filehost :2162).
 
 Skipped automatically when the servers are not reachable. Run test-env first:
     cd test-env && ./build.sh && ./start.sh
@@ -55,7 +55,7 @@ def test_triple_round_trip():
     tie.delete("py:e2e:key", "py:e2e:rel", "py:e2e:val")
     tie.sync()
     # After deleting the only triple, the subject lingers with empty attributes
-    # (matching the Go daemon's Expand), so the relation/value must be gone but
+    # (matching the Go triplestore's Expand), so the relation/value must be gone but
     # the call need not raise NotFound.
     try:
         row = tie.get("py:e2e:key")

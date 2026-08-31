@@ -30,8 +30,8 @@ dist/*
 
 /tie
 cmd/tie/tie
-cmd/tie-daemon/tie-daemon
-cmd/tie-daemon/authentication
+cmd/tie-triplestore/tie-triplestore
+cmd/tie-triplestore/authentication
 cmd/tie-download/tie-download
 cmd/tie-upload/tie-upload
 cmd/tie-filehost/tie-filehost

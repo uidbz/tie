@@ -10,11 +10,11 @@
 		<name>Proxy Maintainers</name>
 	</maintainer>
 	<longdescription lang="en">
-		tie is a client for a triple-store (tie-daemon) plus a content-addressed
-		blob store (tie-filehost). The CLI uploads and downloads files, tags
-		them, imports directory trees, and mounts collections as a FUSE
-		filesystem. This package installs the tie CLI along with the tie-daemon
-		and tie-filehost servers and their service files.
+		tie is a client for a triple-store (tie-triplestore) plus a
+		content-addressed blob store (tie-filehost). The CLI uploads and
+		downloads files, tags them, imports directory trees, and mounts
+		collections as a FUSE filesystem. This package installs the tie CLI along
+		with the tie-triplestore and tie-filehost servers and their service files.
 	</longdescription>
 	<use>
 		<flag name="fuse">

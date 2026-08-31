@@ -1,7 +1,7 @@
 # tie test environment
 
 A local sandbox for running the full `tie` stack end to end: the triple-store
-daemon, the content-addressed filehost, some sample data, and FUSE mounts.
+server, the content-addressed filehost, some sample data, and FUSE mounts.
 Everything runs on localhost over plain HTTP — no TLS, no external services.
 
 ## Requirements
@@ -15,7 +15,7 @@ Everything runs on localhost over plain HTTP — no TLS, no external services.
 ```bash
 cd test-env     # from the repo root
 ./build.sh      # compile the tie binaries into ./bin
-./start.sh      # launch the daemon (:2161) and filehost (:2162)
+./start.sh      # launch the triplestore (:2161) and filehost (:2162)
 ./seed.sh       # upload + tag sample files and a directory
 ./mount-db.sh   # mount the live tag-derived filesystem at ./mnt
 ```
@@ -38,8 +38,8 @@ tear it all down at the end.
 
 | Script          | What it does |
 |-----------------|--------------|
-| `build.sh`      | Build `tie`, `tie-daemon`, `tie-filehost` into `bin/`. |
-| `start.sh`      | Start the daemon and filehost in the background (insecure HTTP), wait until both accept connections. |
+| `build.sh`      | Build `tie`, `tie-triplestore`, `tie-filehost` into `bin/`. |
+| `start.sh`      | Start the triplestore and filehost in the background (insecure HTTP), wait until both accept connections. |
 | `stop.sh`       | Unmount `mnt/` if mounted, then stop both services. |
 | `seed.sh`       | Create sample files, upload their bytes to the filehost, and write the tag triples the DB mount reads. |
 | `mount-db.sh`   | Mount the live, tag-derived filesystem at `mnt/` (foreground; Ctrl-C to unmount). |
@@ -96,7 +96,7 @@ at a config with a different `Collection` value.
 
 ## How it's wired
 
-- **Daemon** (`tie-daemon`, `:2161`) — the triple store. Data in `db/`. It
+- **Triplestore** (`tie-triplestore`, `:2161`) — the triple store. Data in `db/`. It
   auto-creates the user `defaultuser` / `defaultpassword`, which is what
   `config.toml` authenticates as.
 - **Filehost** (`tie-filehost`, `:2162`) — content-addressed blob store. Data
@@ -111,7 +111,7 @@ at a config with a different `Collection` value.
 | Path            | Contents |
 |-----------------|----------|
 | `bin/`          | Built binaries. |
-| `db/`           | Daemon triple-store state. |
+| `db/`           | Triplestore state. |
 | `data/`         | Filehost content-addressed blobs. |
 | `mnt/`          | FUSE mountpoint. |
 | `sample-files/` | Generated inputs for `seed.sh`. |

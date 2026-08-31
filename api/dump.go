@@ -35,7 +35,7 @@ func (request *DumpRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 }
 
 // StreamReply writes every forward triple as NDJSON (one JSON StringTriple per
-// line) straight to w, so the daemon never buffers the whole collection. It
+// line) straight to w, so the server never buffers the whole collection. It
 // drops the ReplyStatus envelope the buffered Reply carries — Dump always
 // succeeds, and auth/not-found failures happen before any body byte is written.
 func (request *DumpRequest) StreamReply(env *ws.Environment, w io.Writer) error {

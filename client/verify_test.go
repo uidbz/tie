@@ -7,14 +7,14 @@ import (
 	"github.com/uidbz/tie/metadata"
 )
 
-// verify_test.go exercises Verify and RepairOrphans against a real daemon
+// verify_test.go exercises Verify and RepairOrphans against a real triplestore
 // (test-env/start.sh), using the isolated "testing" collection. Each test
 // drops the collection first so it runs against a known-empty tree regardless
-// of what other tests left behind. The daemon must be current (the tests build
-// a path tree with ImportDir and depend on the MissingRelation-free reverse
-// tie-type queries Verify uses).
+// of what other tests left behind. The triplestore must be current (the tests
+// build a path tree with ImportDir and depend on the MissingRelation-free
+// reverse tie-type queries Verify uses).
 
-// verifyTestConfig returns a Config bound to the test-env daemon/filehost
+// verifyTestConfig returns a Config bound to the test-env triplestore/filehost
 // (2161/2162) and the isolated "testing" collection, so these tests neither
 // touch the operator's live Main collection nor require system services on
 // 1161/1162. Set TIE_TEST_WEBSERVICE / TIE_TEST_FILEHOST to override.
@@ -22,9 +22,9 @@ func verifyTestConfig() Config {
 	c := TestingConfig()
 	c.Collection = "verifytesting"
 	if ws := os.Getenv("TIE_TEST_WEBSERVICE"); ws != "" {
-		c.Webservice = ws
+		c.TripleStoreURL = ws
 	} else {
-		c.Webservice = "http://localhost:2161"
+		c.TripleStoreURL = "http://localhost:2161"
 	}
 	fh := "http://localhost:2162"
 	if h := os.Getenv("TIE_TEST_FILEHOST"); h != "" {
@@ -36,7 +36,7 @@ func verifyTestConfig() Config {
 }
 
 // freshVerifyClient returns a client bound to an empty "verifytesting"
-// collection on the test-env daemon.
+// collection on the test-env triplestore.
 func freshVerifyClient(t *testing.T) *TieClient {
 	t.Helper()
 	tie := NewTieClient(verifyTestConfig())

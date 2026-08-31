@@ -1,7 +1,7 @@
 # Running tie-filehost: disk layout and backup
 
 This guide covers how to lay out storage for a `tie-filehost` deployment and how
-to back it up, plus a companion section on backing up the `tie-daemon`
+to back it up, plus a companion section on backing up the `tie-triplestore`
 triple-store. It is written for a production host, not the `test-env` sandbox.
 
 Two facts about the filehost drive everything here:
@@ -140,23 +140,23 @@ Having the *bytes* on the backup server is independent from being able to
 the backup host pointed at the received/mirrored blob root. Keep that as a
 separate decision — the backup's job is durability first.
 
-## Daemon triple-store (a separate backup concern)
+## Triple-store (a separate backup concern)
 
-The filehost holds the *bytes*; the `tie-daemon` triple-store holds everything
+The filehost holds the *bytes*; the `tie-triplestore` triple-store holds everything
 *about* them — filenames, tags, the virtual directory tree, relations. Losing it
 loses all of that even if every blob survives. Back it up separately.
 
-The daemon's on-disk model differs from the filehost's in a way that changes the
+The triplestore's on-disk model differs from the filehost's in a way that changes the
 backup strategy:
 
 - Its data lives under `DbPath` as `<namespace>/<collection>.tie` — one file per
-  collection, made of fixed-width records the daemon **appends to and rewrites
+  collection, made of fixed-width records the server **appends to and rewrites
   in place** (`tiedb/tietree.go`, `tiedb/filehandling.go`). These files are
   *mutable*, so the filehost's `rsync --size-only` shortcut is **not** safe here:
   a file's contents can change at record boundaries without a size delta.
-- On load the daemon trims a partial trailing record left by a crash mid-write
+- On load the server trims a partial trailing record left by a crash mid-write
   (`openDB` in `filehandling.go`), and it `Sync()`s on idle close. So a copy
-  taken while the daemon runs is still *openable* — but not guaranteed to be a
+  taken while the server runs is still *openable* — but not guaranteed to be a
   clean point-in-time image.
 
 You have three options, in increasing order of guarantee:
@@ -165,19 +165,19 @@ You have three options, in increasing order of guarantee:
    TSV and `tie restore` reads it back; `test-env/backup.sh` wraps both. This is
    engine-independent — it survives on-disk-format changes and is trivial to
    inspect or diff — but it is a full logical export each run, not incremental.
-   Best for periodic archival snapshots and for migrating between daemon
+   Best for periodic archival snapshots and for migrating between triplestore
    versions.
-2. **File-level mirror while running.** `contrib/backup/daemon-db-backup.sh`
+2. **File-level mirror while running.** `contrib/backup/triplestore-db-backup.sh`
    rsyncs `DbPath`. It deliberately does *not* use `--size-only`; it compares by
    mtime+size, or by full checksum with `TIE_DB_CHECKSUM=1`. Good enough for a DR
    copy given the crash-trimming behavior above, but the image is not strictly
    point-in-time.
 3. **Filesystem snapshot (strongest, online).** If `DbPath` is on BTRFS or LVM,
    snapshot it and back up the snapshot — the snapshot is crash-consistent, and
-   the daemon's partial-record trimming makes that consistent state loadable.
+   the server's partial-record trimming makes that consistent state loadable.
    This is the same approach the filehost uses; you can extend
    `btrfs-send-backup.sh` to a second subvolume for `DbPath`. For an offline,
-   perfectly clean image, stop the daemon briefly and copy `DbPath`.
+   perfectly clean image, stop the server briefly and copy `DbPath`.
 
 Recommendation: run the **logical dump** on a schedule for portability and
 easy inspection, and additionally take a **filesystem snapshot** (or the
@@ -187,7 +187,7 @@ file-level mirror on non-snapshotting hosts) for fast full-state recovery.
 # Nightly logical dump, kept alongside other backups.
 0 3 * * *  cd /opt/tie/test-env && ./backup.sh dump /var/backups/tie/db-$(date -u +\%Y\%m\%d).tsv
 # Nightly file-level mirror of DbPath to the backup host (non-snapshot hosts).
-15 3 * * * /opt/tie/contrib/backup/daemon-db-backup.sh >> /var/log/tie-db-backup.log 2>&1
+15 3 * * * /opt/tie/contrib/backup/triplestore-db-backup.sh >> /var/log/tie-db-backup.log 2>&1
 ```
 
 Note `test-env/backup.sh` is wired to the sandbox's `config.toml`; on a

@@ -14,7 +14,7 @@ import (
 )
 
 // Debug and Info are thin wrappers kept for existing call sites; they forward
-// to the process slog logger (which tie-daemon/tie-filehost point at a log file
+// to the process slog logger (which tie-triplestore/tie-filehost point at a log file
 // plus pretty stderr). Diagnostics stay off stdout — stdout is data.
 func Debug(value string) { slog.Debug(value) }
 

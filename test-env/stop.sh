@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the daemon and filehost, and unmount the FUSE mount if present.
+# Stop the triplestore and filehost, and unmount the FUSE mount if present.
 set -uo pipefail
 source "$(dirname "$0")/env.sh"
 
@@ -22,5 +22,5 @@ stop_one() { # name pidfile
 }
 
 stop_one "tie-filehost" "$TIE_FILEHOST_PID"
-stop_one "tie-daemon"   "$TIE_DAEMON_PID"
+stop_one "tie-triplestore" "$TIE_TRIPLESTORE_PID"
 echo "Done."

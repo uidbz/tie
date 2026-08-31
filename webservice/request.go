@@ -23,7 +23,7 @@ type RequestInterface interface {
 // StreamingRequestInterface is an optional interface a request may implement to
 // write its reply directly to the response writer (e.g. NDJSON, one record per
 // line) instead of returning a fully-buffered Reply. AnswerRequest prefers this
-// path when present, so neither the daemon nor the client materializes the whole
+// path when present, so neither the server nor the client materializes the whole
 // reply in memory. Once the first byte is written the HTTP status is committed,
 // so a mid-stream error cannot change it (it can only be logged).
 type StreamingRequestInterface interface {

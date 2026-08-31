@@ -271,14 +271,14 @@ A collection now carries `reverseRelations map[string]bool`:
 Wiring: `TieTree.SetDefaultReverseRelations` sets a DB-wide default that
 `initialize` copies into each new `Collection` (via `Collection.SetReverseRelations`);
 `WebserviceConfig.ReverseRelations` plumbs it through `NewWebservice`. The
-`tie-daemon` sets `{"tag", "path", "parent"}`.
+`tie-triplestore` sets `{"tag", "path", "parent"}`.
 
 Effect: on a store with K metadata relations per item where only one is queried
 in reverse, reverse-index nodes drop toward 1/K of the full set — e.g. 4
 relations per file with a `tag`-only allowlist cut reverse nodes to ~25% of the
 full index in a synthetic test.
 
-Trade-off: on `tie-daemon`, generic reverse queries (`tie get -r <x>`, and the
+Trade-off: on `tie-triplestore`, generic reverse queries (`tie get -r <x>`, and the
 include/exclude tag algebra in `QueryTags`) resolve only for whitelisted
 relations. Collections that never set an allowlist keep full reverse generality.
 

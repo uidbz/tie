@@ -2,9 +2,9 @@ Username = 'defaultuser'
 Password = 'defaultpassword'
 Namespace = 'Collections'
 Collection = 'Main'
-# DaemonURL is the tie-daemon endpoint (was named Webservice; the old key is
+# TripleStoreURL is the tie-triplestore endpoint (the old Webservice key is
 # still honored for backward compatibility).
-DaemonURL = 'http://localhost:2161'
+TripleStoreURL = 'http://localhost:2161'
 DefaultFileHosts = ['default']
 PrevVersions = 3
 
@@ -26,7 +26,7 @@ non-vacation-outdoors = 'outdoors -vacation'
 # Multiple collections in one config. Select one with `tie -c <name>` (the -c
 # short flag now means --collection; use -C/--config for the config file).
 # DefaultCollection picks the one used when -c is omitted. Each entry may
-# override the top-level DaemonURL / Namespace / credentials / FileHosts; unset
+# override the top-level TripleStoreURL / Namespace / credentials / FileHosts; unset
 # fields fall back to the top-level values above.
 #
 # DefaultCollection = 'images'
@@ -37,7 +37,7 @@ non-vacation-outdoors = 'outdoors -vacation'
 # FileHosts = ['media-ssd']
 #
 # [Collections.archive]
-# DaemonURL = 'http://archive-box:2161'   # a collection on another daemon
+# TripleStoreURL = 'http://archive-box:2161'   # a collection on another triplestore
 # Namespace = 'Cold'
 # Collection = 'archive'
 # FileHosts = ['media-hdd']

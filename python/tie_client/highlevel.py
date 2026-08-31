@@ -1074,7 +1074,7 @@ TieClient.unregister_favorite = unregister_favorite
 def cotags_for_query(self: TieClient, include: list[str], exclude: list[str], scope: str) -> list[str]:
     body = self._envelope("CoTags")
     body.update({"terms": include, "exclude": exclude or [], "scope": scope})
-    reply = self._daemon.run("CoTags", body)
+    reply = self._triplestore.run("CoTags", body)
     from .client import _check
     _check(reply)
     return reply.get("tags") or []

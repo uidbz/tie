@@ -1,5 +1,5 @@
 [Unit]
-Description=tie triple-store daemon
+Description=tie triple-store server
 Documentation=https://github.com/uidbz/tie
 After=network-online.target
 Wants=network-online.target
@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 User=tie
 Group=tie
-ExecStart=/usr/local/bin/tie-daemon -config /etc/tie/tie-daemon.toml
+ExecStart=/usr/local/bin/tie-triplestore -config /etc/tie/tie-triplestore.toml
 Restart=on-failure
 RestartSec=5s
 
@@ -16,7 +16,7 @@ RestartSec=5s
 StateDirectory=tie
 WorkingDirectory=/var/lib/tie
 
-# Hardening. The daemon only needs to read its config and write its data dir.
+# Hardening. The server only needs to read its config and write its data dir.
 NoNewPrivileges=true
 PrivateTmp=true
 PrivateDevices=true

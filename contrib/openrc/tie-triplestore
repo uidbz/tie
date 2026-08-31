@@ -1,9 +1,9 @@
 #!/sbin/openrc-run
 
-description="tie triple-store daemon"
+description="tie triple-store server"
 
-command="/usr/local/bin/tie-daemon"
-command_args="-config /etc/tie/tie-daemon.toml"
+command="/usr/local/bin/tie-triplestore"
+command_args="-config /etc/tie/tie-triplestore.toml"
 command_user="tie:tie"
 
 supervisor="supervise-daemon"

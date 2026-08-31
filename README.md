@@ -43,8 +43,8 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 
 | Program        | What it does |
 |----------------|--------------|
-| `tie-daemon`   | Web service exposing a tie triple store over HTTP. |
-| `tie`          | CLI client for a `tie-daemon`: add/get/delete triples, import & tag files, upload/download, dump/restore, and mount. |
+| `tie-triplestore` | Web service exposing a tie triple store over HTTP. |
+| `tie`          | CLI client for a `tie-triplestore`: add/get/delete triples, import & tag files, upload/download, dump/restore, and mount. |
 | `tie-filehost` | Content-addressed file server. Stores file bytes and immutable directory (`tiedir`) blobs, addressed by highwayhash. |
 
 ## Packages
@@ -52,9 +52,9 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | Package       | What it does |
 |---------------|--------------|
 | `tiedb`       | In-memory triple store, persisted to disk. See [docs/internals.md](docs/internals.md) for its data structures, file format, and memory model. |
-| `client`      | Talks to a `tie-daemon`; also the tagging / virtual-directory layer. |
+| `client`      | Talks to a `tie-triplestore`; also the tagging / virtual-directory layer. |
 | `api`         | Request/reply types shared by client and server. |
-| `webservice`  | HTTP transport and auth for the daemon. |
+| `webservice`  | HTTP transport and auth for the triplestore. |
 | `metadata`    | The `tiedir` directory-blob format (headers, entry lines, media-type detection). |
 | `io/putlib`   | Upload files to a `tie-filehost`. |
 | `io/getlib`   | Download files from a `tie-filehost`. |
@@ -207,11 +207,11 @@ collection — see [Multiple collections](#multiple-collections) below.)
 
 ### Filehosts and config
 
-`tie` connects to a `tie-daemon` (the `DaemonURL`) and one or more
+`tie` connects to a `tie-triplestore` (the `TripleStoreURL`) and one or more
 `tie-filehost` servers. Filehosts are named in config:
 
 ```toml
-DaemonURL = 'http://localhost:1161'   # was 'Webservice'; the old key still works
+TripleStoreURL = 'http://localhost:1161'   # legacy 'Webservice' key still works
 DefaultFileHosts = ['default']
 
 [FileHosts.default]
@@ -226,10 +226,10 @@ Insecure = false   # true skips TLS certificate verification (self-signed certs)
 
 One config can address several collections. Select one with `tie -c <name>`;
 `DefaultCollection` is used when `-c` is omitted. Each entry may override the
-top-level daemon, namespace, credentials, and filehosts:
+top-level triplestore, namespace, credentials, and filehosts:
 
 ```toml
-DaemonURL = 'http://localhost:1161'
+TripleStoreURL = 'http://localhost:1161'
 DefaultCollection = 'images'
 
 [Collections.images]
@@ -238,7 +238,7 @@ Collection = 'images'
 FileHosts = ['media-ssd']
 
 [Collections.archive]
-DaemonURL = 'http://archive-box:1161'   # a collection on another daemon
+TripleStoreURL = 'http://archive-box:1161'   # a collection on another triplestore
 Namespace = 'Cold'
 Collection = 'archive'
 FileHosts = ['media-hdd']
@@ -311,14 +311,14 @@ merges rather than replaces. Point `-c` at a config with a different collection
 to copy data between collections.
 
 `tie dump --file <path.tie>` exports directly from an on-disk `.tie` file
-without a running daemon, for offline backup:
+without a running triplestore, for offline backup:
 
 ```sh
 tie dump --file /var/lib/tie/myns/mycol.tie > backup.tsv
 ```
 
 It reflects flushed on-disk state only, so do not run it against a `.tie` file
-that a live `tie-daemon` currently has open — the daemon may hold unflushed
+that a live `tie-triplestore` currently has open — the triplestore may hold unflushed
 writes, and no locking coordinates the two readers.
 
 ## Building
@@ -338,22 +338,22 @@ Common tasks are wrapped in a `Makefile`:
 |---------|--------------|
 | `make build` | Build all commands into `dist/`. |
 | `make install` | Install just the `tie` client into `GOBIN` (rootless). |
-| `make install-server` | Install the client, `tie-daemon`, and `tie-filehost` as system services (systemd/OpenRC). Run as `sudo make install-server`. See [Running as system services](#running-as-system-services). |
+| `make install-server` | Install the client, `tie-triplestore`, and `tie-filehost` as system services (systemd/OpenRC). Run as `sudo make install-server`. See [Running as system services](#running-as-system-services). |
 | `make clean` | Remove `dist/`. |
-| `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-daemon` / `tie-filehost`. |
+| `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-triplestore` / `tie-filehost`. |
 | `make push MSG="message"` | `go get -u . && go mod tidy`, then commit everything and push. |
 | `make release VERSION=<tag>` | Tag `<tag>` and push it (e.g. `make release VERSION=v0.4.0`). |
 
 `push` and `release` require their argument and abort with a usage message if
 it is missing. `make build` embeds the version (from `git describe`, or an
 explicit `VERSION=`) into the binaries, reported by `tie --version`,
-`tie-daemon -version`, and `tie-filehost -version`.
+`tie-triplestore -version`, and `tie-filehost -version`.
 
 Release notes are kept in [CHANGELOG.md](CHANGELOG.md).
 
 ## Deployment
 
-`tie-daemon` (triple store, port 1161) and `tie-filehost` (blob store, port
+`tie-triplestore` (triple store, port 1161) and `tie-filehost` (blob store, port
 1162) are two separate services. They default to plain HTTP (`Insecure = true`)
 with `ListenOn = ":116x"`, which binds **all interfaces** (`0.0.0.0`) — every
 host on your LAN can reach them, unencrypted, over HTTP basic auth. This is
@@ -385,7 +385,7 @@ Role = "write"             # "write" (default) or "read"
 (fully open), `"read"` (anonymous reads, writes need a user), or `"none"` (every
 request needs a valid user):
 
-- **`tie-daemon` defaults to `"none"`** — it has always required a login, and
+- **`tie-triplestore` defaults to `"none"`** — it has always required a login, and
   that is unchanged. Read requests are `Query`/`Expand`/`Associated`/`CoTags`/
   `Dump`; everything else (`Add`/`Delete`/`Set`/`Update`/`Batch`/`Sync`/`Drop`)
   is a write.
@@ -403,7 +403,7 @@ its `[FileHosts.*]` block.
 
 ### Running as system services
 
-The installer builds all three binaries (client, daemon, filehost), creates a
+The installer builds all three binaries (client, triplestore, filehost), creates a
 dedicated `tie` user, lays down config in `/etc/tie/` and data in
 `/var/lib/tie/`, and installs service files for whichever init system is
 detected (systemd or OpenRC):
@@ -412,9 +412,9 @@ detected (systemd or OpenRC):
 sudo make install-server   # or: sudo ./contrib/install.sh
 ```
 
-Then edit `/etc/tie/tie-daemon.toml` (at least the `[[Users]]` account) and
-start the services (`systemctl start tie-daemon tie-filehost`, or
-`rc-service tie-daemon start`). Re-running the installer to upgrade binaries is
+Then edit `/etc/tie/tie-triplestore.toml` (at least the `[[Users]]` account) and
+start the services (`systemctl start tie-triplestore tie-filehost`, or
+`rc-service tie-triplestore start`). Re-running the installer to upgrade binaries is
 safe — existing config is never overwritten. See
 [contrib/README.md](contrib/README.md) for the full reference.
 
@@ -429,6 +429,6 @@ docker run -p 1161:1161 -p 1162:1162 -v tie-data:/data tie
 ```
 
 On first run it generates default configs under `/etc/tie` pointing at the
-`/data` volume (daemon db in `/data/db`, filehost blobs in `/data/data`). Set
-`TIE_USER` / `TIE_PASSWORD` to seed the daemon's initial account, or mount your
+`/data` volume (triplestore db in `/data/db`, filehost blobs in `/data/data`). Set
+`TIE_USER` / `TIE_PASSWORD` to seed the triplestore's initial account, or mount your
 own `/etc/tie` to override the configs entirely.

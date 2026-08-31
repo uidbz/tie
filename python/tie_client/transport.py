@@ -1,4 +1,4 @@
-"""Daemon (triple-store) transport.
+"""Triple-store transport.
 
 Every operation is ``POST {webservice}/{Id}`` with a JSON body and HTTP Basic
 Auth, mirroring webservice/client.go. Transport-level failures are retried up
@@ -28,7 +28,7 @@ def _backoff(attempt: int) -> float:
     return 0.1 * (1 << (attempt - 1))
 
 
-class DaemonClient:
+class TripleStoreClient:
     def __init__(self, server: str, username: str, password: str, insecure: bool = False):
         self.server = server.rstrip("/")
         self._auth = "Basic " + b64encode(f"{username}:{password}".encode()).decode()

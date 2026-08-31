@@ -1,6 +1,6 @@
 # tie
 
-`tie` is a client for a triple-store (`tie-daemon`) plus a content-addressed
+`tie` is a client for a triple-store (`tie-triplestore`) plus a content-addressed
 blob store (`tie-filehost`). The CLI uploads/downloads files, tags them, and
 mounts collections as a FUSE filesystem.
 
@@ -9,7 +9,7 @@ mounts collections as a FUSE filesystem.
 | Path                 | What |
 |----------------------|------|
 | `cmd/tie/`           | CLI (`commands.go` has every subcommand). |
-| `cmd/tie-daemon/`    | Triple-store server. TOML-configured. |
+| `cmd/tie-triplestore/` | Triple-store server. TOML-configured. |
 | `cmd/tie-filehost/`  | Content-addressed blob store. TOML-configured. |
 | `client/`            | `TieClient` — the Go API the CLI and fuselib call. `verify.go` = the `tie verify` consistency check. |
 | `io/fuselib/`        | FUSE. `fuselib.go` = content-addressed mount; `fuselib_db.go` = live tag-derived mount (`--db`). |
@@ -19,12 +19,12 @@ mounts collections as a FUSE filesystem.
 
 ## Running the stack (test-env)
 
-Everything is localhost, plaintext HTTP. Daemon `:1161`, filehost `:1162`.
+Everything is localhost, plaintext HTTP. Triplestore `:1161`, filehost `:1162`.
 
 ```bash
 cd test-env
 ./build.sh        # go build all three binaries into bin/
-./start.sh        # start daemon + filehost, generate their TOML configs if absent
+./start.sh        # start triplestore + filehost, generate their TOML configs if absent
 ./seed.sh         # upload + tag sample files
 ./mount-db.sh     # mount live tag tree at mnt/ (foreground, Ctrl-C to unmount)
 ./stop.sh         # unmount + kill both services
@@ -33,7 +33,7 @@ cd test-env
 - `env.sh` holds all shared paths/ports and the `tie_cli` helper. Source it, then
   use `tie_cli <args>` (it `cd`s into test-env and passes `-C config.toml`).
 - **Both servers are TOML-configured** (`-config <file>`), not flags. `start.sh`
-  generates `tie-daemon.toml` and `tie-filehost.toml` if missing. Both are
+  generates `tie-triplestore.toml` and `tie-filehost.toml` if missing. Both are
   gitignored runtime artifacts; only `config.toml` (the CLI config) is tracked.
 - Filehost config keys: `ListenOn`, `Insecure`, `BlobPath`, `CertFile`/`KeyFile`,
   `ReapInterval` (Go duration; `"0"` disables the expired-blob reaper),
@@ -53,7 +53,7 @@ cd test-env
   blobs per store. Client side: `FileHost.Store` rides uploads as `Tie-Store`,
   so two named `[FileHosts.*]` entries can share a URL but target different
   stores.
-- Daemon config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
+- Triplestore config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
   `MaxConcurrentRequests` (0 = unbounded), `[[Users]]` (Username/Password/Role),
   `AnonymousAccess`, `ReverseRelations`, and `[[Collections]]` overrides — see below.
 - **Access control (both servers).** HTTP Basic Auth with a shared role model in
@@ -64,20 +64,20 @@ cd test-env
   (`"none"`|`"read"`|`"write"`) is the role granted to a request with no valid
   credentials. **Filehost defaults `AnonymousAccess = "write"`** (fully open —
   preserves unauthenticated uploads; opt in by setting `"read"` to lock uploads
-  or `"none"` to lock everything). **Daemon defaults `"none"`** (unchanged
+  or `"none"` to lock everything). **Triplestore defaults `"none"`** (unchanged
   always-authenticated behavior). Passwords are plaintext in config; only the
   wire compare is constant-time (`subtle.ConstantTimeCompare`) — hashing is a
-  deliberate non-goal for now. Daemon read requests: `Dummy`, `Query`, `Expand`,
+  deliberate non-goal for now. Triplestore read requests: `Dummy`, `Query`, `Expand`,
   `Associated`, `CoTags`, `Dump`; every other Id (incl. new ones) is write
   (fail-safe). 401 = missing/failed auth; 403 = valid user, insufficient role.
   Client filehost creds live in `[FileHosts.<name>]` (`Username`/`Password`) and
   ride every request via a Basic-Auth `http.RoundTripper` in
   `client.HTTPClientFor`.
-- **Client config (`client.Config`).** The daemon URL key is `DaemonURL`
+- **Client config (`client.Config`).** The triplestore URL key is `TripleStoreURL`
   (`Webservice` is the deprecated alias; `LoadConfig`→`normalizeConfig` copies
   one into the other). One config can bind several collections via
   `[Collections.<name>]` entries (each may override `Namespace`, `Collection`,
-  `DaemonURL`, `Username`/`Password`, `Insecure`, `FileHosts`; unset fields fall
+  `TripleStoreURL`, `Username`/`Password`, `Insecure`, `FileHosts`; unset fields fall
   back to the top-level values). `DefaultCollection` picks the one used when no
   collection is named. A config with no `[Collections]` is normalized into a
   single synthesized entry from the flat `Namespace`/`Collection`/
@@ -94,10 +94,10 @@ cd test-env
   nothing on collections holding no version records. Add a `[[Collections]]` block
   (`Namespace`, `Collection`, `ReverseRelations`) to override the set for one
   collection. The reverse index is rebuilt from forward triples at collection
-  load time, so a change needs a **daemon restart** to take effect for existing
+  load time, so a change needs a **triplestore restart** to take effect for existing
   data. Trimming the set cuts association memory on metadata-heavy stores; widen
   it per-collection only for the relations a client actually queries in reverse.
-- The daemon's DB load can be slow on a large `db/`, so `start.sh`'s readiness
+- The triplestore's DB load can be slow on a large `db/`, so `start.sh`'s readiness
   loop may run for a while before both ports answer — that's expected.
 
 ## CLI commands
@@ -196,7 +196,7 @@ through it via `dBWriteQueue`/`dBReadQueue`; producers never touch the fd.
   idle-close; holding the fd open is free). `closeDB` signals the writer to drain
   queued writes, `Sync()`, close, and exit — `TieTree.Close()` fans this across
   all live collections.
-- **Graceful shutdown:** the daemon's `ListenAndServe` traps SIGINT/SIGTERM,
+- **Graceful shutdown:** the triplestore's `ListenAndServe` traps SIGINT/SIGTERM,
   `srv.Shutdown()`s the HTTP server (so in-flight handlers finish enqueuing their
   writes) **then** `ws.Close()` → `TieTree.Close()`. Ordering matters: draining
   handlers before closing the DB guarantees no acknowledged write is lost.

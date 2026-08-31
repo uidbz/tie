@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Start the tie-daemon (triple store) and tie-filehost (blob store) in the
+# Start the tie-triplestore (triple store) and tie-filehost (blob store) in the
 # background, both in insecure HTTP mode, on the ports set in env.sh (2161/2162
 # by default — off the systemd defaults so both can run at once). Idempotent-ish:
 # refuses to start if a PID file points at a live process.
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 
-if [[ ! -x "$TIE_BIN/tie-daemon" || ! -x "$TIE_BIN/tie-filehost" ]]; then
+if [[ ! -x "$TIE_BIN/tie-triplestore" || ! -x "$TIE_BIN/tie-filehost" ]]; then
 	echo "Binaries missing. Run ./build.sh first." >&2
 	exit 1
 fi
@@ -18,7 +18,7 @@ is_running() { # $1 = pidfile
 }
 
 # start_one runs a binary in the background from $TIE_ENV, so binaries that
-# resolve config paths relative to the working dir (tie-daemon reads its -config
+# resolve config paths relative to the working dir (tie-triplestore reads its -config
 # as cwd/<name>) find their files. The working dir also holds the db/ and data/
 # subdirs the services write into.
 start_one() { # name binary pidfile logfile args...
@@ -37,11 +37,12 @@ start_one() { # name binary pidfile logfile args...
 	echo "  pid $(cat "$pidfile"), log $logfile"
 }
 
-# The daemon is configured by a TOML file (not flags). Generate it if missing so
-# a fresh checkout works out of the box; an existing file (e.g. with extra users)
-# is left untouched. DbPath is relative to $TIE_ENV, matching start_one's cwd.
-if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
-	cat >"$TIE_DAEMON_CONFIG" <<-EOF
+# The triplestore is configured by a TOML file (not flags). Generate it if
+# missing so a fresh checkout works out of the box; an existing file (e.g. with
+# extra users) is left untouched. DbPath is relative to $TIE_ENV, matching
+# start_one's cwd.
+if [[ ! -f "$TIE_TRIPLESTORE_CONFIG" ]]; then
+	cat >"$TIE_TRIPLESTORE_CONFIG" <<-EOF
 		ListenOn = ":${TIE_WEBSERVICE_PORT}"
 		Insecure = true
 		DbPath = "db"
@@ -54,7 +55,7 @@ if [[ ! -f "$TIE_DAEMON_CONFIG" ]]; then
 		# the built-in default (tag, path, parent, tie-type, version-of).
 		# ReverseRelations = ["tag", "path", "parent", "tie-type", "version-of"]
 
-		# Per-collection override of ReverseRelations (needs a daemon restart):
+		# Per-collection override of ReverseRelations (needs a triplestore restart):
 		# [[Collections]]
 		# Namespace = "Collections"
 		# Collection = "Main"
@@ -74,8 +75,8 @@ if [[ ! -f "$TIE_FILEHOST_CONFIG" ]]; then
 	EOF
 fi
 
-start_one "tie-daemon"   "$TIE_BIN/tie-daemon"   "$TIE_DAEMON_PID"   "$TIE_LOGS/daemon.log" \
-	-config "$(basename "$TIE_DAEMON_CONFIG")"
+start_one "tie-triplestore" "$TIE_BIN/tie-triplestore" "$TIE_TRIPLESTORE_PID" "$TIE_LOGS/triplestore.log" \
+	-config "$(basename "$TIE_TRIPLESTORE_CONFIG")"
 
 start_one "tie-filehost" "$TIE_BIN/tie-filehost" "$TIE_FILEHOST_PID" "$TIE_LOGS/filehost.log" \
 	-config "$(basename "$TIE_FILEHOST_CONFIG")"

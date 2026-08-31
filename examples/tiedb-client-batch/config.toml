@@ -2,7 +2,7 @@ Username = 'defaultuser'
 Password = 'defaultpassword'
 Namespace = 'Examples'
 Collection = 'batch'
-DaemonURL = 'http://localhost:1161'
+TripleStoreURL = 'http://localhost:1161'
 DefaultFileHosts = ['default']
 
 [FileHosts.default]

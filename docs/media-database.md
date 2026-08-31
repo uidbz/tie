@@ -17,7 +17,7 @@ Two stores work together:
   a content hash. Identical content is stored once. A directory is stored as an
   immutable `tiedir` manifest whose own hash changes when its contents change, so
   directories are versioned like git trees.
-- The **triple store** (`tie-daemon`) holds everything *about* those bytes as
+- The **triple store** (`tie-triplestore`) holds everything *about* those bytes as
   `(key, value1, value2)` triples: filenames, sizes, media types, tags, the
   virtual directory tree, and relations between media items. Files are referenced
   here by their content hash — the hash is the identity of a media item.
@@ -31,14 +31,14 @@ your config). Use separate collections to keep unrelated libraries apart.
 
 ## Setup
 
-You need a running `tie-daemon` and at least one `tie-filehost`, plus a config
+You need a running `tie-triplestore` and at least one `tie-filehost`, plus a config
 that points the `tie` CLI at both. The `test-env/` directory has scripts that
 stand up a local, insecure pair for experimentation:
 
 ```sh
 cd test-env
-./build.sh      # build tie, tie-daemon, tie-filehost into ./bin
-./start.sh      # start daemon (:1161) and filehost (:1162), generate configs
+./build.sh      # build tie, tie-triplestore, tie-filehost into ./bin
+./start.sh      # start triplestore (:1161) and filehost (:1162), generate configs
 ```
 
 For a real setup, write a config with `tie conf create` and edit it:
@@ -48,7 +48,7 @@ Username   = 'you'
 Password   = 'secret'
 Namespace  = 'Collections'
 Collection = 'Media'                 # your library lives here
-Webservice = 'https://localhost:1161'
+TripleStoreURL = 'https://localhost:1161'
 DefaultFileHosts = ['default']
 
 [FileHosts.default]

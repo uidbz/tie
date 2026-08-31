@@ -1,4 +1,4 @@
-// Package auth provides the role-based access model shared by tie-daemon and
+// Package auth provides the role-based access model shared by tie-triplestore and
 // tie-filehost: read/write roles, per-request access classification, and HTTP
 // Basic Auth resolution with constant-time password comparison.
 //

@@ -1,4 +1,4 @@
-// Package tielog installs the process-wide slog logger used by tie-daemon and
+// Package tielog installs the process-wide slog logger used by tie-triplestore and
 // tie-filehost. It fans every record out to two sinks at once: structured JSON
 // appended to a log file (for machine parsing / retention) and a pretty,
 // optionally colored line on stderr (for a human watching the console). stdout

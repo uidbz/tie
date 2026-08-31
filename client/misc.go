@@ -23,7 +23,7 @@ func TestingConfig() Config {
 	config := defaultConfig
 	config.Namespace = "testing"
 	config.Collection = "testing"
-	config.Webservice = "http://localhost:1161"
+	config.TripleStoreURL = "http://localhost:1161"
 	config.FileHosts = map[string]FileHost{"default": {URL: "http://localhost:1162"}}
 	return config
 }
@@ -82,14 +82,14 @@ func LoadConfig(configName string) (Config, error) {
 
 // normalizeConfig applies backward-compatible defaults after decode so the rest
 // of the client has a single uniform view: the deprecated Webservice field maps
-// to DaemonURL (and vice versa), and a config with no [Collections] gets one
-// synthesized from the flat Namespace/Collection/DefaultFileHosts fields.
+// to TripleStoreURL (and vice versa), and a config with no [Collections] gets
+// one synthesized from the flat Namespace/Collection/DefaultFileHosts fields.
 func normalizeConfig(c *Config) {
-	if c.DaemonURL == "" {
-		c.DaemonURL = c.Webservice
+	if c.TripleStoreURL == "" {
+		c.TripleStoreURL = c.Webservice
 	}
 	if c.Webservice == "" {
-		c.Webservice = c.DaemonURL
+		c.Webservice = c.TripleStoreURL
 	}
 	if len(c.Collections) == 0 {
 		name := c.Collection
@@ -146,7 +146,7 @@ func SaveConfig(name string, config Config) error {
 
 func (tc *TieClient) PrintState() {
 	if tc.Config.verbose {
-		fmt.Println("Using daemon:", tc.active.DaemonURL)
+		fmt.Println("Using triplestore:", tc.active.TripleStoreURL)
 		fmt.Println("Current namespace/collection is " + tc.active.Namespace + "/" + tc.active.Collection)
 	}
 }

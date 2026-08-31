@@ -6,6 +6,18 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed the `tie-daemon` server to `tie-triplestore`.** The binary,
+  `cmd/` directory, config file (`tie-triplestore.toml`), and service units
+  (`tie-triplestore.service`, `openrc/tie-triplestore`) all follow the new name,
+  which describes what the process *is* (the HTTP triple-store server) and mirrors
+  its sibling `tie-filehost`. The client config key `DaemonURL` is renamed to
+  **`TripleStoreURL`**; the older `Webservice` key is still honored as a
+  deprecated alias, but the short-lived `DaemonURL` key is removed. Update any
+  service files, config keys, and the `TIE_TRIPLESTORE_DB` backup env var
+  accordingly.
+
 ### Added
 
 - **`tie verify` — a consistency check (fsck) for the virtual file tree.** Scans

@@ -1,6 +1,6 @@
 ROOT    := $(CURDIR)
 DIST    := $(ROOT)/dist
-CMDS    := tie tie-daemon tie-filehost
+CMDS    := tie tie-triplestore tie-filehost
 
 # Version embedded in the binaries. Defaults to the current git description
 # (nearest tag + commits-since), overridable with `make build VERSION=v0.4.0`.
@@ -24,13 +24,13 @@ build:
 install:
 	go install -ldflags "$(LDFLAGS)" ./cmd/tie
 
-# Install the full stack — client, daemon, and filehost — plus system services
+# Install the full stack — client, triplestore, and filehost — plus system services
 # (systemd/OpenRC). Requires root, so run as `sudo make install-server`.
 # See contrib/install.sh and contrib/README.md.
 install-server:
 	./contrib/install.sh
 
-# Generate a self-signed localhost certificate for tie-daemon / tie-filehost.
+# Generate a self-signed localhost certificate for tie-triplestore / tie-filehost.
 # Copy localhost.crt to clients and trust it there.
 tls-keys:
 	openssl req -newkey rsa:2048 -nodes -keyout localhost.key -x509 -days 3650 \

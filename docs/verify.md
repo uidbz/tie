@@ -151,5 +151,5 @@ what matters for reachability.
 - `cmd/tie/commands.go` — the `cmdVerify` command and report rendering.
 - `cmd/tie-filehost/routes.go` + `main.go` — the `HEAD /{hash}` route and
   `StatHandler`.
-- `client/verify_test.go` — integration tests against the test-env daemon
+- `client/verify_test.go` — integration tests against the test-env triplestore
   (clean tree, orphaned file, orphaned dir subtree, missing metadata, cycle).

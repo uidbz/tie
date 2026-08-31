@@ -1522,7 +1522,7 @@ func (tie *TieClient) UntaggedFiles(scope string, offset, limit int) ([]TaggedFi
 
 // untaggedOfType returns the untagged items of one tie-type via a reverse
 // tie-type query with the server-side MissingRelation="tag" predicate, so the
-// daemon returns only rows lacking a tag. The server paginates via offset/limit.
+// server returns only rows lacking a tag. The server paginates via offset/limit.
 func (tie *TieClient) untaggedOfType(scope string, offset, limit int) ([]TaggedFile, int, error) {
 	rows, total, err := tie.Query(QuerySpec{
 		Terms:           []string{scope},

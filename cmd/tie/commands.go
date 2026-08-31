@@ -278,7 +278,7 @@ func cmdDump() *cli.Command {
 			&cli.StringFlag{
 				Name:    "file",
 				Aliases: []string{"f"},
-				Usage:   "Read triples directly from a local .tie file instead of the server (offline export; do not use against a file a running daemon has open)",
+				Usage:   "Read triples directly from a local .tie file instead of the server (offline export; do not use against a file a running server has open)",
 			},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
@@ -312,7 +312,7 @@ func cmdDump() *cli.Command {
 // dumpLocalFile reads every forward triple straight from an on-disk .tie file,
 // bypassing the server, and streams each as a TSV record to w (no in-memory
 // buffering of the whole collection). It reflects flushed on-disk state only,
-// so it is meant for offline export when no daemon holds the file open.
+// so it is meant for offline export when no server holds the file open.
 func dumpLocalFile(path string, w *csv.Writer) error {
 	if !strings.HasSuffix(path, ".tie") {
 		return fmt.Errorf("not a .tie file: %q", path)

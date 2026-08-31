@@ -24,7 +24,7 @@ type TieTree struct {
 	// overriding defaultReverseRelations. A collection present here uses its
 	// listed relations; absent collections fall back to the default. Set once
 	// before collections are created (collections load lazily and apply this at
-	// init time), so changes require a daemon restart.
+	// init time), so changes require a triplestore restart.
 	reverseOverrides map[CollectionKey][]string
 
 	// blobPolicy is applied to every Collection this DB creates. nil keeps the
@@ -81,7 +81,7 @@ func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 // Close flushes and closes every live collection's disk writer, blocking until
 // each has drained its pending writes, synced, and closed its file handle. It is
 // the clean-shutdown counterpart to the periodic sync in dBWriter: call it from
-// a signal handler so a terminating daemon durably persists its tail of writes
+// a signal handler so a terminating server durably persists its tail of writes
 // instead of relying on the kernel to flush the page cache. A no-op in
 // memory-only mode (collections have no writer goroutine then).
 func (db *TieTree) Close() {
