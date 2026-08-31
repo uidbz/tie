@@ -21,7 +21,7 @@ var ErrNotFound = errors.New("key has no associated values")
 var defaultConfig = Config{
 	Username:         "defaultuser",
 	Password:         "defaultpassword",
-	Webservice:       "http://localhost:1161",
+	DaemonURL:        "http://localhost:1161",
 	Namespace:        "Collections",
 	Collection:       "Main",
 	DefaultFileHosts: []string{"default"},
@@ -99,6 +99,60 @@ func RowHas(r Row, relation, value string) bool {
 type TieClient struct {
 	client *ws.Client
 	Config Config
+	// active is the resolved collection this client operates on (daemon,
+	// namespace, collection id, credentials, filehosts), chosen at construction.
+	active ResolvedCollection
+}
+
+// firstNonEmpty returns the first non-empty string, or "".
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// ResolveCollection resolves a collection name to the concrete daemon,
+// namespace, collection id, credentials and filehosts to use, applying
+// top-level fallbacks for any field the named entry leaves unset. An empty name
+// selects DefaultCollection; a name matching no entry is treated as a bare
+// collection id on the top-level daemon/namespace.
+func (c Config) ResolveCollection(name string) ResolvedCollection {
+	if name == "" {
+		name = c.DefaultCollection
+	}
+	daemon := firstNonEmpty(c.DaemonURL, c.Webservice)
+	entry, ok := c.Collections[name]
+	if !ok {
+		return ResolvedCollection{
+			Namespace:  c.Namespace,
+			Collection: firstNonEmpty(name, c.Collection),
+			DaemonURL:  daemon,
+			Username:   c.Username,
+			Password:   c.Password,
+			Insecure:   c.WebserviceInsecure,
+			FileHosts:  c.DefaultFileHosts,
+		}
+	}
+	user, pass := c.Username, c.Password
+	if entry.Username != "" {
+		user, pass = entry.Username, entry.Password
+	}
+	hosts := entry.FileHosts
+	if len(hosts) == 0 {
+		hosts = c.DefaultFileHosts
+	}
+	return ResolvedCollection{
+		Namespace:  firstNonEmpty(entry.Namespace, c.Namespace),
+		Collection: firstNonEmpty(entry.Collection, name, c.Collection),
+		DaemonURL:  firstNonEmpty(entry.DaemonURL, daemon),
+		Username:   user,
+		Password:   pass,
+		Insecure:   entry.Insecure || c.WebserviceInsecure,
+		FileHosts:  hosts,
+	}
 }
 
 type Config struct {
@@ -107,12 +161,27 @@ type Config struct {
 	Password   string
 	Namespace  string
 	Collection string
+	// Webservice is the daemon URL. Deprecated: use DaemonURL. It is still
+	// honored (LoadConfig copies it into DaemonURL when the latter is empty) so
+	// pre-existing configs keep working.
 	Webservice string
-	// WebserviceInsecure enables TLS InsecureSkipVerify for the Webservice
+	// DaemonURL is the tie-daemon endpoint. It supersedes Webservice; when unset
+	// LoadConfig falls back to Webservice.
+	DaemonURL string
+	// WebserviceInsecure enables TLS InsecureSkipVerify for the daemon
 	// connection (accept self-signed certificates).
 	WebserviceInsecure bool
 	DefaultFileHosts   []string
 	FileHosts          map[string]FileHost
+	// DefaultCollection names the entry in Collections used when no --collection
+	// is given. Empty falls back to the flat Collection field.
+	DefaultCollection string
+	// Collections holds named collection bindings so one config can address
+	// several collections. Each entry may override the top-level daemon,
+	// namespace, credentials and filehosts; unset fields fall back to the
+	// top-level values. When empty, LoadConfig synthesizes a single entry from
+	// the flat Namespace/Collection/DefaultFileHosts fields.
+	Collections map[string]CollectionEntry
 	// ImportDest maps a dir-type name (e.g. "audio-dir") to a virtual-path
 	// template rendered from a directory's aggregated metadata, e.g.
 	// "/music/{artist}/{year}. {album}". When a dir-type has an entry, imports
@@ -145,15 +214,46 @@ func (c Config) Path() string {
 	return c.configPath
 }
 
+// CollectionEntry is one named collection binding in Config.Collections. Every
+// field is optional; an unset field falls back to the top-level Config value
+// during resolution. DefaultRetention, when set, is a Go duration (or
+// "infinite") the client may stamp on uploads for this collection.
+type CollectionEntry struct {
+	Namespace        string
+	Collection       string
+	DaemonURL        string
+	Username         string
+	Password         string
+	Insecure         bool
+	FileHosts        []string
+	DefaultRetention string
+}
+
+// ResolvedCollection is a CollectionEntry with all top-level fallbacks applied:
+// the concrete daemon/namespace/collection/credentials/filehosts to use for one
+// operation.
+type ResolvedCollection struct {
+	Namespace  string
+	Collection string
+	DaemonURL  string
+	Username   string
+	Password   string
+	Insecure   bool
+	FileHosts  []string
+}
+
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
 // (accept self-signed certificates); the scheme lives in URL. Username/Password
 // are optional HTTP Basic Auth credentials sent with every request to a filehost
-// that requires authentication; leave them empty for an open filehost.
+// that requires authentication; leave them empty for an open filehost. Store,
+// when set, names a physical store on a multi-store filehost and rides uploads
+// as the Tie-Store header; leave empty for a single-store filehost.
 type FileHost struct {
 	URL      string
 	Insecure bool
 	Username string
 	Password string
+	Store    string
 }
 
 // basicAuthTransport injects HTTP Basic Auth on every request. Wrapping the
@@ -193,10 +293,20 @@ type TagOptions struct {
 	AddOriginalPath bool
 }
 
+// NewTieClient builds a client for the config's default collection.
 func NewTieClient(config Config) (client *TieClient) {
+	return NewTieClientFor(config, "")
+}
+
+// NewTieClientFor builds a client bound to the named collection (empty selects
+// the default). The transport targets that collection's resolved daemon and
+// credentials.
+func NewTieClientFor(config Config, collection string) (client *TieClient) {
+	active := config.ResolveCollection(collection)
 	client = &TieClient{
 		Config: config,
-		client: ws.NewClient(config.Webservice, config.Username, config.Password, config.WebserviceInsecure),
+		active: active,
+		client: ws.NewClient(active.DaemonURL, active.Username, active.Password, active.Insecure),
 	}
 
 	return client
@@ -233,9 +343,9 @@ func (tc *TieClient) CollectionInfo() api.CollectionInfo {
 
 func (tc *TieClient) collectionInfo(collection string) api.CollectionInfo {
 	if collection == "" {
-		collection = tc.Config.Collection
+		collection = tc.active.Collection
 	}
-	return api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: collection}
+	return api.CollectionInfo{Namespace: tc.active.Namespace, CollectionId: collection}
 }
 
 // run sends a request and returns the typed reply. err is non-nil on transport
@@ -262,7 +372,7 @@ func replyError(status ws.ReplyStatus) error {
 
 // Add a triple to the collection
 func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewAddRequest(key, value1, value2)
 
 	reply, err := run[api.AddReply](tc, request)
@@ -291,7 +401,7 @@ func (tc *TieClient) SyncIn(collection string) error {
 // Get a TripleSet with all triples that are associated with 'key'.
 // Returns ErrNotFound if nothing is associated with the key.
 func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewAssociatedRequest(key)
 
 	reply, err := run[api.AssociatedReply](tc, request)
@@ -382,7 +492,7 @@ func (tc *TieClient) ExpandIn(collection string, keys []string) ([]Row, error) {
 // Set makes (key, relation) hold exactly values, replacing any existing values
 // for that relation in one server-side op. An empty values slice clears it.
 func (tc *TieClient) Set(key, relation string, values []string) error {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewSetRequest(key, relation, values)
 
 	reply, err := run[api.SetReply](tc, request)
@@ -394,7 +504,7 @@ func (tc *TieClient) Set(key, relation string, values []string) error {
 
 // Delete a triple from the collection
 func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewDeleteRequest(key, value1, value2)
 
 	reply, err := run[api.DeleteReply](tc, request)
@@ -406,7 +516,7 @@ func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
 
 // Update a triple in the collection
 func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewUpdateRequest(update)
 
 	reply, err := run[api.UpdateReply](tc, request)
@@ -434,7 +544,7 @@ func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 // is unspecified. If fn returns an error, streaming stops and that error is
 // returned.
 func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewDumpRequest()
 
 	return tc.client.RunStream(request, func(r io.Reader) error {
@@ -474,7 +584,7 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 // access. Unlike Delete (one triple) this discards the whole collection, so it
 // is the destructive setup for an overwriting Restore.
 func (tc *TieClient) DropCollection() error {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewDropRequest()
 
 	reply, err := run[api.DropReply](tc, request)

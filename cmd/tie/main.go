@@ -16,9 +16,9 @@ var tie *client.TieClient
 
 func main() {
 	// Load config before building the command tree so `import` can generate a
-	// subcommand per configured dir-type. The -c/--config flag isn't parsed yet
-	// at this point, so peek it out of os.Args directly.
-	configName := configArg(os.Args)
+	// subcommand per configured dir-type. The global flags aren't parsed yet at
+	// this point, so peek them out of os.Args directly.
+	configName, collection := parseGlobalFlags(os.Args)
 	config, created, err := client.LoadOrCreateConfig(configName)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error opening config file:", err)
@@ -26,7 +26,7 @@ func main() {
 		if created {
 			fmt.Fprintf(os.Stderr, "No config found; created a default at %s\n", config.Path())
 		}
-		tie = client.NewTieClient(config)
+		tie = client.NewTieClientFor(config, collection)
 	}
 
 	cmd := &cli.Command{
@@ -43,7 +43,8 @@ func main() {
 		// the setup one-liner, e.g. `source <(tie completion bash)`.
 		ConfigureShellCompletionCommand: func(c *cli.Command) { c.Hidden = false },
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
+			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
+			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection)"},
 		},
 		Commands: []*cli.Command{
 			cmdAdd(),
@@ -68,23 +69,38 @@ func main() {
 	}
 }
 
-// configArg extracts the value of the global -c/--config flag from the raw
-// argument list, matching the cli default when the flag is absent. It only
-// needs to find the global flag (which precedes any subcommand), so a simple
-// left-to-right scan is enough.
-func configArg(args []string) string {
+// parseGlobalFlags extracts the global -C/--config and -c/--collection values
+// from the raw argument list before cli parses them (the command tree is built
+// from config first). It scans only the leading run of global flags, which
+// precede the subcommand, and stops at the first non-global token — so a local
+// --collection on a subcommand (verify/import) is left untouched. configName
+// matches the cli default when the flag is absent.
+func parseGlobalFlags(args []string) (configName, collection string) {
+	configName = "config.toml"
 	for i := 1; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "-c" || a == "--config":
+		case a == "-C" || a == "--config":
 			if i+1 < len(args) {
-				return args[i+1]
+				configName = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "-C="):
+			configName = strings.TrimPrefix(a, "-C=")
+		case strings.HasPrefix(a, "--config="):
+			configName = strings.TrimPrefix(a, "--config=")
+		case a == "-c" || a == "--collection":
+			if i+1 < len(args) {
+				collection = args[i+1]
+				i++
 			}
 		case strings.HasPrefix(a, "-c="):
-			return strings.TrimPrefix(a, "-c=")
-		case strings.HasPrefix(a, "--config="):
-			return strings.TrimPrefix(a, "--config=")
+			collection = strings.TrimPrefix(a, "-c=")
+		case strings.HasPrefix(a, "--collection="):
+			collection = strings.TrimPrefix(a, "--collection=")
+		default:
+			return // first non-global token = subcommand; stop scanning
 		}
 	}
-	return "config.toml"
+	return
 }

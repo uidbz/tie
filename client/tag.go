@@ -158,7 +158,7 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 	if err != nil {
 		return err
 	}
-	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host)})
+	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 
 	if status.ErrorMsg == "" {
 		info := TagInfo{
@@ -391,7 +391,7 @@ func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
 }
 
 func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string, forcedArchive TieType) error {
-	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host)})
+	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}

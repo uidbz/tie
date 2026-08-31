@@ -2,5 +2,8 @@ Username = 'defaultuser'
 Password = 'defaultpassword'
 Namespace = 'Examples'
 Collection = 'add-get'
-Webservice = 'http://localhost:1161'
-Filehost = 'http://localhost:1162'
+DaemonURL = 'http://localhost:1161'
+DefaultFileHosts = ['default']
+
+[FileHosts.default]
+URL = 'http://localhost:1162'

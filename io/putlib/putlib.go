@@ -34,6 +34,10 @@ type PutConfig struct {
 	// can later change the blob's retention. It is a shared secret, not stored
 	// in plaintext on the server.
 	OwnerToken string
+	// Store, when non-empty, is sent as the Tie-Store header to select which
+	// physical store on a multi-store filehost receives the blob. Empty targets
+	// the filehost's default store.
+	Store string
 }
 
 type Status struct {
@@ -113,6 +117,9 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 	}
 	if pc.OwnerToken != "" {
 		req.Header.Add("Tie-Owner", pc.OwnerToken)
+	}
+	if pc.Store != "" {
+		req.Header.Add("Tie-Store", pc.Store)
 	}
 
 	httpClient := pc.Client

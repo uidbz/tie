@@ -3,7 +3,29 @@
 # Copy to tie-filehost.toml (or pass -config <path>) and edit.
 
 ListenOn = ":1162"
+
+# Single-store setup: one physical blob directory. Deprecated in favor of
+# BlobPaths, but still supported — when BlobPaths is omitted a single "default"
+# store is synthesized from BlobPath (permanent retention).
 BlobPath = "/data"
+
+# Multi-store setup: one filehost process, several named physical stores (e.g.
+# fast SSD vs bulk HDD). Uploads route to a store by the Tie-Store header
+# (empty targets the store named "default", else the first listed); reads search
+# all stores by hash. Each store keeps its own retention index, so dedup is
+# per-store. DefaultRetention applies to uploads to that store that carry no
+# Tie-Retention header (a Go duration, or "infinite"/empty for permanent).
+# When BlobPaths is set, BlobPath above is ignored.
+#
+# [[BlobPaths]]
+# Name = "ssd"
+# Path = "/mnt/ssd/blobs"
+# DefaultRetention = "infinite"
+#
+# [[BlobPaths]]
+# Name = "hdd"
+# Path = "/mnt/hdd/blobs"
+# DefaultRetention = "8760h"
 
 # How often expired blobs are reaped, as a Go duration (e.g. "1h", "30m").
 # Empty or "0" disables the reaper (all blobs kept forever).

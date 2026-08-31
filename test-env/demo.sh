@@ -21,7 +21,7 @@ trap cleanup EXIT
 
 echo
 echo "== Mounting tag-derived FS in background =="
-( cd "$TIE_ENV" && "$TIE_BIN/tie" -c "$TIE_CONFIG_NAME" mount --db "$TIE_MNT" ) >"$TIE_LOGS/mount.log" 2>&1 &
+( cd "$TIE_ENV" && "$TIE_BIN/tie" -C "$TIE_CONFIG_NAME" mount --db "$TIE_MNT" ) >"$TIE_LOGS/mount.log" 2>&1 &
 MOUNT_PID=$!
 
 # wait for the mount to appear

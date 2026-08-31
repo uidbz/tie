@@ -27,7 +27,7 @@ backup="scheme-migration-backup-${ts}.tsv"
 rewritten="scheme-migration-${ts}.tsv"
 
 echo "Dumping collection (config: $CONFIG) -> $backup" >&2
-"$TIE" -c "$CONFIG" dump > "$backup"
+"$TIE" -C "$CONFIG" dump > "$backup"
 
 count=$(grep -c "${TAB}path${TAB}file:" "$backup" || true)
 echo "path triples on the old 'file:' scheme: $count" >&2
@@ -39,7 +39,7 @@ fi
 sed "s@${TAB}path${TAB}file:@${TAB}path${TAB}tie:@" "$backup" > "$rewritten"
 
 echo "Restoring rewritten dump with --drop (overwrites the collection) ..." >&2
-"$TIE" -c "$CONFIG" restore --drop "$rewritten"
+"$TIE" -C "$CONFIG" restore --drop "$rewritten"
 
 echo "Done: migrated $count path triples to the 'tie:' scheme." >&2
 echo "  backup (pre-migration): $backup" >&2

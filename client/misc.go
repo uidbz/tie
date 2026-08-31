@@ -55,8 +55,38 @@ func LoadConfig(configName string) (Config, error) {
 		return defaultConfig, err
 	}
 	c.configPath = loadPath
+	normalizeConfig(&c)
 
 	return c, nil
+}
+
+// normalizeConfig applies backward-compatible defaults after decode so the rest
+// of the client has a single uniform view: the deprecated Webservice field maps
+// to DaemonURL (and vice versa), and a config with no [Collections] gets one
+// synthesized from the flat Namespace/Collection/DefaultFileHosts fields.
+func normalizeConfig(c *Config) {
+	if c.DaemonURL == "" {
+		c.DaemonURL = c.Webservice
+	}
+	if c.Webservice == "" {
+		c.Webservice = c.DaemonURL
+	}
+	if len(c.Collections) == 0 {
+		name := c.Collection
+		if name == "" {
+			name = "default"
+		}
+		c.Collections = map[string]CollectionEntry{
+			name: {
+				Namespace:  c.Namespace,
+				Collection: c.Collection,
+				FileHosts:  c.DefaultFileHosts,
+			},
+		}
+		if c.DefaultCollection == "" {
+			c.DefaultCollection = name
+		}
+	}
 }
 
 // LoadOrCreateConfig loads configName like LoadConfig, but when no config file
@@ -90,8 +120,8 @@ func SaveConfig(name string, config Config) error {
 
 func (tc *TieClient) PrintState() {
 	if tc.Config.verbose {
-		fmt.Println("Using host:", tc.Config.Webservice)
-		fmt.Println("Current namespace/collection is " + tc.Config.Namespace + "/" + tc.Config.Collection)
+		fmt.Println("Using daemon:", tc.active.DaemonURL)
+		fmt.Println("Current namespace/collection is " + tc.active.Namespace + "/" + tc.active.Collection)
 	}
 }
 

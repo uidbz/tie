@@ -20,7 +20,7 @@ const prevCollectionSuffix = "_prev"
 // An empty mainCollection resolves to the configured default first.
 func (tc *TieClient) prevCollectionFor(mainCollection string) string {
 	if mainCollection == "" {
-		mainCollection = tc.Config.Collection
+		mainCollection = tc.active.Collection
 	}
 	return mainCollection + prevCollectionSuffix
 }

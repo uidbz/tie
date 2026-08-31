@@ -17,7 +17,7 @@ import (
 // The returned slice is sorted and deduplicated. Returns ErrNotFound (with a
 // nil slice) when no entries match the given include terms.
 func (tc *TieClient) CoTagsForQuery(include, exclude []string, scope string) ([]string, error) {
-	col := api.CollectionInfo{Namespace: tc.Config.Namespace, CollectionId: tc.Config.Collection}
+	col := tc.collectionInfo("")
 	request := col.NewCoTagsRequest(include, exclude, scope)
 
 	reply, err := run[api.CoTagsReply](tc, request)

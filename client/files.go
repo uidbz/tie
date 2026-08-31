@@ -12,10 +12,10 @@ import (
 // entry in DefaultFileHosts.
 func (tc *TieClient) ResolveHost(name string) (FileHost, error) {
 	if name == "" {
-		if len(tc.Config.DefaultFileHosts) == 0 {
-			return FileHost{}, errors.New("no filehost configured: set DefaultFileHosts or pass a host name")
+		if len(tc.active.FileHosts) == 0 {
+			return FileHost{}, errors.New("no filehost configured: set the collection's FileHosts (or DefaultFileHosts) or pass a host name")
 		}
-		name = tc.Config.DefaultFileHosts[0]
+		name = tc.active.FileHosts[0]
 	}
 	host, ok := tc.Config.FileHosts[name]
 	if !ok {
@@ -60,7 +60,7 @@ func UploadTo(host FileHost, file string) (*UploadResult, error) {
 // writes each chunk of uploaded bytes to it so callers can render a progress
 // bar. The total byte count is the file (or manifest) size.
 func UploadToWithProgress(host FileHost, file string, progress io.Writer) (*UploadResult, error) {
-	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress})
+	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress, Store: host.Store})
 	result := &UploadResult{ErrorMsg: status.ErrorMsg}
 	for _, item := range status.UploadedItems {
 		result.Items = append(result.Items, UploadedItem{

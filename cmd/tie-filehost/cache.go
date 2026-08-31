@@ -26,7 +26,6 @@ import (
 )
 
 type blobCache struct {
-	srcDir  string // primary blob store (BlobPath)
 	dir     string // cache directory (CachePath, faster storage)
 	maxSize int64  // soft size budget in bytes
 
@@ -49,14 +48,14 @@ type blobCacheEntry struct {
 	err   error
 }
 
-// newBlobCache creates a blobCache that copies blobs from srcDir into dir,
-// enforcing a soft LRU budget of maxSizeBytes. dir is created if absent.
-func newBlobCache(srcDir, dir string, maxSizeBytes int64) (*blobCache, error) {
+// newBlobCache creates a blobCache in dir, enforcing a soft LRU budget of
+// maxSizeBytes. dir is created if absent. The source path for each blob is
+// supplied per get() call, since a multi-store filehost has no single source.
+func newBlobCache(dir string, maxSizeBytes int64) (*blobCache, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("blob cache: creating cache dir %q: %w", dir, err)
 	}
 	return &blobCache{
-		srcDir:  srcDir,
 		dir:     dir,
 		maxSize: maxSizeBytes,
 		entries: make(map[string]*blobCacheEntry),
@@ -72,9 +71,9 @@ func (c *blobCache) blobPath(hash string) string {
 }
 
 // get ensures hash is present in the cache dir and returns its path. On the
-// first call for a hash it copies from srcDir; concurrent callers for the same
+// first call for a hash it copies from srcPath; concurrent callers for the same
 // hash block until that single copy completes and then reuse the result.
-func (c *blobCache) get(hash string) (string, error) {
+func (c *blobCache) get(hash, srcPath string) (string, error) {
 	c.mu.Lock()
 	if e, ok := c.entries[hash]; ok {
 		c.mu.Unlock()
@@ -86,7 +85,7 @@ func (c *blobCache) get(hash string) (string, error) {
 	c.mu.Unlock()
 
 	// This goroutine won the race; it owns the copy.
-	e.path, e.size, e.err = c.copyBlob(hash)
+	e.path, e.size, e.err = c.copyBlob(hash, srcPath)
 	if e.err != nil {
 		// Drop the failed entry so a later request can retry.
 		c.mu.Lock()
@@ -106,14 +105,13 @@ func (c *blobCache) get(hash string) (string, error) {
 	return e.path, nil
 }
 
-// copyBlob copies hash from the primary blob store into the cache dir and
-// returns the new path and the byte count. Memory use is bounded by the copy
-// buffer (~32 KB), not the blob size.
-func (c *blobCache) copyBlob(hash string) (string, int64, error) {
-	src := PathFromHash(c.srcDir, hash)
-	in, err := os.Open(src)
+// copyBlob copies the blob at srcPath into the cache dir under hash and returns
+// the new path and the byte count. Memory use is bounded by the copy buffer
+// (~32 KB), not the blob size.
+func (c *blobCache) copyBlob(hash, srcPath string) (string, int64, error) {
+	in, err := os.Open(srcPath)
 	if err != nil {
-		return "", 0, fmt.Errorf("blob cache: opening source %q: %w", src, err)
+		return "", 0, fmt.Errorf("blob cache: opening source %q: %w", srcPath, err)
 	}
 	defer in.Close()
 

@@ -326,9 +326,9 @@ func detectCycles(dirByUID map[string]Row) [][]DirUID {
 // filehost and returns the hashes absent from all of them. One HEAD request per
 // hash per host; concurrency is kept modest to avoid hammering the server.
 func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
-	hosts := tie.Config.DefaultFileHosts
+	hosts := tie.active.FileHosts
 	if len(hosts) == 0 {
-		return nil, errors.New("no DefaultFileHosts configured for blob check")
+		return nil, errors.New("no filehosts configured for blob check")
 	}
 	// Use the first configured host for existence; content-addressed blobs are
 	// identical across hosts, so presence on any one is what matters for
@@ -384,9 +384,9 @@ func blobExists(hc *http.Client, baseURL, hash string) (bool, error) {
 // Content-Length header). A 404 returns (false, 0, nil); any other non-200
 // status or transport error is surfaced as an error.
 func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) {
-	hosts := tc.Config.DefaultFileHosts
+	hosts := tc.active.FileHosts
 	if len(hosts) == 0 {
-		return false, 0, errors.New("no DefaultFileHosts configured for blob stat")
+		return false, 0, errors.New("no filehosts configured for blob stat")
 	}
 	host, ok := tc.Config.FileHosts[hosts[0]]
 	if !ok {

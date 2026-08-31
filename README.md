@@ -144,6 +144,14 @@ whenever its contents change, directories are versioned like git trees. The
 `metadata` package defines this format and can recover a file's media type from
 the stored head bytes.
 
+A single `tie-filehost` process can serve several **physical stores** (e.g. a
+fast SSD and a bulk HDD) via `[[BlobPaths]]` in its config, so separate media
+types can live on separate disks without running multiple processes or ports.
+Uploads pick a store with the `Tie-Store` header (client side: a filehost's
+`Store` field); downloads stay hash-only and search every store. Dedup is
+per-store, and each store has its own `DefaultRetention` for uploads that don't
+set one. Omit `BlobPaths` for the classic single-store `BlobPath`.
+
 Directory entries store only a child's **basename**, never a path. A directory's
 hash is therefore a pure function of its contents, so the same tree dedupes
 regardless of where it was uploaded from, and checkout rebuilds the layout
@@ -193,24 +201,52 @@ tie mount --db <mountpoint>          mount the live tag-derived filesystem
 tie conf create [name]               write a default config file
 ```
 
-`tie -c <config>` selects a config file (searched in the working directory
-first). Run `tie conf create` to generate one.
+`tie -C <config>` selects a config file (searched in the working directory
+first). Run `tie conf create` to generate one. (`-c`/`--collection` selects a
+collection — see [Multiple collections](#multiple-collections) below.)
 
 ### Filehosts and config
 
-`tie` connects to a `tie-daemon` (the `Webservice`) and one or more
+`tie` connects to a `tie-daemon` (the `DaemonURL`) and one or more
 `tie-filehost` servers. Filehosts are named in config:
 
 ```toml
-Webservice = 'http://localhost:1161'
+DaemonURL = 'http://localhost:1161'   # was 'Webservice'; the old key still works
 DefaultFileHosts = ['default']
 
 [FileHosts.default]
 URL = 'http://localhost:1162'
 Insecure = false   # true skips TLS certificate verification (self-signed certs)
+# Store = 'ssd'     # target a named store on a multi-store filehost (Tie-Store header)
 # Username = 'alice'  # optional Basic Auth for a filehost that requires it
 # Password = 'secret'
 ```
+
+#### Multiple collections
+
+One config can address several collections. Select one with `tie -c <name>`;
+`DefaultCollection` is used when `-c` is omitted. Each entry may override the
+top-level daemon, namespace, credentials, and filehosts:
+
+```toml
+DaemonURL = 'http://localhost:1161'
+DefaultCollection = 'images'
+
+[Collections.images]
+Namespace = 'Collections'
+Collection = 'images'
+FileHosts = ['media-ssd']
+
+[Collections.archive]
+DaemonURL = 'http://archive-box:1161'   # a collection on another daemon
+Namespace = 'Cold'
+Collection = 'archive'
+FileHosts = ['media-hdd']
+```
+
+A config with no `[Collections]` behaves exactly as before: the flat
+`Namespace`/`Collection`/`DefaultFileHosts` fields define a single default
+collection.
 
 The default config uses plain `http://localhost`, matching the servers' default
 of `Insecure = true`. This suits a personal library on a single PC or a small

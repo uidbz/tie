@@ -17,4 +17,4 @@ fi
 
 echo "Mounting $1 at $TIE_MNT (Ctrl-C to unmount)"
 cd "$TIE_ENV"
-exec "$TIE_BIN/tie" -c "$TIE_CONFIG_NAME" mount "$1" "$TIE_MNT"
+exec "$TIE_BIN/tie" -C "$TIE_CONFIG_NAME" mount "$1" "$TIE_MNT"

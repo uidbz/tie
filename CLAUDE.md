@@ -31,13 +31,28 @@ cd test-env
 ```
 
 - `env.sh` holds all shared paths/ports and the `tie_cli` helper. Source it, then
-  use `tie_cli <args>` (it `cd`s into test-env and passes `-c config.toml`).
+  use `tie_cli <args>` (it `cd`s into test-env and passes `-C config.toml`).
 - **Both servers are TOML-configured** (`-config <file>`), not flags. `start.sh`
   generates `tie-daemon.toml` and `tie-filehost.toml` if missing. Both are
   gitignored runtime artifacts; only `config.toml` (the CLI config) is tracked.
 - Filehost config keys: `ListenOn`, `Insecure`, `BlobPath`, `CertFile`/`KeyFile`,
   `ReapInterval` (Go duration; `"0"` disables the expired-blob reaper),
   `[[Users]]` and `AnonymousAccess` — see access control below.
+- **Multi-store filehost.** `[[BlobPaths]]` (`Name`, `Path`, `DefaultRetention`)
+  defines one or more physical stores in a single filehost process; `BlobPath`
+  is the deprecated single-store form (an empty `BlobPaths` synthesizes one
+  `"default"` store from it, permanent retention). Uploads route to a store by
+  the `Tie-Store` request header (empty → the `"default"` store, else the first
+  listed); reads (`GET`/`HEAD /{hash}`) stay hash-only and `findBlob` searches
+  every store. Dedup is **per-store** — each store keeps its own
+  `.tie-retention.json`. A store's `DefaultRetention` (Go duration or
+  `"infinite"`/empty) is applied to uploads to it that carry no `Tie-Retention`
+  header. The reaper computes protection **globally**: a directory blob in one
+  store shields its children even when they live in another store
+  (`dirChildren` resolves via `findBlob`), then sweeps expired-and-unprotected
+  blobs per store. Client side: `FileHost.Store` rides uploads as `Tie-Store`,
+  so two named `[FileHosts.*]` entries can share a URL but target different
+  stores.
 - Daemon config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
   `MaxConcurrentRequests` (0 = unbounded), `[[Users]]` (Username/Password/Role),
   `AnonymousAccess`, `ReverseRelations`, and `[[Collections]]` overrides — see below.
@@ -58,6 +73,20 @@ cd test-env
   Client filehost creds live in `[FileHosts.<name>]` (`Username`/`Password`) and
   ride every request via a Basic-Auth `http.RoundTripper` in
   `client.HTTPClientFor`.
+- **Client config (`client.Config`).** The daemon URL key is `DaemonURL`
+  (`Webservice` is the deprecated alias; `LoadConfig`→`normalizeConfig` copies
+  one into the other). One config can bind several collections via
+  `[Collections.<name>]` entries (each may override `Namespace`, `Collection`,
+  `DaemonURL`, `Username`/`Password`, `Insecure`, `FileHosts`; unset fields fall
+  back to the top-level values). `DefaultCollection` picks the one used when no
+  collection is named. A config with no `[Collections]` is normalized into a
+  single synthesized entry from the flat `Namespace`/`Collection`/
+  `DefaultFileHosts` fields, so old configs keep working. `Config.ResolveCollection`
+  turns a name (or `""`) into the concrete `ResolvedCollection`; `NewTieClientFor`
+  binds a client to it. **CLI flag change: `-c`/`--collection` selects the
+  collection; the config file is now `-C`/`--config`** (they were swapped). The
+  global `-c`/`-C` are peeked from `os.Args` before cli parsing in
+  `parseGlobalFlags` (the command tree is built from config first).
 - **Reverse-relation config.** `ReverseRelations` sets which relations (value1)
   every collection indexes in reverse; omit it for the built-in default
   (`tag`, `path`, `parent`, `tie-type`, `version-of`). `version-of` powers

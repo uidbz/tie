@@ -34,8 +34,9 @@ export TIE_FILEHOST_CONFIG="${TIE_ENV}/tie-filehost.toml"  # tie-filehost config
 export TIE_DAEMON_PID="${TIE_ENV}/logs/daemon.pid"
 export TIE_FILEHOST_PID="${TIE_ENV}/logs/filehost.pid"
 
-# The tie CLI resolves -c as a *filename* searched in the current working dir
-# first (via conf.PathCurrentDir = cwd/<name>), so scripts cd into $TIE_ENV and
-# pass the bare filename rather than an absolute path.
+# The tie CLI resolves -C as a config *filename* searched in the current working
+# dir first (via conf.PathCurrentDir = cwd/<name>), so scripts cd into $TIE_ENV
+# and pass the bare filename rather than an absolute path. (-c now means
+# --collection; the config-file flag is -C/--config.)
 export TIE_CONFIG_NAME="config.toml"
-tie_cli() { ( cd "$TIE_ENV" && "$TIE_BIN/tie" -c "$TIE_CONFIG_NAME" "$@" ); }
+tie_cli() { ( cd "$TIE_ENV" && "$TIE_BIN/tie" -C "$TIE_CONFIG_NAME" "$@" ); }

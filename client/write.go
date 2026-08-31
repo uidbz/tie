@@ -40,7 +40,7 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 		return "", err
 	}
 
-	status := putlib.Upload(host.URL, srcPath, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress})
+	status := putlib.Upload(host.URL, srcPath, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress, Store: host.Store})
 	if status.ErrorMsg != "" {
 		return "", fmt.Errorf("upload failed for %q: %s", name, status.ErrorMsg)
 	}

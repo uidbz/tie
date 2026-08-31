@@ -14,4 +14,4 @@ fi
 echo "Mounting tag-derived filesystem at $TIE_MNT (Ctrl-C to unmount)"
 echo "Try:  cat $TIE_MNT/query/tags  &&  ls $TIE_MNT/query/vacation/"
 cd "$TIE_ENV"
-exec "$TIE_BIN/tie" -c "$TIE_CONFIG_NAME" mount --db "$TIE_MNT"
+exec "$TIE_BIN/tie" -C "$TIE_CONFIG_NAME" mount --db "$TIE_MNT"
