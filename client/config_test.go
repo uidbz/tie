@@ -1,9 +1,77 @@
 package client
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
+
+func TestLoadConfigAbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "custom.toml")
+	toml := "DaemonURL = \"https://box\"\nNamespace = \"NS\"\nCollection = \"Main\"\n"
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig(%q) failed: %v", path, err)
+	}
+	if c.Path() != path {
+		t.Errorf("Path() = %q, want %q", c.Path(), path)
+	}
+	if c.DaemonURL != "https://box" || c.Namespace != "NS" {
+		t.Errorf("loaded config wrong: %+v", c)
+	}
+	// normalizeConfig must run for the path branch too: a synthesized default
+	// collection resolving to the file's connection.
+	if got := c.ResolveCollection(""); got.DaemonURL != "https://box" || got.Collection != "Main" {
+		t.Errorf("resolved default wrong: %+v", got)
+	}
+}
+
+func TestLoadConfigPathAddsTomlExtension(t *testing.T) {
+	dir := t.TempDir()
+	// The .toml convenience must apply on the path branch: naming "custom" loads
+	// custom.toml sitting next to it.
+	if err := os.WriteFile(filepath.Join(dir, "custom.toml"), []byte("Namespace = \"X\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(filepath.Join(dir, "custom"))
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if c.Namespace != "X" {
+		t.Errorf("Namespace = %q, want X", c.Namespace)
+	}
+}
+
+func TestLoadConfigAbsentPathIsNotExist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.toml")
+	_, err := LoadConfig(path)
+	if !os.IsNotExist(err) {
+		t.Errorf("absent path should report os.IsNotExist, got %v", err)
+	}
+}
+
+func TestLoadOrCreateConfigAbsolutePath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "created.toml")
+	c, created, err := LoadOrCreateConfig(path)
+	if err != nil {
+		t.Fatalf("LoadOrCreateConfig failed: %v", err)
+	}
+	if !created {
+		t.Error("expected created = true for a missing path")
+	}
+	if _, statErr := os.Stat(path); statErr != nil {
+		t.Errorf("config was not written to %q: %v", path, statErr)
+	}
+	if c.Path() != path {
+		t.Errorf("Path() = %q, want %q", c.Path(), path)
+	}
+}
 
 func TestResolveCollectionFallbacks(t *testing.T) {
 	c := Config{

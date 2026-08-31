@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/uidbz/conf"
@@ -42,10 +43,29 @@ func ConfigFileName(configName string) string {
 	return configName
 }
 
+// isConfigPath reports whether name should be read from that exact filesystem
+// path rather than searched by name in the cwd + app config dirs. Any value that
+// is absolute or contains a path separator is a path; a bare name keeps the
+// conf.LoadConfig search behavior. Mirrors how tie-gui branches on the -config
+// value (see cmd/tie-view loadTieConfig).
+func isConfigPath(name string) bool {
+	return filepath.IsAbs(name) || strings.ContainsRune(name, filepath.Separator) || strings.ContainsRune(name, '/')
+}
+
 func LoadConfig(configName string) (Config, error) {
 	configName = ConfigFileName(configName)
 	c := Config{}
-	loadPath, err := conf.LoadConfig("tie", configName, &c)
+	var loadPath string
+	var err error
+	if isConfigPath(configName) {
+		// An explicit path (absolute or containing a separator) is read directly
+		// so `tie -C /abs/path/config.toml` loads that file instead of treating
+		// the whole path as a name searched under the config dir.
+		loadPath = configName
+		err = conf.ReadConfig(loadPath, &c)
+	} else {
+		loadPath, err = conf.LoadConfig("tie", configName, &c)
+	}
 	if err != nil {
 		// Preserve os.IsNotExist detection for callers, but name the file on a
 		// parse error so a stale/legacy config is easy to find and fix.
@@ -115,7 +135,13 @@ func LoadOrCreateConfig(configName string) (Config, bool, error) {
 }
 
 func SaveConfig(name string, config Config) error {
-	return conf.SaveToUserConfigDir("tie", ConfigFileName(name), config)
+	name = ConfigFileName(name)
+	// An explicit path is written directly (so LoadOrCreateConfig can create the
+	// default at the exact path -C names); a bare name goes to the user config dir.
+	if isConfigPath(name) {
+		return conf.WriteConfig(name, config)
+	}
+	return conf.SaveToUserConfigDir("tie", name, config)
 }
 
 func (tc *TieClient) PrintState() {
