@@ -6,20 +6,25 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
-### Changed
-
-- **Renamed the `tie-daemon` server to `tie-triplestore`.** The binary,
-  `cmd/` directory, config file (`tie-triplestore.toml`), and service units
-  (`tie-triplestore.service`, `openrc/tie-triplestore`) all follow the new name,
-  which describes what the process *is* (the HTTP triple-store server) and mirrors
-  its sibling `tie-filehost`. The client config key `DaemonURL` is renamed to
-  **`TripleStoreURL`**; the older `Webservice` key is still honored as a
-  deprecated alias, but the short-lived `DaemonURL` key is removed. Update any
-  service files, config keys, and the `TIE_TRIPLESTORE_DB` backup env var
-  accordingly.
+## [v0.5.0] - 2026-09-01
 
 ### Added
 
+- **`tie stat` — human-readable info for a path or hash.** Reports type, size,
+  and metadata for a virtual path or content hash; for directories it sums child
+  sizes recursively from the `size` triples rather than walking blobs.
+- **Query sort-by-attribute.** `QuerySpec` can sort matched keys by the value of
+  a chosen attribute, ascending or descending, so clients get ordered results
+  without a client-side sort pass.
+- **`DeleteTable`** removes a table entity and all of its rows in one call,
+  completing the table API (`InsertTable`/`ReadTable`). Mirrored in the Python
+  client.
+- **Audio duration at import.** Imports now extract track duration (via a fork
+  of `dhowden/tag`) and, for imported directory nodes, aggregate `album`,
+  `artist`, and `year` from their children onto the directory record.
+- **Filehost content-type sniffing.** `tie-filehost` infers a blob's
+  `Content-Type` from its leading magic bytes when serving it, while staying a
+  pure content-addressed byte store (no format parsing beyond the sniff).
 - **`tie verify` — a consistency check (fsck) for the virtual file tree.** Scans
   a whole collection and reports lost or incomplete nodes: orphaned
   directories/files (no `parent` edge, so unreachable from the root), dangling
@@ -38,6 +43,35 @@ to follow semantic versioning.
   404 when absent, 400 for a malformed hash. It stats the primary store
   (`BlobPath`) directly, so it never copies into the read cache and transfers no
   body — one filesystem stat per hash for a full-store sweep.
+
+### Changed
+
+- **Multi-collection client and multi-store filehost.** One client config can
+  now bind several collections via `[Collections.<name>]` entries (each may
+  override `Namespace`, `Collection`, `TripleStoreURL`, credentials, and
+  `FileHosts`), with `DefaultCollection` selecting the one used when none is
+  named; a flat config with no `[Collections]` is normalized into a single
+  synthesized entry, so old configs keep working. On the server, `tie-filehost`
+  gained `[[BlobPaths]]` to run several physical stores in one process: uploads
+  route to a store by the `Tie-Store` header, dedup and retention are per-store,
+  and the expired-blob reaper computes directory protection globally so a parent
+  blob in one store shields children in another. The single-store `BlobPath` key
+  is retained as a deprecated form.
+  - **CLI flag swap:** `-c`/`--collection` now selects the collection and
+    `-C`/`--config` selects the config file (previously reversed). `-C` also
+    loads the config from an explicit path.
+- **Renamed the `tie-daemon` server to `tie-triplestore`.** The binary,
+  `cmd/` directory, config file (`tie-triplestore.toml`), and service units
+  (`tie-triplestore.service`, `openrc/tie-triplestore`) all follow the new name,
+  which describes what the process *is* (the HTTP triple-store server) and mirrors
+  its sibling `tie-filehost`. The client config key `DaemonURL` is renamed to
+  **`TripleStoreURL`**; the older `Webservice` key is still honored as a
+  deprecated alias, but the short-lived `DaemonURL` key is removed. Update any
+  service files, config keys, and the `TIE_TRIPLESTORE_DB` backup env var
+  accordingly.
+- **Module path migrated** from sourcehut to `github.com/uidbz/tie`, and the
+  `conf` configuration dependency switched to `github.com/uidbz/conf`. Update
+  import paths and any `go get` references accordingly.
 
 ## [v0.4.3] - 2026-08-21
 
