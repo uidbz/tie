@@ -6,6 +6,16 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **tie-filehost example config: table sections moved to the bottom.** The
+  commented `[[BlobPaths]]` block sat above `ReapInterval`/`Insecure`/cache and
+  auth keys, so uncommenting it in place made TOML absorb every key below into
+  the last store entry — silently ignoring e.g. `Insecure = true` (the server
+  then demanded TLS certs) and `CachePath`. The example now keeps all plain
+  `key = value` settings above the `[[Users]]`/`[[BlobPaths]]` sections, with a
+  note explaining the ordering rule.
+
 ## [v0.5.0] - 2026-09-01
 
 ### Added
