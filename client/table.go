@@ -27,6 +27,20 @@ import (
 //	(Ri, "tie-type", "table-row")
 //	(Ri, <header>,   <cell>)
 //
+// A table may also carry a multi-row (hierarchical) header, where each column has
+// an ordered list of header levels instead of a single label:
+//
+//	(T, "column-levels", [<ord>|lvl0<sep>lvl1, <ord>|lvl0<sep>lvl1, …])
+//
+// Because a header keys every cell triple in its column, each column still needs
+// exactly one unique string. A column's key is its non-empty levels joined by
+// levelSep, and that is what "columns" holds; dropping empty levels means a
+// single-row header keys as the label itself, so such tables are stored
+// identically however they were written. Levels cannot be recovered from a key
+// alone (empty levels are gone, so depth is not encoded), hence both relations.
+// The relation is absent on single-level tables and ReadTable ignores it, so
+// hierarchical headers are purely additive: older readers see the flat keys.
+//
 // The store returns a subject's multi-value attributes sorted, not in insertion
 // order, so each entry in the columns/rows lists is prefixed with a zero-padded
 // ordinal: the server's lexicographic sort then reproduces the original order.
@@ -37,14 +51,21 @@ import (
 // "tie-type" (it would collide with a row entity's type marker); either case is
 // rejected with an error.
 const (
-	tableColumnsRel = "columns"
-	tableRowsRel    = "rows"
-	tieTypeTable    = "table"
-	tieTypeTableRow = "table-row"
+	tableColumnsRel      = "columns"
+	tableRowsRel         = "rows"
+	tableColumnLevelsRel = "column-levels"
+	tieTypeTable         = "table"
+	tieTypeTableRow      = "table-row"
 
 	// orderSep separates the ordinal prefix from the payload in a list entry.
 	// NUL is used so it will not appear in a header or a hex row uid.
 	orderSep = "\x00"
+
+	// levelSep separates one column's header levels, both in a column-levels entry
+	// and in the derived column key. Unit Separator is used because it will not
+	// appear in a header label; orderSep is unavailable, it already delimits the
+	// ordinal prefix.
+	levelSep = "\x1f"
 )
 
 func encodeOrdered(i int, s string) string {
@@ -78,6 +99,110 @@ func decodeOrderedList(values []string) []string {
 	return out
 }
 
+// columnKey joins a column's non-empty header levels into the single unique
+// string that keys every cell triple in that column.
+func columnKey(levels []string) string {
+	parts := make([]string, 0, len(levels))
+	for _, l := range levels {
+		if l != "" {
+			parts = append(parts, l)
+		}
+	}
+	return strings.Join(parts, levelSep)
+}
+
+// transposeHeaderRows converts row-major header rows (headerRows[i][j] is level i
+// of column j, matching how a spreadsheet reads) into per-column level lists plus
+// each column's derived key.
+func transposeHeaderRows(headerRows [][]string) (levels [][]string, keys []string, err error) {
+	if len(headerRows) == 0 {
+		return nil, nil, nil
+	}
+	width := len(headerRows[0])
+	for i, hr := range headerRows {
+		if len(hr) != width {
+			return nil, nil, fmt.Errorf("client: header row %d has %d columns, want %d; header rows must be rectangular", i, len(hr), width)
+		}
+	}
+	levels = make([][]string, width)
+	keys = make([]string, width)
+	for j := 0; j < width; j++ {
+		col := make([]string, len(headerRows))
+		for i, hr := range headerRows {
+			if strings.ContainsAny(hr[j], levelSep+orderSep) {
+				return nil, nil, fmt.Errorf("client: header level %q (row %d, column %d) contains a reserved separator", hr[j], i, j)
+			}
+			col[i] = hr[j]
+		}
+		if columnKey(col) == "" {
+			return nil, nil, fmt.Errorf("client: column %d has no non-empty header level", j)
+		}
+		levels[j] = col
+		keys[j] = columnKey(col)
+	}
+	return levels, keys, nil
+}
+
+// transposeLevels converts per-column level lists back into row-major header
+// rows, padding columns of unequal depth with trailing empty levels so the result
+// is rectangular.
+func transposeLevels(levels [][]string) [][]string {
+	depth := 0
+	for _, col := range levels {
+		if len(col) > depth {
+			depth = len(col)
+		}
+	}
+	if depth == 0 {
+		return nil
+	}
+	headerRows := make([][]string, depth)
+	for i := range headerRows {
+		hr := make([]string, len(levels))
+		for j, col := range levels {
+			if i < len(col) {
+				hr[j] = col[i]
+			}
+		}
+		headerRows[i] = hr
+	}
+	return headerRows
+}
+
+// decodeColumnLevels returns per-column header levels. A table stored without a
+// column-levels relation — every table written before hierarchical headers
+// existed, and every single-level table since — reads back as one level per
+// column equal to its key, so both kinds share a single read path.
+func decodeColumnLevels(values []string, keys []string) [][]string {
+	entries := decodeOrderedList(values)
+	levels := make([][]string, len(keys))
+	for j, key := range keys {
+		if j < len(entries) {
+			levels[j] = strings.Split(entries[j], levelSep)
+			continue
+		}
+		levels[j] = []string{key}
+	}
+	return levels
+}
+
+// validateColumnKeys rejects the two keys the storage layout cannot represent: the
+// row entities' own type marker, and duplicates (a column key is a predicate, so
+// two identical keys would write both columns' cells to one triple).
+func validateColumnKeys(keys []string) error {
+	seen := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		if k == str(TieTypeProperty) {
+			return fmt.Errorf("client: column name %q is reserved and cannot be used as a table header", k)
+		}
+		if _, dup := seen[k]; dup {
+			return fmt.Errorf("client: duplicate column name %q; table headers must be unique", k)
+		}
+		seen[k] = struct{}{}
+	}
+	return nil
+}
+
 // InsertTable writes headers + rows as a table entity and returns its uid. An
 // empty uid mints a fresh one; a non-empty uid replaces the table already stored
 // there (idempotent re-import) — its old row entities are cleared first. rows
@@ -85,17 +210,40 @@ func decodeOrderedList(values []string) []string {
 // rows are padded with empty cells and cells past len(headers) are ignored.
 // Empty cells are not stored (ReadTable reconstructs them as "").
 func (tc *TieClient) InsertTable(uid string, headers []string, rows [][]string) (string, error) {
-	seen := make(map[string]struct{}, len(headers))
-	for _, h := range headers {
-		if h == str(TieTypeProperty) {
-			return "", fmt.Errorf("client: column name %q is reserved and cannot be used as a table header", h)
-		}
-		if _, dup := seen[h]; dup {
-			return "", fmt.Errorf("client: duplicate column name %q; table headers must be unique", h)
-		}
-		seen[h] = struct{}{}
+	if err := validateColumnKeys(headers); err != nil {
+		return "", err
 	}
+	return tc.insertTable(uid, headers, nil, rows)
+}
 
+// InsertTableLevels writes a table whose header spans several rows. headerRows is
+// row-major — headerRows[i][j] is level i of column j — matching the layout of the
+// source sheet; it must be rectangular, with merged parent cells already
+// forward-filled and blanks explicit (deciding where a merged cell ends is
+// file-parsing work that belongs to the caller, not to storage). Each column's key
+// is its non-empty levels joined, and those keys must be unique. Otherwise it
+// behaves exactly like InsertTable.
+//
+// A single header row is stored identically to the equivalent InsertTable call, so
+// depth 1 is not a special case for callers.
+func (tc *TieClient) InsertTableLevels(uid string, headerRows [][]string, rows [][]string) (string, error) {
+	levels, keys, err := transposeHeaderRows(headerRows)
+	if err != nil {
+		return "", err
+	}
+	if err := validateColumnKeys(keys); err != nil {
+		return "", err
+	}
+	if len(headerRows) < 2 {
+		levels = nil
+	}
+	return tc.insertTable(uid, keys, levels, rows)
+}
+
+// insertTable is the shared writer. levels may be nil, meaning a single-level
+// header: the column-levels relation is then cleared rather than written, so a
+// re-import that drops a hierarchy leaves nothing stale behind.
+func (tc *TieClient) insertTable(uid string, keys []string, levels [][]string, rows [][]string) (string, error) {
 	minted := uid == ""
 	if minted {
 		uid = string(tc.newDirUID())
@@ -109,21 +257,30 @@ func (tc *TieClient) InsertTable(uid string, headers []string, rows [][]string) 
 		}
 	}
 
-	columns := make([]string, len(headers))
-	for j, header := range headers {
-		columns[j] = encodeOrdered(j, header)
+	columns := make([]string, len(keys))
+	for j, key := range keys {
+		columns[j] = encodeOrdered(j, key)
 	}
 	batch.Set(uid, str(TieTypeProperty), []string{tieTypeTable})
 	batch.Set(uid, tableColumnsRel, columns)
+
+	var levelEntries []string
+	if levels != nil {
+		levelEntries = make([]string, len(levels))
+		for j, col := range levels {
+			levelEntries[j] = encodeOrdered(j, strings.Join(col, levelSep))
+		}
+	}
+	batch.Set(uid, tableColumnLevelsRel, levelEntries)
 
 	rowRefs := make([]string, len(rows))
 	for i, cells := range rows {
 		rowUID := string(tc.newDirUID())
 		rowRefs[i] = encodeOrdered(i, rowUID)
 		batch.Set(rowUID, str(TieTypeProperty), []string{tieTypeTableRow})
-		for j, header := range headers {
+		for j, key := range keys {
 			if j < len(cells) && cells[j] != "" {
-				batch.Add(rowUID, header, cells[j])
+				batch.Add(rowUID, key, cells[j])
 			}
 		}
 	}
@@ -135,22 +292,43 @@ func (tc *TieClient) InsertTable(uid string, headers []string, rows [][]string) 
 	return uid, nil
 }
 
-// ReadTable returns a table's headers and rows (row-major, header order),
-// or ErrNotFound if uid holds no table entity.
+// ReadTable returns a table's headers and rows (row-major, header order), or
+// ErrNotFound if uid holds no table entity. On a table with a multi-row header the
+// headers are the derived column keys; use ReadTableLevels to get the levels.
 func (tc *TieClient) ReadTable(uid string) (headers []string, rows [][]string, err error) {
-	row, err := tc.Get(uid)
+	headers, _, rows, err = tc.readTable(uid)
+	return headers, rows, err
+}
+
+// ReadTableLevels returns a table's header levels as row-major header rows, in the
+// same shape InsertTableLevels accepts, plus its rows. A table stored with a
+// single-row header yields exactly one header row, so callers need not distinguish
+// the two cases.
+func (tc *TieClient) ReadTableLevels(uid string) (headerRows [][]string, rows [][]string, err error) {
+	_, levels, rows, err := tc.readTable(uid)
 	if err != nil {
 		return nil, nil, err
 	}
-	headers = decodeOrderedList(RowValues(row, tableColumnsRel))
+	return transposeLevels(levels), rows, nil
+}
+
+// readTable is the shared reader: one forward Get plus one Expand serves both
+// public readers, so asking for levels costs no extra round trip.
+func (tc *TieClient) readTable(uid string) (keys []string, levels [][]string, rows [][]string, err error) {
+	row, err := tc.Get(uid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	keys = decodeOrderedList(RowValues(row, tableColumnsRel))
+	levels = decodeColumnLevels(RowValues(row, tableColumnLevelsRel), keys)
 	rowUIDs := decodeOrderedList(RowValues(row, tableRowsRel))
 	if len(rowUIDs) == 0 {
-		return headers, nil, nil
+		return keys, levels, nil, nil
 	}
 
 	expanded, err := tc.Expand(rowUIDs)
 	if err != nil && !errors.Is(err, ErrNotFound) {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	// Expand omits row uids with no stored cells (all-empty rows), so index the
 	// results by key and walk rowUIDs to keep row order and alignment intact.
@@ -162,13 +340,13 @@ func (tc *TieClient) ReadTable(uid string) (headers []string, rows [][]string, e
 	rows = make([][]string, len(rowUIDs))
 	for i, rowUID := range rowUIDs {
 		r := byKey[rowUID]
-		cells := make([]string, len(headers))
-		for j, header := range headers {
-			cells[j] = RowFirst(r, header)
+		cells := make([]string, len(keys))
+		for j, key := range keys {
+			cells[j] = RowFirst(r, key)
 		}
 		rows[i] = cells
 	}
-	return headers, rows, nil
+	return keys, levels, rows, nil
 }
 
 // DeleteTable removes a table and all its row entities. It is idempotent:
@@ -179,6 +357,7 @@ func (tc *TieClient) DeleteTable(uid string) error {
 		return err
 	}
 	batch.Set(uid, tableColumnsRel, nil)
+	batch.Set(uid, tableColumnLevelsRel, nil)
 	batch.Set(uid, tableRowsRel, nil)
 	batch.Set(uid, str(TieTypeProperty), nil)
 	_, err := tc.Batch(batch)

@@ -19,7 +19,11 @@ mounts collections as a FUSE filesystem.
 
 ## Running the stack (test-env)
 
-Everything is localhost, plaintext HTTP. Triplestore `:1161`, filehost `:1162`.
+Everything is localhost, plaintext HTTP. Triplestore `:2161`, filehost `:2162` —
+deliberately off the systemd defaults (`:1161`/`:1162`) so the sandbox can run
+beside a live system stack. `client.TestingConfig()` and the Python tests point
+here; code that hardcodes 1161 talks to the wrong store, or (via `requireServer`)
+silently skips the whole Go client suite.
 
 ```bash
 cd test-env

@@ -6,7 +6,33 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Multi-row (hierarchical) table headers.** `InsertTableLevels`/`ReadTableLevels`
+  store and return a table's header as row-major header rows, so a two-row header
+  (`Temperature (20°C)` over `Replicate 1 | Replicate 2`) survives storage instead
+  of having to be flattened by hand. A header keys every cell triple in its column,
+  so the cell model is unchanged: the levels ride in one new `column-levels`
+  relation, and each column's key is its non-empty levels joined by `\x1f`. The
+  change is purely additive — a single-row header is stored exactly as
+  `InsertTable` stores it, `ReadTable` still returns the flat keys, and a table
+  written before the feature reads back as depth 1 — so no migration is needed.
+  Header rows must be rectangular with merged parent cells already forward-filled;
+  deciding where a merged cell ends is file-parsing work that belongs to the
+  caller, not to storage. Mirrored in the Python client (`insert_table` accepts
+  either form, plus `read_table_levels`), which gains its first table tests,
+  including cross-client round trips against the Go client.
+
 ### Fixed
+
+- **The Go client tests and the Python e2e cross-client checks both ran against
+  nothing.** `client.TestingConfig()` pointed at `:1161`/`:1162` (the systemd
+  defaults) while `test-env` deliberately runs on `:2161`/`:2162`, so
+  `requireServer` skipped every client test unless a *production* triplestore
+  happened to be listening. In `test_e2e.py` the Go CLI was invoked with
+  `-c config.toml`, but v0.5.0 swapped the flags (`-c` is `--collection`,
+  `-C` is `--config`), so it resolved a collection named "config.toml", printed
+  nothing, and the cross-client assertions compared against empty output.
 
 - **tie-filehost example config: table sections moved to the bottom.** The
   commented `[[BlobPaths]]` block sat above `ReapInterval`/`Insecure`/cache and

@@ -239,6 +239,26 @@ case raises an error. This targets sheet-sized
 tables (hundreds–low thousands of rows). The wire model is documented in
 `client/table.go`; the same encoding is used by the Go and Risor clients.
 
+For a **multi-row (hierarchical) header**, pass header rows instead of labels —
+row-major, so `headers[i][j]` is level `i` of column `j`, matching how the source
+sheet reads:
+
+```python
+uid = tie.insert_table("", [["Sample", "20°C",        "20°C"],
+                            ["",       "Replicate 1", "Replicate 2"]],
+                       [["S1", "4.2", "4.4"]])
+header_rows, rows = tie.read_table_levels(uid)
+```
+
+Header rows must be rectangular, with merged parent cells already forward-filled
+and blanks explicit — deciding where a merged cell ends is file-parsing work the
+caller owns. Because a header keys every cell triple in its column, each column
+still needs one unique string: its non-empty levels joined by `\x1f`, which is
+what `read_table` returns. Levels may contain neither `\x1f` nor `\x00`. A
+single header row stores exactly as the flat call does, and `read_table_levels`
+reports a table stored without levels as depth 1, so neither form needs a
+migration.
+
 ### Tags, dirs, imports, versions, favorites, relations
 
 High-level helpers on `TieClient` include: `list_tags`, `register_tag`,
@@ -301,3 +321,9 @@ cd ../test-env && ./build.sh && ./start.sh
 
 The e2e suite also cross-checks against the Go `tie` binary built into
 `test-env/bin/` to confirm both clients agree on the wire.
+
+`tests/test_tables.py` does the same for tables, which have no CLI surface: it
+shells out to `tests/gotable.go` (a `go run` fixture, excluded from the build by
+an ignore tag) to write a table with the Go client and read it back with the
+Python one and vice versa. It uses the `testing/testing` namespace/collection so
+both clients resolve to the same place as `client.TestingConfig()`.

@@ -362,6 +362,237 @@ func TestInsertTableDuplicateHeader(t *testing.T) {
 	}
 }
 
+// The two-row header used by most of the levels tests: a plain index column
+// beside two temperature groups, each holding two replicates. Note the repeated
+// parent labels — a merged parent cell is forward-filled by the caller.
+var (
+	levelsHeaderRows = [][]string{
+		{"Sample", "Temperature (20°C)", "Temperature (20°C)", "Temperature (37°C)", "Temperature (37°C)"},
+		{"", "Replicate 1", "Replicate 2", "Replicate 1", "Replicate 2"},
+	}
+	levelsRows = [][]string{
+		{"S1", "4.2", "4.4", "5.9", "6.1"},
+		{"S2", "4.1", "", "6.0", "6.3"}, // empty cell
+	}
+	levelsWantKeys = []string{
+		"Sample",
+		"Temperature (20°C)\x1fReplicate 1",
+		"Temperature (20°C)\x1fReplicate 2",
+		"Temperature (37°C)\x1fReplicate 1",
+		"Temperature (37°C)\x1fReplicate 2",
+	}
+)
+
+// TestHeaderLevelTranspose covers the pure header helpers, which need no server:
+// row-major header rows in, per-column levels and derived keys out, and back.
+func TestHeaderLevelTranspose(t *testing.T) {
+	levels, keys, err := transposeHeaderRows(levelsHeaderRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(keys, levelsWantKeys) {
+		t.Errorf("keys = %q, want %q", keys, levelsWantKeys)
+	}
+	// An index column's blank lower level is dropped from the key but kept in the
+	// levels, so the column still reports its true depth.
+	if want := []string{"Sample", ""}; !slices.Equal(levels[0], want) {
+		t.Errorf("levels[0] = %q, want %q", levels[0], want)
+	}
+	if got := transposeLevels(levels); !reflect.DeepEqual(got, levelsHeaderRows) {
+		t.Errorf("round trip = %q, want %q", got, levelsHeaderRows)
+	}
+}
+
+// TestHeaderLevelsRejected covers the header shapes storage cannot represent.
+func TestHeaderLevelsRejected(t *testing.T) {
+	cases := map[string][][]string{
+		"not rectangular":    {{"A", "B"}, {"x"}},
+		"reserved separator": {{"A", "B\x1fC"}},
+		"column with no label": {
+			{"A", ""},
+			{"B", ""},
+		},
+		"levels deriving a duplicate key": {
+			{"Model", "Model"},
+			{"p", "p"},
+		},
+	}
+	for name, headerRows := range cases {
+		t.Run(name, func(t *testing.T) {
+			levels, keys, err := transposeHeaderRows(headerRows)
+			if err != nil {
+				return // rejected in the transpose, as expected
+			}
+			if err := validateColumnKeys(keys); err == nil {
+				t.Errorf("accepted %q (levels %q, keys %q), want error", headerRows, levels, keys)
+			}
+		})
+	}
+}
+
+// TestInsertReadTableLevels round-trips a table with a two-row header.
+func TestInsertReadTableLevels(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	uid, err := tie.InsertTableLevels("", levelsHeaderRows, levelsRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotHeaderRows, gotRows, err := tie.ReadTableLevels(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotHeaderRows, levelsHeaderRows) {
+		t.Errorf("headerRows = %q, want %q", gotHeaderRows, levelsHeaderRows)
+	}
+	if !reflect.DeepEqual(gotRows, levelsRows) {
+		t.Errorf("rows = %q, want %q", gotRows, levelsRows)
+	}
+
+	// ReadTable is unaware of levels and must still work, yielding the keys.
+	gotKeys, gotRows2, err := tie.ReadTable(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotKeys, levelsWantKeys) {
+		t.Errorf("ReadTable headers = %q, want %q", gotKeys, levelsWantKeys)
+	}
+	if !reflect.DeepEqual(gotRows2, levelsRows) {
+		t.Errorf("ReadTable rows = %q, want %q", gotRows2, levelsRows)
+	}
+}
+
+// TestInsertTableLevelsSingleRowMatchesFlat is the backward-compatibility
+// guarantee: a one-row header must be stored exactly as InsertTable stores it, so
+// existing tables need no migration and either writer is interchangeable.
+func TestInsertTableLevelsSingleRowMatchesFlat(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	headers := []string{"Name", "Age", "City"}
+	rows := [][]string{{"Alice", "30", "NYC"}}
+
+	flatUID, err := tie.InsertTable("", headers, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	levelsUID, err := tie.InsertTableLevels("", [][]string{headers}, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	flat, err := tie.Get(flatUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	viaLevels, err := tie.Get(levelsUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	flatColumns := decodeOrderedList(RowValues(flat, tableColumnsRel))
+	levelsColumns := decodeOrderedList(RowValues(viaLevels, tableColumnsRel))
+	if !slices.Equal(flatColumns, levelsColumns) {
+		t.Errorf("columns differ: flat %q, via levels %q", flatColumns, levelsColumns)
+	}
+	if got := RowValues(viaLevels, tableColumnLevelsRel); len(got) != 0 {
+		t.Errorf("a single-row header stored column-levels %q, want none", got)
+	}
+}
+
+// TestReadTableLevelsOnFlatTable verifies a table written without levels — every
+// table predating this feature — reads back as a depth-1 header rather than empty.
+func TestReadTableLevelsOnFlatTable(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	headers := []string{"Name", "Age"}
+	rows := [][]string{{"Alice", "30"}}
+	uid, err := tie.InsertTable("", headers, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotHeaderRows, gotRows, err := tie.ReadTableLevels(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]string{headers}; !reflect.DeepEqual(gotHeaderRows, want) {
+		t.Errorf("headerRows = %q, want %q", gotHeaderRows, want)
+	}
+	if !reflect.DeepEqual(gotRows, rows) {
+		t.Errorf("rows = %q, want %q", gotRows, rows)
+	}
+}
+
+// TestInsertTableLevelsReplaceDropsLevels verifies that re-importing a table whose
+// header stopped being hierarchical leaves no stale column-levels behind.
+func TestInsertTableLevelsReplaceDropsLevels(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	const uid = "tabletest_levels_replace_uid"
+
+	if _, err := tie.InsertTableLevels(uid, levelsHeaderRows, levelsRows); err != nil {
+		t.Fatal(err)
+	}
+	row, err := tie.Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := RowValues(row, tableColumnLevelsRel); len(got) == 0 {
+		t.Fatal("first insert stored no column-levels")
+	}
+
+	flatHeaders := []string{"Sample", "Mean"}
+	if _, err := tie.InsertTable(uid, flatHeaders, [][]string{{"S1", "4.3"}}); err != nil {
+		t.Fatal(err)
+	}
+	row, err = tie.Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := RowValues(row, tableColumnLevelsRel); len(got) != 0 {
+		t.Errorf("column-levels = %q after flat re-import, want none", got)
+	}
+
+	gotHeaderRows, _, err := tie.ReadTableLevels(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := [][]string{flatHeaders}; !reflect.DeepEqual(gotHeaderRows, want) {
+		t.Errorf("headerRows = %q, want %q", gotHeaderRows, want)
+	}
+}
+
+// TestDeleteTableClearsLevels verifies DeleteTable removes column-levels too, so a
+// deleted table leaves no orphaned header metadata.
+func TestDeleteTableClearsLevels(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	uid, err := tie.InsertTableLevels("", levelsHeaderRows, levelsRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tie.DeleteTable(uid); err != nil {
+		t.Fatal(err)
+	}
+
+	row, err := tie.Get(uid)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return // fully gone is the ideal outcome
+		}
+		t.Fatal(err)
+	}
+	if got := RowValues(row, tableColumnLevelsRel); len(got) != 0 {
+		t.Errorf("column-levels = %q after delete, want none", got)
+	}
+}
+
 func TestFavorites(t *testing.T) {
 	tie := NewTieClient(TestingConfig())
 	requireServer(t, tie)

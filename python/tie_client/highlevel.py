@@ -1144,10 +1144,30 @@ TieClient.relations_from = relations_from
 #   (Ri, <header>,   <cell>)          # one triple per non-empty cell
 #
 # A column named "tie-type" is unsupported (collides with the row type marker).
+#
+# A table may also carry a multi-row (hierarchical) header, where each column has
+# an ordered list of header levels instead of a single label:
+#
+#   (T,  "column-levels", ["<ord>\x00<lvl0>\x1f<lvl1>", ...])
+#
+# Because a header keys every cell triple in its column, each column still needs
+# exactly one unique string. A column's key is its non-empty levels joined by
+# _LEVEL_SEP, and that is what "columns" holds; dropping empty levels means a
+# single-row header keys as the label itself, so such tables are stored
+# identically however they were written. Levels cannot be recovered from a key
+# alone (empty levels are gone, so depth is not encoded), hence both relations.
+# The relation is absent on single-level tables and read_table ignores it, so
+# hierarchical headers are purely additive: older readers see the flat keys.
 
 _TABLE_COLUMNS_REL = "columns"
 _TABLE_ROWS_REL = "rows"
+_TABLE_COLUMN_LEVELS_REL = "column-levels"
 _ORDER_SEP = "\x00"
+
+# Separates one column's header levels, both in a column-levels entry and in the
+# derived column key. Unit Separator is used because it will not appear in a
+# header label; _ORDER_SEP is unavailable, it already delimits the ordinal prefix.
+_LEVEL_SEP = "\x1f"
 
 
 def _encode_ordered(i: int, s: str) -> str:
@@ -1169,6 +1189,87 @@ def _decode_ordered_list(values: list[str]) -> list[str]:
     return [p for _, p in items]
 
 
+def _column_key(levels: list[str]) -> str:
+    """Join a column's non-empty header levels into its single unique key."""
+    return _LEVEL_SEP.join(l for l in levels if l != "")
+
+
+def _transpose_header_rows(
+    header_rows: list[list[str]],
+) -> tuple[list[list[str]], list[str]]:
+    """Convert row-major header rows into per-column levels plus derived keys.
+
+    header_rows[i][j] is level i of column j, matching how a spreadsheet reads.
+    """
+    if not header_rows:
+        return [], []
+    width = len(header_rows[0])
+    for i, hr in enumerate(header_rows):
+        if len(hr) != width:
+            raise ValueError(
+                f"header row {i} has {len(hr)} columns, want {width}; "
+                "header rows must be rectangular"
+            )
+    levels: list[list[str]] = []
+    keys: list[str] = []
+    for j in range(width):
+        col = []
+        for i, hr in enumerate(header_rows):
+            if _LEVEL_SEP in hr[j] or _ORDER_SEP in hr[j]:
+                raise ValueError(
+                    f"header level {hr[j]!r} (row {i}, column {j}) contains a reserved separator"
+                )
+            col.append(hr[j])
+        if _column_key(col) == "":
+            raise ValueError(f"column {j} has no non-empty header level")
+        levels.append(col)
+        keys.append(_column_key(col))
+    return levels, keys
+
+
+def _transpose_levels(levels: list[list[str]]) -> list[list[str]]:
+    """Convert per-column levels back into row-major header rows.
+
+    Columns of unequal depth are padded with trailing empty levels so the result
+    is rectangular.
+    """
+    depth = max((len(col) for col in levels), default=0)
+    if depth == 0:
+        return []
+    return [
+        [col[i] if i < len(col) else "" for col in levels]
+        for i in range(depth)
+    ]
+
+
+def _decode_column_levels(values: list[str], keys: list[str]) -> list[list[str]]:
+    """Return per-column header levels.
+
+    A table stored without a column-levels relation — every table written before
+    hierarchical headers existed, and every single-level table since — reads back
+    as one level per column equal to its key, so both kinds share one read path.
+    """
+    entries = _decode_ordered_list(values)
+    return [
+        entries[j].split(_LEVEL_SEP) if j < len(entries) else [key]
+        for j, key in enumerate(keys)
+    ]
+
+
+def _validate_column_keys(keys: list[str]) -> None:
+    """Reject the two keys the storage layout cannot represent.
+
+    A column key is a predicate, so duplicates would write both columns' cells to
+    one triple, and "tie-type" would collide with the row entity's type marker.
+    """
+    if Relation.TIE_TYPE in keys:
+        raise ValueError(
+            f"column name {Relation.TIE_TYPE!r} is reserved and cannot be used as a table header"
+        )
+    if len(set(keys)) != len(keys):
+        raise ValueError("table headers must be unique")
+
+
 def _append_clear_table(self: TieClient, batch: Batch, uid: str, collection: str) -> None:
     try:
         row = self.get(uid, collection=collection)
@@ -1185,7 +1286,7 @@ def _append_clear_table(self: TieClient, batch: Batch, uid: str, collection: str
 def insert_table(
     self: TieClient,
     uid: str,
-    headers: list[str],
+    headers: list[str] | list[list[str]],
     rows: list[list[str]],
     collection: str = "",
 ) -> str:
@@ -1195,13 +1296,23 @@ def insert_table(
     there (idempotent re-import), clearing its old row entities first. rows are
     row-major in header order; short rows are padded and extra cells ignored.
     Empty cells are not stored (read_table reconstructs them as "").
+
+    headers is either a flat list of labels, or — for a multi-row (hierarchical)
+    header — a list of header rows, row-major, so headers[i][j] is level i of
+    column j. Header rows must be rectangular, with merged parent cells already
+    forward-filled and blanks explicit: deciding where a merged cell ends is
+    file-parsing work that belongs to the caller, not to storage. A single header
+    row is stored identically to the equivalent flat call.
     """
-    if Relation.TIE_TYPE in headers:
-        raise ValueError(
-            f"column name {Relation.TIE_TYPE!r} is reserved and cannot be used as a table header"
-        )
-    if len(set(headers)) != len(headers):
-        raise ValueError("table headers must be unique")
+    levels: list[list[str]] | None = None
+    if headers and isinstance(headers[0], list):
+        header_rows: list[list[str]] = headers  # type: ignore[assignment]
+        levels, keys = _transpose_header_rows(header_rows)
+        if len(header_rows) < 2:
+            levels = None
+    else:
+        keys = headers  # type: ignore[assignment]
+    _validate_column_keys(keys)
 
     minted = not uid
     if minted:
@@ -1211,41 +1322,79 @@ def insert_table(
     if not minted:
         _append_clear_table(self, batch, uid, collection)
 
-    columns = [_encode_ordered(j, h) for j, h in enumerate(headers)]
+    columns = [_encode_ordered(j, k) for j, k in enumerate(keys)]
     batch.set(uid, Relation.TIE_TYPE, [TieType.TABLE])
     batch.set(uid, _TABLE_COLUMNS_REL, columns)
+
+    # Cleared rather than skipped when there is no hierarchy, so a re-import that
+    # drops one leaves nothing stale behind.
+    batch.set(
+        uid,
+        _TABLE_COLUMN_LEVELS_REL,
+        []
+        if levels is None
+        else [_encode_ordered(j, _LEVEL_SEP.join(col)) for j, col in enumerate(levels)],
+    )
 
     row_refs = []
     for i, cells in enumerate(rows):
         row_uid = self.new_dir_uid()
         row_refs.append(_encode_ordered(i, row_uid))
         batch.set(row_uid, Relation.TIE_TYPE, [TieType.TABLE_ROW])
-        for j, header in enumerate(headers):
+        for j, key in enumerate(keys):
             if j < len(cells) and cells[j] != "":
-                batch.add(row_uid, header, cells[j])
+                batch.add(row_uid, key, cells[j])
     batch.set(uid, _TABLE_ROWS_REL, row_refs)
 
     self.run_batch(batch)
     return uid
 
 
-def read_table(self: TieClient, uid: str, collection: str = "") -> tuple[list[str], list[list[str]]]:
-    """Return (headers, rows) for a table, row-major in header order.
+def _read_table(
+    self: TieClient, uid: str, collection: str
+) -> tuple[list[str], list[list[str]], list[list[str]]]:
+    """Shared reader: one get plus one expand serves both public readers.
 
-    Raises NotFound if uid holds no table entity.
+    Returns (keys, per-column levels, rows), so asking for levels costs no extra
+    round trip.
     """
     row = self.get(uid, collection=collection)
-    headers = _decode_ordered_list(row.values(_TABLE_COLUMNS_REL))
+    keys = _decode_ordered_list(row.values(_TABLE_COLUMNS_REL))
+    levels = _decode_column_levels(row.values(_TABLE_COLUMN_LEVELS_REL), keys)
     row_uids = _decode_ordered_list(row.values(_TABLE_ROWS_REL))
     if not row_uids:
-        return headers, []
+        return keys, levels, []
 
     by_key = {r.key: r for r in self.expand(row_uids, collection=collection)}
     rows = []
     for ru in row_uids:
         r = by_key.get(ru)
-        rows.append([r.first(h) if r else "" for h in headers])
-    return headers, rows
+        rows.append([r.first(k) if r else "" for k in keys])
+    return keys, levels, rows
+
+
+def read_table(self: TieClient, uid: str, collection: str = "") -> tuple[list[str], list[list[str]]]:
+    """Return (headers, rows) for a table, row-major in header order.
+
+    On a table with a multi-row header the headers are the derived column keys;
+    use read_table_levels to get the levels. Raises NotFound if uid holds no
+    table entity.
+    """
+    keys, _, rows = _read_table(self, uid, collection)
+    return keys, rows
+
+
+def read_table_levels(
+    self: TieClient, uid: str, collection: str = ""
+) -> tuple[list[list[str]], list[list[str]]]:
+    """Return (header_rows, rows), header_rows in the shape insert_table accepts.
+
+    A table stored with a single-row header yields exactly one header row, so
+    callers need not distinguish the two cases. Raises NotFound if uid holds no
+    table entity.
+    """
+    _, levels, rows = _read_table(self, uid, collection)
+    return _transpose_levels(levels), rows
 
 
 def delete_table(self: TieClient, uid: str, collection: str = "") -> None:
@@ -1256,6 +1405,7 @@ def delete_table(self: TieClient, uid: str, collection: str = "") -> None:
     batch = self.new_batch(collection)
     _append_clear_table(self, batch, uid, collection)
     batch.set(uid, _TABLE_COLUMNS_REL, [])
+    batch.set(uid, _TABLE_COLUMN_LEVELS_REL, [])
     batch.set(uid, _TABLE_ROWS_REL, [])
     batch.set(uid, Relation.TIE_TYPE, [])
     self.run_batch(batch)
@@ -1263,4 +1413,5 @@ def delete_table(self: TieClient, uid: str, collection: str = "") -> None:
 
 TieClient.insert_table = insert_table
 TieClient.read_table = read_table
+TieClient.read_table_levels = read_table_levels
 TieClient.delete_table = delete_table

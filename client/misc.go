@@ -23,8 +23,8 @@ func TestingConfig() Config {
 	config := defaultConfig
 	config.Namespace = "testing"
 	config.Collection = "testing"
-	config.TripleStoreURL = "http://localhost:1161"
-	config.FileHosts = map[string]FileHost{"default": {URL: "http://localhost:1162"}}
+	config.TripleStoreURL = "http://localhost:2161"
+	config.FileHosts = map[string]FileHost{"default": {URL: "http://localhost:2162"}}
 	return config
 }
 

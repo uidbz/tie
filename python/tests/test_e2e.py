@@ -41,7 +41,7 @@ def go_tie(*args) -> str:
     """Run the Go tie CLI from test-env against the same servers."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     env_dir = os.path.join(root, "test-env")
-    cmd = [os.path.join(env_dir, "bin", "tie"), "-c", "config.toml", *args]
+    cmd = [os.path.join(env_dir, "bin", "tie"), "-C", "config.toml", *args]
     out = subprocess.run(cmd, cwd=env_dir, capture_output=True, text=True)
     return out.stdout
 
