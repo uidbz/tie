@@ -464,6 +464,33 @@ func TestInsertReadTableLevels(t *testing.T) {
 	}
 }
 
+// TestReadTableFull verifies the combined reader agrees with both narrow readers,
+// since its only reason to exist is sparing a caller that needs keys and levels a
+// second round trip.
+func TestReadTableFull(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+
+	uid, err := tie.InsertTableLevels("", levelsHeaderRows, levelsRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotKeys, gotHeaderRows, gotRows, err := tie.ReadTableFull(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotKeys, levelsWantKeys) {
+		t.Errorf("keys = %q, want %q", gotKeys, levelsWantKeys)
+	}
+	if !reflect.DeepEqual(gotHeaderRows, levelsHeaderRows) {
+		t.Errorf("headerRows = %q, want %q", gotHeaderRows, levelsHeaderRows)
+	}
+	if !reflect.DeepEqual(gotRows, levelsRows) {
+		t.Errorf("rows = %q, want %q", gotRows, levelsRows)
+	}
+}
+
 // TestInsertTableLevelsSingleRowMatchesFlat is the backward-compatibility
 // guarantee: a one-row header must be stored exactly as InsertTable stores it, so
 // existing tables need no migration and either writer is interchangeable.

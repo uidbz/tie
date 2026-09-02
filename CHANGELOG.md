@@ -22,6 +22,10 @@ to follow semantic versioning.
   caller, not to storage. Mirrored in the Python client (`insert_table` accepts
   either form, plus `read_table_levels`), which gains its first table tests,
   including cross-client round trips against the Go client.
+- **`ReadTableFull`** returns a table's column keys, its header rows, and its rows
+  together in one round trip, for callers that need both header views at once — a
+  GUI keys each cell by its column key while rendering the levels above it, and
+  the two narrower readers can only serve that by reading the table twice.
 
 ### Fixed
 

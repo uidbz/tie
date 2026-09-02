@@ -312,8 +312,24 @@ func (tc *TieClient) ReadTableLevels(uid string) (headerRows [][]string, rows []
 	return transposeLevels(levels), rows, nil
 }
 
-// readTable is the shared reader: one forward Get plus one Expand serves both
-// public readers, so asking for levels costs no extra round trip.
+// ReadTableFull returns both views of a table's header in one round trip: the
+// column keys ReadTable yields and the row-major header rows ReadTableLevels
+// yields, plus the rows. It exists for callers that need both at once — a GUI
+// keys each cell by its column key while rendering the levels above it — which
+// the two narrower readers can only serve by reading the table twice. Deriving
+// the keys from the levels instead is not an option outside this package:
+// levelSep is deliberately unexported, so the key rule lives in exactly one
+// place.
+func (tc *TieClient) ReadTableFull(uid string) (keys []string, headerRows [][]string, rows [][]string, err error) {
+	keys, levels, rows, err := tc.readTable(uid)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return keys, transposeLevels(levels), rows, nil
+}
+
+// readTable is the shared reader: one forward Get plus one Expand serves every
+// public reader, so asking for levels costs no extra round trip.
 func (tc *TieClient) readTable(uid string) (keys []string, levels [][]string, rows [][]string, err error) {
 	row, err := tc.Get(uid)
 	if err != nil {
