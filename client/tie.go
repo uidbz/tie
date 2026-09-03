@@ -242,6 +242,21 @@ type ResolvedCollection struct {
 	FileHosts      []string
 }
 
+// ResolveHosts picks the filehost names an upload/import targets. An explicit
+// list (e.g. one or more --host flags) wins. Otherwise the hosts come from the
+// resolved entry of the named collection — the client's bound collection (the
+// global -c selection) when collection is empty — so a collection's own
+// FileHosts override the top-level DefaultFileHosts.
+func (tc *TieClient) ResolveHosts(collection string, explicit []string) []string {
+	if len(explicit) > 0 {
+		return explicit
+	}
+	if collection == "" {
+		return tc.active.FileHosts
+	}
+	return tc.Config.ResolveCollection(collection).FileHosts
+}
+
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
 // (accept self-signed certificates); the scheme lives in URL. Username/Password
 // are optional HTTP Basic Auth credentials sent with every request to a filehost

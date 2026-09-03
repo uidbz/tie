@@ -22,6 +22,20 @@ class FileHost:
 
 
 @dataclass
+class CollectionEntry:
+    """One named [Collections.<name>] binding; unset fields fall back to the
+    top-level Config values. Only file_hosts steers host resolution here."""
+
+    namespace: str = ""
+    collection: str = ""
+    triple_store_url: str = ""
+    username: str = ""
+    password: str = ""
+    insecure: bool = False
+    file_hosts: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     username: str = ""
     password: str = ""
@@ -31,6 +45,8 @@ class Config:
     webservice_insecure: bool = False
     default_file_hosts: list[str] = field(default_factory=list)
     file_hosts: dict[str, FileHost] = field(default_factory=dict)
+    default_collection: str = ""
+    collections: dict[str, CollectionEntry] = field(default_factory=dict)
     import_dest: dict[str, str] = field(default_factory=dict)
     # NOTE: like the Go client, a TOML file that omits PrevVersions loads 0
     # (no history), NOT the default_config() value of 3.
@@ -38,18 +54,34 @@ class Config:
     queries: dict[str, str] = field(default_factory=dict)
     config_path: str = ""
 
-    def resolve_host(self, name: str) -> FileHost:
+    def resolve_host(self, name: str, collection: str = "") -> FileHost:
         """Look up a filehost by name; empty name selects the first default."""
         if not name:
-            if not self.default_file_hosts:
+            hosts = self.resolve_hosts([], collection)
+            if not hosts:
                 raise ValueError(
                     "no filehost configured: set DefaultFileHosts or pass a host name"
                 )
-            name = self.default_file_hosts[0]
+            name = hosts[0]
         host = self.file_hosts.get(name)
         if host is None:
             raise ValueError(f"unknown filehost '{name}'")
         return host
+
+    def resolve_hosts(self, explicit: list[str], collection: str = "") -> list[str]:
+        """Pick the filehost names an upload/import targets.
+
+        An explicit --host list wins; otherwise the named collection's
+        FileHosts are used (the default collection when collection is empty)
+        — its own list when set, the top-level default_file_hosts when not —
+        mirroring the Go client's TieClient.ResolveHosts.
+        """
+        if explicit:
+            return list(explicit)
+        entry = self.collections.get(collection or self.default_collection)
+        if entry is not None and entry.file_hosts:
+            return list(entry.file_hosts)
+        return list(self.default_file_hosts)
 
     def prev_collection_for(self, main_collection: str) -> str:
         if not main_collection:
@@ -98,6 +130,17 @@ def _config_from_dict(d: dict) -> Config:
             username=hv.get("Username", ""),
             password=hv.get("Password", ""),
         )
+    cols: dict[str, CollectionEntry] = {}
+    for coll_name, cv in (d.get("Collections") or {}).items():
+        cols[coll_name] = CollectionEntry(
+            namespace=cv.get("Namespace", ""),
+            collection=cv.get("Collection", ""),
+            triple_store_url=cv.get("TripleStoreURL", ""),
+            username=cv.get("Username", ""),
+            password=cv.get("Password", ""),
+            insecure=cv.get("Insecure", False),
+            file_hosts=list(cv.get("FileHosts", []) or []),
+        )
     return Config(
         username=d.get("Username", ""),
         password=d.get("Password", ""),
@@ -107,6 +150,8 @@ def _config_from_dict(d: dict) -> Config:
         webservice_insecure=d.get("WebserviceInsecure", False),
         default_file_hosts=list(d.get("DefaultFileHosts", []) or []),
         file_hosts=fh,
+        default_collection=d.get("DefaultCollection", ""),
+        collections=cols,
         import_dest=dict(d.get("ImportDest", {}) or {}),
         prev_versions=int(d.get("PrevVersions", 0) or 0),
         queries=dict(d.get("Queries", {}) or {}),
@@ -154,6 +199,8 @@ def save_config(name: str, config: Config) -> str:
         lines.append("WebserviceInsecure = true")
     hosts = ", ".join(_toml_str(h) for h in config.default_file_hosts)
     lines.append(f"DefaultFileHosts = [{hosts}]")
+    if config.default_collection:
+        lines.append(f"DefaultCollection = {_toml_str(config.default_collection)}")
     lines.append(f"PrevVersions = {config.prev_versions}")
     lines.append("")
     for host_name, h in config.file_hosts.items():
@@ -164,6 +211,24 @@ def save_config(name: str, config: Config) -> str:
             lines.append(f"Username = {_toml_str(h.username)}")
         if h.password:
             lines.append(f"Password = {_toml_str(h.password)}")
+        lines.append("")
+    for coll_name, e in config.collections.items():
+        lines.append(f"[Collections.{coll_name}]")
+        if e.namespace:
+            lines.append(f"Namespace = {_toml_str(e.namespace)}")
+        if e.collection:
+            lines.append(f"Collection = {_toml_str(e.collection)}")
+        if e.triple_store_url:
+            lines.append(f"TripleStoreURL = {_toml_str(e.triple_store_url)}")
+        if e.username:
+            lines.append(f"Username = {_toml_str(e.username)}")
+        if e.password:
+            lines.append(f"Password = {_toml_str(e.password)}")
+        if e.insecure:
+            lines.append("Insecure = true")
+        if e.file_hosts:
+            hosts = ", ".join(_toml_str(h) for h in e.file_hosts)
+            lines.append(f"FileHosts = [{hosts}]")
         lines.append("")
     if config.import_dest:
         lines.append("[ImportDest]")

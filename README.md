@@ -256,11 +256,14 @@ For an authenticated filehost, add `Username`/`Password` to its `[FileHosts.*]`
 block; they are sent as HTTP Basic Auth with every upload and download.
 
 `upload`, `download`, `import`, and `mount` select a filehost with `--host
-<name>` (defaulting to the first `DefaultFileHosts` entry). `upload`/`download`
-also accept `--server <url>` to target a raw filehost URL without config, plus
-`--insecure` to skip TLS verification for that address. The scheme lives in the
-URL — `Insecure` only controls certificate checking, it does not switch
-`http`/`https`.
+<name>` (defaulting to the active collection's `FileHosts` — its own list when
+the collection sets one, the top-level `DefaultFileHosts` otherwise).
+`upload`/`download` also accept `--server <url>` to target a raw filehost URL
+without config, plus `--insecure` to skip TLS verification for that address.
+The scheme lives in the URL — `Insecure` only controls certificate checking, it
+does not switch `http`/`https`. `import` uploads to every resolved host (a
+collection listing several hosts mirrors the import to all of them); repeat
+`--host` to choose the mirror set explicitly.
 
 ### Mounting
 

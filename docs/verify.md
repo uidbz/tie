@@ -129,9 +129,10 @@ It uses a dedicated, cheap endpoint rather than downloading anything:
   body is transferred, so a full-store sweep costs one filesystem `stat` per
   hash.
 
-The client checks against the **first** entry in `DefaultFileHosts`; since blobs
-are content-addressed and identical across hosts, presence on any one host is
-what matters for reachability.
+The client checks against the **first** entry in the active collection's
+`FileHosts` (its own list when set, else the top-level `DefaultFileHosts`);
+since blobs are content-addressed and identical across hosts, presence on any
+one host is what matters for reachability.
 
 ## Performance & safety
 

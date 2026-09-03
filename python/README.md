@@ -60,9 +60,10 @@ Key fields:
 
 - **`Webservice`** / **`WebserviceInsecure`** — triplestore URL; `Insecure` is
   `InsecureSkipVerify` for HTTPS (does not swap the scheme).
-- **`FileHosts.<name>`** — blob stores, keyed by name. `DefaultFileHosts[0]`
-  is used when no `--host` is given. `Username`/`Password` ride every filehost
-  request as Basic Auth.
+- **`FileHosts.<name>`** — blob stores, keyed by name. When no `--host` is
+  given, the default collection's `FileHosts` are used (its own list when a
+  `[Collections.<name>]` entry sets one, else `DefaultFileHosts`).
+  `Username`/`Password` ride every filehost request as Basic Auth.
 - **`PrevVersions`** — version-history retention count. Note: a TOML file that
   *omits* `PrevVersions` loads `0` (no history), matching the Go client —
   only `conf create` seeds the default of `3`.

@@ -87,7 +87,13 @@ cd test-env
   single synthesized entry from the flat `Namespace`/`Collection`/
   `DefaultFileHosts` fields, so old configs keep working. `Config.ResolveCollection`
   turns a name (or `""`) into the concrete `ResolvedCollection`; `NewTieClientFor`
-  binds a client to it. **CLI flag change: `-c`/`--collection` selects the
+  binds a client to it. Host selection for file ops is collection-aware:
+  `TieClient.ResolveHosts(collection, explicit)` returns the `--host` list when
+  given, else the named collection's resolved `FileHosts` — the client's bound
+  collection (global `-c`) when `collection` is empty — where a collection's own
+  `FileHosts` override top-level `DefaultFileHosts`. `import` mirrors to every
+  resolved host.
+  **CLI flag change: `-c`/`--collection` selects the
   collection; the config file is now `-C`/`--config`** (they were swapped). The
   global `-c`/`-C` are peeked from `os.Args` before cli parsing in
   `parseGlobalFlags` (the command tree is built from config first).

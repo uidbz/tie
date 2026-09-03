@@ -13,7 +13,14 @@ from .client import (
     Update,
     VersionInfo,
 )
-from .config import Config, FileHost, default_config, load_config, save_config
+from .config import (
+    CollectionEntry,
+    Config,
+    FileHost,
+    default_config,
+    load_config,
+    save_config,
+)
 from .errors import NotFound, ServerError, TieError, Unauthorized
 from .filehost import UploadedItem, UploadResult
 from .vocab import FILE_URI_SCHEME, Relation, TieType
@@ -21,6 +28,7 @@ from .vocab import FILE_URI_SCHEME, Relation, TieType
 __all__ = [
     "TieClient",
     "Config",
+    "CollectionEntry",
     "FileHost",
     "QuerySpec",
     "Row",

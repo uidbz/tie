@@ -155,17 +155,18 @@ def _run_import(tie, args, label):
     if is_archive_type(label):
         forced_archive = label
         dir_type = TieType.DIRECTORY
-    hosts = args.host or tie.config.default_file_hosts
+    hosts = tie.config.resolve_hosts(args.host, args.collection)
+    for h in hosts:
+        if h not in tie.config.file_hosts:
+            print(f"unknown filehost '{h}' (no [FileHosts.{h}] entry in config)", file=sys.stderr)
+            return
+    print("Uploading to", hosts)
     for path in args.paths:
         if not os.path.exists(path):
             print(f"{path}: not found", file=sys.stderr)
             continue
-        print("Uploading to", hosts)
         for h in hosts:
-            fh = tie.config.file_hosts.get(h)
-            if fh is None:
-                print(f"unknown filehost '{h}'", file=sys.stderr)
-                continue
+            fh = tie.config.file_hosts[h]
             try:
                 if os.path.isdir(path):
                     tie.import_dir(path, fh, args.collection or "", dir_type,

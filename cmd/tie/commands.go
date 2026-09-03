@@ -179,7 +179,7 @@ func cmdUpload() *cli.Command {
 		Name:  "upload",
 		Usage: "Upload a file or directory to a filehost: upload [file]",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first DefaultFileHosts)"},
+			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first of the collection's FileHosts)"},
 			&cli.StringFlag{Name: "server", Usage: "Raw filehost URL, bypassing config"},
 			&cli.BoolFlag{Name: "insecure", Usage: "Skip TLS certificate verification (with --server)"},
 			&cli.BoolFlag{Name: "json", Usage: "Emit result as JSON"},
@@ -235,7 +235,7 @@ func cmdDownload() *cli.Command {
 		Name:  "download",
 		Usage: "Download a file or directory from a filehost: download [source-hash] [dest]",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first DefaultFileHosts)"},
+			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first of the collection's FileHosts)"},
 			&cli.StringFlag{Name: "server", Usage: "Raw filehost URL, bypassing config"},
 			&cli.BoolFlag{Name: "insecure", Usage: "Skip TLS certificate verification (with --server)"},
 		},
@@ -524,7 +524,7 @@ func cmdMount() *cli.Command {
 		Name: "mount", Usage: "Mount a content-addressed directory (mount [dir-hash] [mountpoint]) " +
 			"or the live tag-derived filesystem (mount --db [mountpoint])",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first DefaultFileHosts)"},
+			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first of the collection's FileHosts)"},
 			&cli.IntFlag{Name: "cache", Usage: "On-disk file cache size in GB", Value: 1},
 			&cli.BoolFlag{Name: "db", Usage: "Mount the live tag-derived filesystem instead of a dir-hash"},
 			&cli.BoolFlag{Name: "verify", Usage: "Verify downloaded bytes against their content hash (default off; use for an untrusted filehost)"},
@@ -900,7 +900,7 @@ func importFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
 		&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
-		&cli.StringSliceFlag{Name: "host"},
+		&cli.StringSliceFlag{Name: "host", Usage: "Filehost name(s) from config; repeatable to mirror (default: the collection's FileHosts)"},
 		&cli.StringFlag{Name: "dest", Usage: "Virtual path to root the imported directory tree at (overrides config ImportDest and the source path)"},
 	}
 }
@@ -932,17 +932,19 @@ func runImport(ctx *cli.Command, label string) error {
 		forcedArchive = t
 		dirType = client.TieDirectory.String()
 	}
+	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
+	for _, h := range hosts {
+		if _, ok := tie.Config.FileHosts[h]; !ok {
+			return fmt.Errorf("unknown filehost %q (no [FileHosts.%s] entry in config)", h, h)
+		}
+	}
+	fmt.Println("Uploading to", hosts)
 	for _, file := range ctx.Args().Slice() {
 		fi, err := os.Stat(file)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
-		hosts := ctx.StringSlice("host")
-		if len(hosts) == 0 {
-			hosts = tie.Config.DefaultFileHosts
-		}
-		fmt.Println("Uploading to", hosts)
 		for _, h := range hosts {
 			if fi.IsDir() {
 				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags"), ctx.String("dest"), forcedArchive); err != nil {

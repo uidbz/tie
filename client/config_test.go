@@ -127,6 +127,39 @@ func TestResolveCollectionUnknownNameIsBareID(t *testing.T) {
 	}
 }
 
+func TestResolveHosts(t *testing.T) {
+	c := Config{
+		Namespace:         "Collections",
+		Collection:        "Main",
+		TripleStoreURL:    "https://main",
+		DefaultFileHosts:  []string{"top"},
+		DefaultCollection: "Main",
+		Collections: map[string]CollectionEntry{
+			"Main":  {Namespace: "Collections", Collection: "Main"},
+			"media": {Collection: "media", FileHosts: []string{"ssd", "hdd"}},
+		},
+	}
+
+	// An explicit --host list always wins, over any collection binding.
+	if got := NewTieClient(c).ResolveHosts("", []string{"explicit"}); !reflect.DeepEqual(got, []string{"explicit"}) {
+		t.Errorf("explicit hosts: got %v", got)
+	}
+	// The default collection has no FileHosts of its own: inherit the top-level.
+	if got := NewTieClient(c).ResolveHosts("", nil); !reflect.DeepEqual(got, []string{"top"}) {
+		t.Errorf("default collection should inherit DefaultFileHosts, got %v", got)
+	}
+	// A client bound to a collection with its own FileHosts (tie -c media)
+	// resolves those, overriding the top-level default.
+	if got := NewTieClientFor(c, "media").ResolveHosts("", nil); !reflect.DeepEqual(got, []string{"ssd", "hdd"}) {
+		t.Errorf("bound collection FileHosts should override DefaultFileHosts, got %v", got)
+	}
+	// An explicit collection name (import --collection media) steers hosts too,
+	// even on a client bound to another collection.
+	if got := NewTieClient(c).ResolveHosts("media", nil); !reflect.DeepEqual(got, []string{"ssd", "hdd"}) {
+		t.Errorf("named collection FileHosts should override DefaultFileHosts, got %v", got)
+	}
+}
+
 func TestNormalizeConfigLegacy(t *testing.T) {
 	c := Config{
 		Webservice:       "https://legacy",
