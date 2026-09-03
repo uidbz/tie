@@ -6,6 +6,8 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+## [v0.5.1] - 2026-09-03
+
 ### Added
 
 - **Multi-row (hierarchical) table headers.** `InsertTableLevels`/`ReadTableLevels`
