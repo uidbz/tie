@@ -28,6 +28,7 @@ from .client import (
 from .errors import NotFound
 from .metadata_extract import Media, extract_media_metadata
 from .vocab import (
+    VALUE_TYPES,
     ARCHIVE_TYPES,
     DIR_TYPES,
     FILE_URI_SCHEME,
@@ -36,6 +37,7 @@ from .vocab import (
     archive_type_of,
     contains_archive_type,
     is_archive_type,
+    is_value_type,
 )
 
 FLUSH_THRESHOLD = 1000
@@ -428,6 +430,63 @@ TieClient.list_dir_types = list_dir_types
 TieClient._collect_descendant_dirs = _collect_descendant_dirs
 TieClient.rename_file = rename_file
 TieClient.rename_dir = rename_dir
+
+
+# ---------------------------------------------------------------------------
+# value types
+# ---------------------------------------------------------------------------
+
+
+VALUE_TYPE_REGISTRY_SUBJECT = "value-types"
+"""Subject of the per-collection value-type registry (mirrors the Go
+client's private const; its attributes *are* the declared schema)."""
+
+
+def set_value_types(self: TieClient, types: dict[str, str]) -> None:
+    """Declare the value type of each named relation, merging into whatever the
+    collection already holds.
+
+    Declaring "" or VALUE_TYPES.STRING clears a relation's entry, since an
+    absent declaration already means string. Every type is checked before
+    anything is written, so a mapping containing one unknown type declares
+    nothing. Declarations replace rather than accumulate: one batch of set ops,
+    mirroring client.SetValueTypes.
+    """
+    if not types:
+        return
+    for relation, t in types.items():
+        if not relation:
+            raise ValueError("SetValueType: relation must not be empty")
+        if t and t not in VALUE_TYPES:
+            raise ValueError(f"SetValueType: unknown value type {t!r} for relation {relation!r}")
+    batch = self.new_batch()
+    for relation, t in types.items():
+        if t is None or t == "" or t == ValueType.STRING:
+            batch.set(VALUE_TYPE_REGISTRY_SUBJECT, relation, [])
+        else:
+            batch.set(VALUE_TYPE_REGISTRY_SUBJECT, relation, [t])
+    self.run_batch(batch)
+    self.sync()
+
+
+def value_types(self: TieClient) -> dict[str, str]:
+    """Return every value type declared in the collection, keyed by relation.
+
+    One round trip for a whole collection's schema; fetch it once per
+    collection and cache it. A collection with no declarations yields an empty
+    dict. Relations declared with a type this client does not know are omitted
+    rather than reported (they read as string, the default anyway).
+    """
+    try:
+        row = self.get(VALUE_TYPE_REGISTRY_SUBJECT)
+    except NotFound:
+        return {}
+    return {relation: row.first(relation) for relation in row.attributes
+            if is_value_type(row.first(relation))}
+
+
+TieClient.set_value_types = set_value_types
+TieClient.value_types = value_types
 
 
 # ---------------------------------------------------------------------------

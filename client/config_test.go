@@ -172,20 +172,45 @@ func TestNormalizeConfigLegacy(t *testing.T) {
 	if c.TripleStoreURL != "https://legacy" {
 		t.Errorf("Webservice should populate TripleStoreURL, got %q", c.TripleStoreURL)
 	}
-	if c.DefaultCollection != "Main" {
-		t.Errorf("DefaultCollection should be synthesized as %q, got %q", "Main", c.DefaultCollection)
-	}
-	entry, ok := c.Collections["Main"]
-	if !ok {
-		t.Fatalf("expected a synthesized 'Main' collection, got %+v", c.Collections)
-	}
-	if entry.Namespace != "Collections" || !reflect.DeepEqual(entry.FileHosts, []string{"default"}) {
-		t.Errorf("synthesized entry wrong: %+v", entry)
+	// A flat config gains no [Collections] entry: one synthesized from the flat
+	// fields would shadow them (see TestFlatFieldOverrideIsHonored).
+	if len(c.Collections) != 0 || c.DefaultCollection != "" {
+		t.Errorf("flat config should stay flat, got DefaultCollection=%q Collections=%+v",
+			c.DefaultCollection, c.Collections)
 	}
 
-	// The synthesized default must resolve to the legacy connection.
+	// It must still resolve to the legacy connection, filehosts included.
 	got := c.ResolveCollection("")
 	if got.TripleStoreURL != "https://legacy" || got.Collection != "Main" || got.Namespace != "Collections" {
 		t.Errorf("resolved default from legacy config wrong: %+v", got)
+	}
+	if !reflect.DeepEqual(got.FileHosts, []string{"default"}) {
+		t.Errorf("resolved filehosts wrong: %+v", got.FileHosts)
+	}
+}
+
+// A caller that loads a config and then retargets it — what every embedder does
+// to address its own namespace instead of the user's default — must be honored.
+func TestFlatFieldOverrideIsHonored(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "user.toml")
+	toml := "TripleStoreURL = \"https://box\"\nNamespace = \"someones-namespace\"\nCollection = \"someones-collection\"\n"
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c.Namespace = "atlas"
+	c.Collection = "measurements"
+
+	got := c.ResolveCollection("")
+	if got.Namespace != "atlas" || got.Collection != "measurements" {
+		t.Errorf("override ignored: resolved %q/%q", got.Namespace, got.Collection)
+	}
+	if got.TripleStoreURL != "https://box" {
+		t.Errorf("override must not disturb the connection: %+v", got)
 	}
 }

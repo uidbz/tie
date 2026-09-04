@@ -23,7 +23,7 @@ from .config import (
 )
 from .errors import NotFound, ServerError, TieError, Unauthorized
 from .filehost import UploadedItem, UploadResult
-from .vocab import FILE_URI_SCHEME, Relation, TieType
+from .vocab import FILE_URI_SCHEME, VALUE_TYPES, Relation, TieType, ValueType
 
 __all__ = [
     "TieClient",
@@ -41,6 +41,8 @@ __all__ = [
     "UploadedItem",
     "Relation",
     "TieType",
+    "ValueType",
+    "VALUE_TYPES",
     "FILE_URI_SCHEME",
     "NotFound",
     "Unauthorized",

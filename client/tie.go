@@ -69,6 +69,10 @@ type QuerySpec struct {
 	// SortByValue orders matched keys by the value each holds under this
 	// relation (e.g. "gendb-imported-at" for chronological order). Empty = none.
 	SortByValue string
+	// SortByValueNumeric reads those values as numbers instead of strings, so 9
+	// precedes 10. Values that do not parse sort last in either direction. See
+	// ValueTypes for declaring which relations hold numbers.
+	SortByValueNumeric bool
 	// Descending reverses the final ordering.
 	Descending bool
 }
@@ -445,11 +449,12 @@ func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, err
 	request.Reverse = spec.Reverse
 	request.Expand = spec.Expand
 	request.Sort = tiedb.SortOptions{
-		Offset:      spec.Offset,
-		Limit:       spec.Limit,
-		SortBy:      spec.SortBy,
-		SortByValue: spec.SortByValue,
-		Descending:  spec.Descending,
+		Offset:             spec.Offset,
+		Limit:              spec.Limit,
+		SortBy:             spec.SortBy,
+		SortByValue:        spec.SortByValue,
+		SortByValueNumeric: spec.SortByValueNumeric,
+		Descending:         spec.Descending,
 	}
 
 	reply, err := run[api.QueryReply](tc, request)

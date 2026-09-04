@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"slices"
+	"strconv"
 	"sync/atomic"
 )
 
@@ -203,6 +204,35 @@ func (ic *Collection) firstValueOf(key, relation string) string {
 		}
 	})
 	return best
+}
+
+// firstNumberOf is firstValueOf for numeric ordering: the smallest value the key
+// holds under relation that parses as a number, or ok=false if it holds none that
+// do. It picks the numeric minimum rather than parsing the lexicographic minimum,
+// so a multi-valued relation orders by the same value a reader would call its
+// smallest.
+func (ic *Collection) firstNumberOf(key, relation string) (float64, bool) {
+	data, found := ic.Get(key, relation)
+	if !found {
+		return 0, false
+	}
+	values, ok := data[key][relation]
+	if !ok {
+		return 0, false
+	}
+	best := 0.0
+	any := false
+	values.ForEach(func(v string) {
+		n, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return
+		}
+		if !any || n < best {
+			best = n
+			any = true
+		}
+	})
+	return best, any
 }
 
 func (ic *Collection) GetAssociations(value string) (*AssociationSet, bool) {
@@ -701,6 +731,13 @@ type SortOptions struct {
 	// Empty means no value-based ordering. Example: "gendb-imported-at" to sort
 	// tables chronologically. Multi-valued relations sort by their smallest value.
 	SortByValue string
+	// SortByValueNumeric reads each SortByValue value as a number and orders
+	// numerically instead of lexicographically, so 9 precedes 10. Values that do
+	// not parse as a number sort last, independent of Descending — the same rule
+	// as a missing value, and what keeps the comparator consistent. Ignored when
+	// SortByValue is empty. Dates need no such mode: the RFC3339 and YYYY-MM-DD
+	// forms already sort chronologically as strings.
+	SortByValueNumeric bool
 	// Descending reverses the final ordering (applies to any sort mode).
 	Descending bool
 }
@@ -724,9 +761,24 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 
 	// When ordering by a relation's value, resolve each key's value once and
 	// cache it — the comparator runs O(n log n) times but the forward lookup
-	// runs at most once per distinct key.
+	// (and, in numeric mode, the parse) runs at most once per distinct key.
 	var valueOf func(key string) string
-	if o.SortByValue != "" {
+	var numberOf func(key string) (float64, bool)
+	if o.SortByValue != "" && o.SortByValueNumeric {
+		type parsed struct {
+			n  float64
+			ok bool
+		}
+		cache := make(map[string]parsed, len(sorted))
+		numberOf = func(key string) (float64, bool) {
+			if p, ok := cache[key]; ok {
+				return p.n, p.ok
+			}
+			n, found := ic.firstNumberOf(key, o.SortByValue)
+			cache[key] = parsed{n, found}
+			return n, found
+		}
+	} else if o.SortByValue != "" {
 		cache := make(map[string]string, len(sorted))
 		valueOf = func(key string) string {
 			if v, ok := cache[key]; ok {
@@ -740,7 +792,25 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 
 	slices.SortFunc(sorted, func(a, b StringTriple) int {
 		var n int
-		if o.SortByValue != "" {
+		if numberOf != nil {
+			na, oka := numberOf(a.Key)
+			nb, okb := numberOf(b.Key)
+			// Unparseable values sort last in both directions, so return before
+			// the Descending negation below. A comparator that let both
+			// Less(a,b) and Less(b,a) hold would corrupt the slice.
+			if !oka || !okb {
+				if oka == okb {
+					return cmp.Compare(a.Key, b.Key)
+				}
+				if oka {
+					return -1
+				}
+				return 1
+			}
+			if n = cmp.Compare(na, nb); n == 0 {
+				n = cmp.Compare(a.Key, b.Key)
+			}
+		} else if o.SortByValue != "" {
 			if n = cmp.Compare(valueOf(a.Key), valueOf(b.Key)); n == 0 {
 				n = cmp.Compare(a.Key, b.Key)
 			}

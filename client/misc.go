@@ -80,32 +80,21 @@ func LoadConfig(configName string) (Config, error) {
 	return c, nil
 }
 
-// normalizeConfig applies backward-compatible defaults after decode so the rest
-// of the client has a single uniform view: the deprecated Webservice field maps
-// to TripleStoreURL (and vice versa), and a config with no [Collections] gets
-// one synthesized from the flat Namespace/Collection/DefaultFileHosts fields.
+// normalizeConfig applies backward-compatible defaults after decode: the
+// deprecated Webservice field maps to TripleStoreURL (and vice versa).
+//
+// A config with no [Collections] is deliberately left without one. Synthesizing
+// an entry from the flat Namespace/Collection fields would make that entry
+// shadow the fields it was copied from, so a caller that loads a config and then
+// overrides Config.Namespace/Config.Collection (the documented way to target a
+// collection programmatically) would be silently ignored. ResolveCollection's
+// unnamed path already resolves the flat fields identically.
 func normalizeConfig(c *Config) {
 	if c.TripleStoreURL == "" {
 		c.TripleStoreURL = c.Webservice
 	}
 	if c.Webservice == "" {
 		c.Webservice = c.TripleStoreURL
-	}
-	if len(c.Collections) == 0 {
-		name := c.Collection
-		if name == "" {
-			name = "default"
-		}
-		c.Collections = map[string]CollectionEntry{
-			name: {
-				Namespace:  c.Namespace,
-				Collection: c.Collection,
-				FileHosts:  c.DefaultFileHosts,
-			},
-		}
-		if c.DefaultCollection == "" {
-			c.DefaultCollection = name
-		}
 	}
 }
 

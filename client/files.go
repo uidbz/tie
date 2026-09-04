@@ -40,27 +40,66 @@ type UploadedItem struct {
 	ErrorMsg  string
 }
 
+// UploadOptions carries the optional upload knobs. The zero value uploads with
+// the store's default retention and no owner token, matching UploadTo.
+type UploadOptions struct {
+	// Retention is a Go duration (e.g. "72h") or "infinite". Empty means the
+	// store's DefaultRetention applies, which may be finite — callers storing a
+	// blob that a triple will keep referencing should pass "infinite" so the
+	// filehost reaper cannot collect it out from under them.
+	Retention string
+	// OwnerToken, when non-empty, lets the uploader change the blob's retention
+	// later. Only its hash is kept server-side.
+	OwnerToken string
+	// Progress, when non-nil, receives each chunk of uploaded bytes so callers
+	// can render a progress bar. The total is the file (or manifest) size.
+	Progress io.Writer
+}
+
 // Upload stores file (or directory) on the named filehost and returns the
 // resulting hashes. Pass an empty hostName to use the default filehost.
 func (tc *TieClient) Upload(hostName, file string) (*UploadResult, error) {
+	return tc.UploadWithOptions(hostName, file, UploadOptions{})
+}
+
+// UploadWithOptions behaves like Upload but applies opts, letting callers set
+// retention and an owner token.
+func (tc *TieClient) UploadWithOptions(hostName, file string, opts UploadOptions) (*UploadResult, error) {
 	host, err := tc.ResolveHost(hostName)
 	if err != nil {
 		return nil, err
 	}
-	return UploadTo(host, file)
+	return UploadToWithOptions(host, file, opts)
 }
 
 // UploadTo stores file (or directory) on an explicit filehost, bypassing config
 // lookup. Useful for one-off targets (e.g. a raw --server address).
 func UploadTo(host FileHost, file string) (*UploadResult, error) {
-	return UploadToWithProgress(host, file, nil)
+	return UploadToWithOptions(host, file, UploadOptions{})
 }
 
 // UploadToWithProgress behaves like UploadTo but, when progress is non-nil,
 // writes each chunk of uploaded bytes to it so callers can render a progress
 // bar. The total byte count is the file (or manifest) size.
 func UploadToWithProgress(host FileHost, file string, progress io.Writer) (*UploadResult, error) {
-	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Progress: progress, Store: host.Store})
+	return UploadToWithOptions(host, file, UploadOptions{Progress: progress})
+}
+
+// UploadToWithOptions stores file (or directory) on an explicit filehost with
+// full control over retention, owner token and progress reporting.
+//
+// A nil error does not mean the upload succeeded: the filehost answers 200 even
+// when its recomputed checksum disagrees with the client's (it drops the blob
+// but still reports a hash), so callers must check UploadResult.ErrorMsg and
+// each item's ErrorMsg.
+func UploadToWithOptions(host FileHost, file string, opts UploadOptions) (*UploadResult, error) {
+	status := putlib.Upload(host.URL, file, putlib.PutConfig{
+		Client:     HTTPClientFor(host),
+		Progress:   opts.Progress,
+		Store:      host.Store,
+		Retention:  opts.Retention,
+		OwnerToken: opts.OwnerToken,
+	})
 	result := &UploadResult{ErrorMsg: status.ErrorMsg}
 	for _, item := range status.UploadedItems {
 		result.Items = append(result.Items, UploadedItem{

@@ -61,6 +61,11 @@ class QuerySpec:
     offset: int = 0
     limit: int = 0
     sort_by: str = ""
+    # sort_by_value orders by the value each match holds under this relation
+    # (empty = none); sort_by_value_numeric reads those values as numbers
+    # instead of strings.
+    sort_by_value: str = ""
+    sort_by_value_numeric: bool = False
 
 
 @dataclass
@@ -258,7 +263,13 @@ class TieClient:
                 "filter": spec.filter,
                 "reverse": spec.reverse,
                 "expand": spec.expand,
-                "sort": {"Offset": spec.offset, "Limit": spec.limit, "SortBy": spec.sort_by},
+                "sort": {
+                    "Offset": spec.offset,
+                    "Limit": spec.limit,
+                    "SortBy": spec.sort_by,
+                    "SortByValue": spec.sort_by_value,
+                    "SortByValueNumeric": spec.sort_by_value_numeric,
+                },
             }
         )
         reply = self._triplestore.run("Query", body)

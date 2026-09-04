@@ -60,6 +60,38 @@ class TieType:
     TABLE_ROW = "table-row"
 
 
+class ValueType:
+    """Declared value types, mirroring client.ValueType.
+
+    An advisory reading of the values under a relation: the store never
+    validates a value against its declared type, values stay plain strings.
+    The set is closed; readers treat anything else as STRING.
+    """
+
+    STRING = "string"
+    INT = "int"
+    FLOAT = "float"
+    BOOL = "bool"
+    DATE = "date"
+    DATETIME = "datetime"
+
+
+# The closed value-type vocabulary, for SetValueType validation
+# (mirrors client.ValueType.Valid).
+VALUE_TYPES = [
+    ValueType.STRING,
+    ValueType.INT,
+    ValueType.FLOAT,
+    ValueType.BOOL,
+    ValueType.DATE,
+    ValueType.DATETIME,
+]
+
+
+def is_value_type(t: str) -> bool:
+    return t in VALUE_TYPES
+
+
 # Archive tie-types, most specific first (mirrors client.archiveTypes).
 ARCHIVE_TYPES = [
     TieType.IMAGE_ARCHIVE,

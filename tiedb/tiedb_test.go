@@ -356,6 +356,68 @@ func TestSortByValue(t *testing.T) {
 	}
 }
 
+// TestSortByValueNumeric verifies that SortByValueNumeric orders by the parsed
+// number rather than the string, and that unparseable values (and keys holding
+// no value at all) sort last in both directions.
+func TestSortByValueNumeric(t *testing.T) {
+	db := NewDB(true)
+	col := db.GetCollection(CollectionKey{t.TempDir(), "c"})
+
+	const n = 10
+	// key i carries i+1 written WITHOUT zero-padding, so the numeric order
+	// (1,2,...,10) diverges from the lexicographic order (1,10,2,...,9):
+	// ascending numeric must come out key00..key09.
+	for i := 0; i < n; i++ {
+		key := "key" + padded(i)
+		col.Add(key, "tag", "gendb-table")
+		col.Add(key, "count", strconv.Itoa(i+1))
+	}
+	// One key holds a non-numeric value and one no value at all; both must
+	// sort last in both directions (tie-broken by key).
+	col.Add("keyNoNum", "tag", "gendb-table")
+	col.Add("keyNoNum", "count", "not-a-number")
+	col.Add("keyEmpty", "tag", "gendb-table")
+	col.Sync()
+
+	set, found := col.GetReverseAssociations("gendb-table")
+	if !found {
+		t.Fatal("GetReverseAssociations(gendb-table) not found")
+	}
+
+	_, asc, total := col.GetPage(set, "", SortOptions{SortByValue: "count", SortByValueNumeric: true, Limit: -1})
+	if total != n+2 {
+		t.Errorf("total = %d, want %d", total, n+2)
+	}
+	wantAsc := make([]string, 0, n+2)
+	for i := 0; i < n; i++ {
+		wantAsc = append(wantAsc, "key"+padded(i))
+	}
+	wantAsc = append(wantAsc, "keyEmpty", "keyNoNum")
+	if len(asc) != len(wantAsc) {
+		t.Fatalf("len(asc) = %d, want %d", len(asc), len(wantAsc))
+	}
+	for i, k := range wantAsc {
+		if asc[i].Key != k {
+			t.Errorf("asc[%d].Key = %q, want %q", i, asc[i].Key, k)
+		}
+	}
+
+	_, desc, _ := col.GetPage(set, "", SortOptions{SortByValue: "count", SortByValueNumeric: true, Descending: true, Limit: -1})
+	wantDesc := make([]string, 0, n+2)
+	for i := n - 1; i >= 0; i-- {
+		wantDesc = append(wantDesc, "key"+padded(i))
+	}
+	wantDesc = append(wantDesc, "keyEmpty", "keyNoNum")
+	if len(desc) != len(wantDesc) {
+		t.Fatalf("len(desc) = %d, want %d", len(desc), len(wantDesc))
+	}
+	for i, k := range wantDesc {
+		if desc[i].Key != k {
+			t.Errorf("desc[%d].Key = %q, want %q", i, desc[i].Key, k)
+		}
+	}
+}
+
 // TestTornWriteRecovery appends a partial (sub-record) tail to a DB file and
 // confirms reopening loads prior data instead of panicking.
 func TestTornWriteRecovery(t *testing.T) {
