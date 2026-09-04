@@ -1,20 +1,28 @@
 package client
 
 import (
+	"errors"
 	"io"
 	"os"
 
+	"github.com/h2non/filetype"
 	"github.com/uidbz/tie/io/archivelib"
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/metadata/tag"
-	"github.com/h2non/filetype"
 )
 
+// GetTieType classifies a file by sniffing its leading bytes. An empty or
+// short file is a valid input — it simply classifies on whatever bytes exist
+// (an empty file is unknown-file) — so io.EOF / io.ErrUnexpectedEOF from the
+// read are not errors. Only a genuine read failure is returned. This mirrors
+// archivelib's member sniffing, which uses the same 261-byte window.
 func GetTieType(file io.Reader) (TieType, error) {
 	head := make([]byte, 261)
-	if _, err := file.Read(head); err != nil {
+	n, err := io.ReadFull(file, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return TieUnknownFile, err
 	}
+	head = head[:n]
 
 	switch true {
 	case filetype.IsImage(head):

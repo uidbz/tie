@@ -151,12 +151,12 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
-		return err
+		return fmt.Errorf("import %s: classify: %w", file, err)
 	}
 	fileType = applyArchiveOverride(fileType, forcedArchive)
 	stat, err := os.Stat(file)
 	if err != nil {
-		return err
+		return fmt.Errorf("import %s: %w", file, err)
 	}
 	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 
@@ -424,7 +424,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 
 	rootPath, err := tie.importRootPath(dir, dest, dirType, allMeta)
 	if err != nil {
-		return err
+		return fmt.Errorf("import %s: root path: %w", dir, err)
 	}
 	dirCache := make(map[string]DirUID)
 	// want records, per directory DirUID, the set of content hashes this import
@@ -473,14 +473,14 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	for _, x := range status.UploadedItems {
 		rel, err := filepath.Rel(dir, x.Filename)
 		if err != nil {
-			return err
+			return fmt.Errorf("import %s: %w", x.Filename, err)
 		}
 		if x.MediaType == "inode/directory" {
 			// Ensure the directory (and its ancestors) exist as DirUID entities,
 			// so even childless directories are browsable.
 			uid, err := dirUID(rel)
 			if err != nil {
-				return err
+				return fmt.Errorf("import %s: create dir: %w", rel, err)
 			}
 			// A directory's tags, name, and size live on its DirUID (the stable
 			// path-tree node), NOT on the immutable tiedir snapshot blob. This is
@@ -507,18 +507,22 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 			batch.Add(string(uid), str(TieTiedirHash), x.Hash)
 			if len(batch.Ops) >= flushThreshold {
 				if err := flush(); err != nil {
-					return err
+					return fmt.Errorf("import %s: tag batch: %w", rel, err)
 				}
 			}
 			continue
 		}
 		parent, err := dirUID(filepath.Dir(rel))
 		if err != nil {
-			return err
+			return fmt.Errorf("import %s: parent dir: %w", rel, err)
 		}
+		// The blob is already on the filehost by now, so a classification
+		// failure must not abort the import — that would strand this and every
+		// later file as an untagged upload. Warn and tag it as unknown-file.
 		fileType, err := GetTieTypeFromPath(x.Filename)
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "warning: %s: cannot classify (%v); tagging as %s\n", x.Filename, err, TieUnknownFile)
+			fileType = TieUnknownFile
 		}
 		fileType = applyArchiveOverride(fileType, forcedArchive)
 		info := TagInfo{
@@ -535,7 +539,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		appendTagOps(batch, info)
 		if len(batch.Ops) >= flushThreshold {
 			if err := flush(); err != nil {
-				return err
+				return fmt.Errorf("import %s: tag batch: %w", rel, err)
 			}
 		}
 		if want[parent] == nil {
@@ -547,12 +551,12 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	// Persist all buffered tag ops before reconciliation: reconcileDir queries the
 	// committed children of each touched directory, so nothing may stay buffered.
 	if err := flush(); err != nil {
-		return err
+		return fmt.Errorf("import %s: final tag batch: %w", dir, err)
 	}
 
 	rootUID, err := dirUID(".")
 	if err != nil {
-		return err
+		return fmt.Errorf("import %s: root dir: %w", dir, err)
 	}
 
 	// Reconcile every directory this import touched: move superseded/orphaned file
@@ -563,11 +567,14 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	for relDir := range dirCache {
 		uid := dirCache[relDir]
 		if err := reconcileDir(tie, collection, uid, want[uid], tie.Config.PrevVersions); err != nil {
-			return err
+			return fmt.Errorf("import %s: reconcile %s: %w", dir, relDir, err)
 		}
 	}
 
-	return tie.SetDirType(rootUID, dirType)
+	if err := tie.SetDirType(rootUID, dirType); err != nil {
+		return fmt.Errorf("import %s: set dir type: %w", dir, err)
+	}
+	return nil
 }
 
 // childEntry is one file child of a directory during reconciliation: its content

@@ -4,6 +4,7 @@ package putlib
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -141,6 +142,17 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 	} else {
 		body, err = io.ReadAll(resp.Body)
 		check(err)
+		// A non-2xx body is an error message (401/403 from auth, 400 for a bad
+		// store/retention, 5xx), not a hash. Surface it instead of letting the
+		// caller's checksum compare turn it into a misleading "checksum failed".
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			msg := strings.TrimSpace(string(body))
+			if msg == "" {
+				msg = http.StatusText(resp.StatusCode)
+			}
+			check(fmt.Errorf("filehost returned %d: %s", resp.StatusCode, msg))
+			body = nil
+		}
 	}
 
 	var errorMsg string
@@ -260,13 +272,10 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 }
 
 func validate(localhash string, uploadStatus StatusItem, status *Status) {
-	if localhash != uploadStatus.Hash {
-		errMsg := "Validation error: Upload checksum failed"
-		if uploadStatus.ErrorMsg == "" {
-			uploadStatus.ErrorMsg = errMsg
-		} else {
-			uploadStatus.ErrorMsg += "\n" + errMsg
-		}
+	// A checksum mismatch is only meaningful when the upload itself succeeded;
+	// otherwise the transport/HTTP error already explains the missing hash.
+	if uploadStatus.ErrorMsg == "" && localhash != uploadStatus.Hash {
+		uploadStatus.ErrorMsg = "Validation error: Upload checksum failed"
 	}
 	status.LastItem = uploadStatus
 

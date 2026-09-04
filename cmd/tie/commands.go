@@ -939,23 +939,34 @@ func runImport(ctx *cli.Command, label string) error {
 		}
 	}
 	fmt.Println("Uploading to", hosts)
+	// Keep going past a failed argument/host so one bad path doesn't block the
+	// rest, but report every failure on stderr and exit non-zero if any occurred
+	// so a scripted/cron import can detect a partial result.
+	var failed []string
+	fail := func(what string, err error) {
+		fmt.Fprintf(os.Stderr, "tie: import %s: %v\n", what, err)
+		failed = append(failed, what)
+	}
 	for _, file := range ctx.Args().Slice() {
 		fi, err := os.Stat(file)
 		if err != nil {
-			fmt.Println(err)
+			fail(file, err)
 			continue
 		}
 		for _, h := range hosts {
 			if fi.IsDir() {
 				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags"), ctx.String("dest"), forcedArchive); err != nil {
-					fmt.Println(err)
+					fail(file+" -> "+h, err)
 				}
 			} else {
 				if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), "", forcedArchive); err != nil {
-					fmt.Println(err)
+					fail(file+" -> "+h, err)
 				}
 			}
 		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d import(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return nil
 }
