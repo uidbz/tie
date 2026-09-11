@@ -24,8 +24,10 @@ type PutConfig struct {
 	// is used. Set it to control TLS behavior (e.g. InsecureSkipVerify).
 	Client *http.Client
 	// Progress, when non-nil, receives a Write for every chunk of the request
-	// body sent, so callers can render an upload progress bar. The total byte
-	// count equals the file/manifest length.
+	// body sent, so callers can render an upload progress bar. For a directory
+	// that is the file bytes plus one manifest per directory, so the total can
+	// exceed a bar sized from file sizes alone. Writes are best-effort: an
+	// error from the writer is discarded and never aborts the upload.
 	Progress io.Writer
 	// Retention, when non-empty, is sent as the Tie-Retention header on every
 	// upload: a Go duration (e.g. "72h") or "infinite". Empty means the server
@@ -85,6 +87,19 @@ func (pc *PutConfig) UploadFile(url string, path string) StatusItem {
 	return pc.UploadMultipart(url, f, int(fi.Size()), path)
 }
 
+// progressSink wraps a progress writer to discard its errors. Upload progress
+// is cosmetic, and the total written can legitimately exceed the bar's max: a
+// directory upload streams one tiedir manifest per directory on top of the file
+// bytes the max was sized from, which makes the bar return "current number
+// exceeds max". io.TeeReader would propagate that error into the request body
+// read and tear down the in-flight stream, so swallow it.
+type progressSink struct{ w io.Writer }
+
+func (s progressSink) Write(p []byte) (int, error) {
+	_, _ = s.w.Write(p)
+	return len(p), nil
+}
+
 func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path string) StatusItem {
 	var (
 		writeErr error // Store the first write error in writeErr.
@@ -100,7 +115,7 @@ func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path s
 
 	var reqBody io.Reader = bufferedFileReader
 	if pc.Progress != nil {
-		reqBody = io.TeeReader(bufferedFileReader, pc.Progress)
+		reqBody = io.TeeReader(bufferedFileReader, progressSink{pc.Progress})
 	}
 	req, err := http.NewRequest(http.MethodPut, url, reqBody)
 	check(err)
