@@ -6,6 +6,50 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+## [v0.5.2] - 2026-09-13
+
+### Added
+
+- **Bulk album import: `tie import <dir-type> --albums <root>`.** A whole
+  library root can now be imported in one run. The new planner
+  (`client.PlanAlbumImport`) scans the tree — one open per file on a wide
+  worker pool, so network-mounted libraries scan in minutes — clusters it into
+  albums, renders each album's destination, and prints a review table with
+  per-album warnings (`--dry-run`); `client.ImportAlbums` then imports group
+  by group, stamping the dir-type on every album root. Grouping is selected
+  with `--by`: `auto` (default) treats one audio-bearing directory as one
+  album but splits directories whose files carry conflicting album tags and
+  merges directories sharing one album identity (multi-disc sets, scattered
+  rips); `dir` is strictly one directory = one album; `tags` clusters purely
+  by album tags. Whole-directory groups import as faithful tree mirrors via
+  the existing `ImportDir` (sidecars included, full reconcile semantics);
+  merged/split/tag-clustered groups import their audio files only,
+  preserving disc subdirectories, and are additive-only. Audio-member zips
+  become single-file `audio-archive` groups (only zip members are peeked —
+  rar/7z/iso listings would stream the whole archive). Warnings flag missing
+  tags, mixed artists with no album-artist tag, destination collisions, and
+  groups nested inside a whole-tree import.
+- **`{albumartist}` destination-template variable and `album-artist` file
+  triple.** `metadata.Media` gains `AlbumArtist` (the tag fork already read
+  it); templates render the aggregated album artist, falling back to the
+  artist, so compilations land under e.g. "Various Artists" instead of under
+  whichever track artist dominates. The value is also written per file at
+  import time alongside title/artist/album/year/track.
+- **Per-collection value-type registry.** An advisory `value-types` registry
+  entity lets a client declare how to read the values under a relation (int,
+  float, bool, date, datetime, string is the default). Values stay plain
+  strings; the registry is a hint for readers, never enforced on writes.
+- **`TieClient.ResolveHosts(collection, explicit)`** — collection-aware
+  filehost resolution for import: a collection's own `FileHosts` are honored
+  instead of always falling back to the top-level `DefaultFileHosts`.
+
+### Fixed
+
+- **Import no longer aborts with bare EOF on empty files.** `GetTieType` read
+  its 261-byte sniff window with a single `Read`, so a zero-byte file returned
+  `io.EOF` unwrapped and aborted the whole import; the sniff now treats
+  EOF/ErrUnexpectedEOF on a short read as "classify what exists".
+
 ## [v0.5.1] - 2026-09-03
 
 ### Added
