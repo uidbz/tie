@@ -901,7 +901,11 @@ func importFlags() []cli.Flag {
 		&cli.StringFlag{Name: "collection", Usage: "Collection to tag into (default: config Collection)"},
 		&cli.StringSliceFlag{Name: "tags", Aliases: []string{"t"}},
 		&cli.StringSliceFlag{Name: "host", Usage: "Filehost name(s) from config; repeatable to mirror (default: the collection's FileHosts)"},
-		&cli.StringFlag{Name: "dest", Usage: "Virtual path to root the imported directory tree at (overrides config ImportDest and the source path)"},
+		&cli.StringFlag{Name: "dest", Usage: "Virtual path to root the imported directory tree at (overrides config ImportDest and the source path). With --albums: inline destination template (e.g. \"/music/{albumartist}/{year}. {album}\")"},
+		&cli.BoolFlag{Name: "albums", Usage: "Bulk-import a library root: discover albums (directories / tag clusters) and import each as its own labeled root"},
+		&cli.StringFlag{Name: "by", Usage: "Album grouping for --albums: auto (dirs, merged/split by tags), dir (one directory = one album), tags (cluster by album tags)", Value: "auto"},
+		&cli.BoolFlag{Name: "dry-run", Usage: "With --albums: print the discovered albums and destinations without importing"},
+		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "With --albums: import without the confirmation prompt"},
 	}
 }
 
@@ -931,6 +935,9 @@ func runImport(ctx *cli.Command, label string) error {
 		// files instead.
 		forcedArchive = t
 		dirType = client.TieDirectory.String()
+	}
+	if ctx.Bool("albums") {
+		return runImportAlbums(ctx, dirType, forcedArchive)
 	}
 	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
 	for _, h := range hosts {
@@ -969,6 +976,112 @@ func runImport(ctx *cli.Command, label string) error {
 		return fmt.Errorf("%d import(s) failed: %s", len(failed), strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// runImportAlbums implements `import <dir-type> --albums <root>...`: discover
+// the albums under each root with client.PlanAlbumImport, show the plan, and
+// import group by group. --dry-run stops after printing; -y skips the
+// confirmation prompt. Keep going past failed roots/groups, reporting all
+// failures at the end like runImport.
+func runImportAlbums(ctx *cli.Command, dirType string, forcedArchive client.TieType) error {
+	mode, err := client.ParseGroupMode(ctx.String("by"))
+	if err != nil {
+		return err
+	}
+	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
+	for _, h := range hosts {
+		if _, ok := tie.Config.FileHosts[h]; !ok {
+			return fmt.Errorf("unknown filehost %q (no [FileHosts.%s] entry in config)", h, h)
+		}
+	}
+	var failed []string
+	fail := func(what string, err error) {
+		fmt.Fprintf(os.Stderr, "tie: import %s: %v\n", what, err)
+		failed = append(failed, what)
+	}
+	for _, root := range ctx.Args().Slice() {
+		fi, err := os.Stat(root)
+		if err != nil {
+			fail(root, err)
+			continue
+		}
+		if !fi.IsDir() {
+			fail(root, errors.New("not a directory (--albums scans library roots)"))
+			continue
+		}
+		fmt.Println("scanning", root, "…")
+		plan, err := client.PlanAlbumImport(tie.Config, root, client.AlbumPlanOptions{
+			DirType:  dirType,
+			Template: ctx.String("dest"),
+			Mode:     mode,
+			ScanProgress: func(scanned, total int) {
+				fmt.Fprintf(os.Stderr, "\rprobed %d/%d files", scanned, total)
+				if scanned == total {
+					fmt.Fprintln(os.Stderr)
+				}
+			},
+		})
+		if err != nil {
+			fail(root, err)
+			continue
+		}
+		if len(plan) == 0 {
+			fmt.Println(root + ": no albums found")
+			continue
+		}
+		printAlbumPlan(plan)
+		if ctx.Bool("dry-run") {
+			continue
+		}
+		if !ctx.Bool("yes") && !confirmAlbumImport(len(plan)) {
+			fmt.Println("aborted")
+			continue
+		}
+		for _, h := range hosts {
+			fmt.Println("Uploading to", h)
+			results := tie.ImportAlbums(plan, client.AlbumImportOptions{
+				Host:          tie.Config.FileHosts[h],
+				Collection:    ctx.String("collection"),
+				DirType:       dirType,
+				Tags:          ctx.StringSlice("tags"),
+				ForcedArchive: forcedArchive,
+				Progress: func(done, total int, g client.AlbumGroup) {
+					fmt.Printf("[%d/%d] %s (%d tracks)\n", done+1, total, g.Dest, g.Tracks)
+				},
+			})
+			for _, r := range results {
+				if r.Err != nil {
+					fail(r.Group.Dest+" -> "+h, r.Err)
+				}
+			}
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%d import(s) failed: %s", len(failed), strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+// printAlbumPlan renders the discovered albums as a table for review before
+// (or instead of, with --dry-run) importing.
+func printAlbumPlan(plan []client.AlbumGroup) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "DEST\tARTIST\tALBUM\tTRACKS\tSIZE\tWARNINGS")
+	for _, g := range plan {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
+			g.Dest, g.Artist, g.Album, g.Tracks, humanizeBytes(g.Size), strings.Join(g.Warnings, "; "))
+	}
+	w.Flush()
+	fmt.Println(len(plan), "albums")
+}
+
+// confirmAlbumImport asks before starting a bulk import; anything but
+// y/yes aborts.
+func confirmAlbumImport(n int) bool {
+	fmt.Printf("Import %d albums? [y/N] ", n)
+	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	answer = strings.TrimSpace(answer)
+	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes")
 }
 
 // dirTypeImport builds an `import <name>` subcommand that labels imported

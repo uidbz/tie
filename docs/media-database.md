@@ -175,7 +175,10 @@ applies:
 
    Importing an album of Miles Davis tracks tagged `Kind of Blue` (1959) then
    lands at `file:/music/Miles Davis/1959. Kind of Blue`. Supported variables:
-   `{artist}`, `{album}`, `{year}`, `{title}`, `{track}`. Values are pulled from
+   `{artist}`, `{albumartist}`, `{album}`, `{year}`, `{title}`, `{track}`
+   (`{albumartist}` renders the album-artist tag, falling back to the artist —
+   use it so compilations land under e.g. "Various Artists" instead of under
+   whichever track artist dominates). Values are pulled from
    the files' embedded tags (e.g. ID3 for audio), extracted client-side at import
    time, and collapsed to one directory-level value each by taking the most common
    non-empty value across the tree — a stray `cover.jpg` with different tags does
@@ -242,6 +245,56 @@ that ends up empty removes itself from listings.
 > local layout (usernames, mount points). Use a `[ImportDest]` template or
 > `--dest` to root imports at a stable, machine-independent path when
 > cross-machine dedup or portability matters.
+
+### Importing a whole library (`--albums`)
+
+`import audio-dir <dir>` treats its argument as *one* album. To import an entire
+library root — hundreds or thousands of albums — add `--albums`:
+
+```sh
+# Review the plan first: one row per album, with destinations and warnings.
+tie import audio-dir --albums --dry-run /music/incoming
+
+# Then run it (asks for confirmation; -y skips the prompt).
+tie import audio-dir --albums /music/incoming
+```
+
+The planner scans the tree (audio files and audio-archive blobs), clusters it
+into albums, renders each album's destination, and prints the plan as a table
+with per-album warnings. Nothing is uploaded or written in `--dry-run` mode.
+
+**Grouping** is selected with `--by`:
+
+- `auto` (default) — one directory of audio files is one album, but a directory
+  whose files carry *conflicting* album tags is split per album, and
+  directories that share one album identity (album + album-artist/artist tags)
+  are merged — multi-disc `CD1`/`CD2` sets and scattered rips become one album.
+- `dir` — strictly one directory = one album, tags only render the destination.
+- `tags` — ignore the layout entirely and cluster by album tags; untagged
+  files form per-directory leftover groups.
+
+Whole-directory groups import as faithful tree mirrors (cue sheets, logs and
+`artwork/` subdirectories included) via the regular `ImportDir` machinery;
+merged/split/tag-clustered groups import their audio files only, preserving
+the subdirectories below their common source directory (disc folders survive).
+
+**Destinations** are rendered per album from the dir-type's `[ImportDest]`
+template — or from `--dest`, which in `--albums` mode acts as an inline
+template, e.g. `--dest "/music/{albumartist}/{year}. {album}"`. The
+`{albumartist}` variable renders the aggregated album-artist tag, falling back
+to the artist. When no template renders (e.g. an album without a year tag), a
+whole-directory group falls back to its source path; a tag cluster falls back
+to `<common-dir>/<album>`; a group with neither gets a warning and is skipped.
+Zip/tar albums whose members are audio become single-file groups imported as
+`audio-archive` blobs — no extraction needed, they read as albums directly.
+(Only zip members are peeked at scan time; rar/7z/iso listings would require
+streaming the whole archive.)
+
+**Review the warnings column.** It flags: missing album/artist tags, mixed
+artists with no album-artist tag, destination collisions between groups, and
+albums nested inside another whole-tree import (their files appear in both).
+Fix tags or prune the plan's inputs, then re-run — the plan is cheap to
+regenerate, and imports are idempotent.
 
 ## Tagging after import
 

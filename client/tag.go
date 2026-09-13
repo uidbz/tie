@@ -199,16 +199,24 @@ func sanitizePathSegment(s string) string {
 	return s
 }
 
-// renderDestTemplate expands {artist}, {album}, {year}, {title}, {track} in tmpl
-// from m, sanitizing each value so it stays within one path segment. It returns
-// an error if any referenced variable resolves to an empty value, so the caller
-// can fall back rather than produce a path with blank segments. An unknown
-// variable name is also an error.
+// renderDestTemplate expands {artist}, {albumartist}, {album}, {year}, {title},
+// {track} in tmpl from m, sanitizing each value so it stays within one path
+// segment. {albumartist} falls back to {artist} when no album-artist tag is
+// present, so compilations without one still render. It returns an error if
+// any referenced variable resolves to an empty value, so the caller can fall
+// back rather than produce a path with blank segments. An unknown variable
+// name is also an error.
 func renderDestTemplate(tmpl string, m metadata.Media) (string, error) {
 	value := func(name string) (string, bool) {
 		switch name {
 		case "artist":
 			return sanitizePathSegment(m.Artist), true
+		case "albumartist":
+			albumArtist := m.AlbumArtist
+			if albumArtist == "" {
+				albumArtist = m.Artist
+			}
+			return sanitizePathSegment(albumArtist), true
 		case "album":
 			return sanitizePathSegment(m.Album), true
 		case "title":
@@ -289,11 +297,12 @@ func aggregateMetadata(items []metadata.Media) metadata.Media {
 		return best
 	}
 	return metadata.Media{
-		Artist: modeStr(func(m metadata.Media) string { return m.Artist }),
-		Album:  modeStr(func(m metadata.Media) string { return m.Album }),
-		Title:  modeStr(func(m metadata.Media) string { return m.Title }),
-		Year:   modeInt(func(m metadata.Media) int { return m.Year }),
-		Track:  modeInt(func(m metadata.Media) int { return m.Track }),
+		Artist:      modeStr(func(m metadata.Media) string { return m.Artist }),
+		AlbumArtist: modeStr(func(m metadata.Media) string { return m.AlbumArtist }),
+		Album:       modeStr(func(m metadata.Media) string { return m.Album }),
+		Title:       modeStr(func(m metadata.Media) string { return m.Title }),
+		Year:        modeInt(func(m metadata.Media) int { return m.Year }),
+		Track:       modeInt(func(m metadata.Media) int { return m.Track }),
 	}
 }
 
@@ -775,6 +784,12 @@ func appendTagOps(batch *api.Batch, info TagInfo) {
 	}
 	if info.Metadata.Artist != "" {
 		batch.Add(hash, str(TieArtist), info.Metadata.Artist)
+	}
+	// Album artist (e.g. "Various Artists"). Written under a raw "album-artist"
+	// property so no stringer-backed TieProperty enum value has to be
+	// regenerated (same approach as "duration" below).
+	if info.Metadata.AlbumArtist != "" {
+		batch.Add(hash, "album-artist", info.Metadata.AlbumArtist)
 	}
 	if info.Metadata.Album != "" {
 		batch.Add(hash, str(TieAlbum), info.Metadata.Album)

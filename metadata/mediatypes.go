@@ -9,8 +9,12 @@ type Media struct {
 	MediaType string
 	Title     string
 	Artist    string
-	Album     string
-	Year      int
-	Track     int
-	Duration  float64 // audio playing time in seconds, 0 when unknown
+	// AlbumArtist is the track's album-level artist (the ALBUMARTIST tag),
+	// e.g. "Various Artists" for a compilation. Empty when untagged; consumers
+	// fall back to Artist.
+	AlbumArtist string
+	Album       string
+	Year        int
+	Track       int
+	Duration    float64 // audio playing time in seconds, 0 when unknown
 }

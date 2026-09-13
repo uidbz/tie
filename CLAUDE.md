@@ -117,6 +117,19 @@ cd test-env
 `tie upload <file>` prints the content hash. `mount --db <mnt>` for the live tag
 tree; `mount <hash> <mnt>` for an immutable content-addressed dir.
 
+`import <dir-type> --albums <root>` bulk-imports a whole library
+(`client/albums.go`): `PlanAlbumImport` scans the tree (wide worker pool +
+single-open probing — libraries live on network mounts; zip-only member
+peeking, since rar/7z listings stream the whole archive), clusters it into
+albums (`GroupAuto` = per-directory, split on conflicting album tags, merged
+on shared album+albumartist identity; `GroupDir`/`GroupTags` are the literal
+extremes), renders per-album destinations from the dir-type's `ImportDest`
+template (`--dest` doubles as an inline template; `{albumartist}` falls back
+to artist), and annotates warnings (missing tags, dest collisions, nesting).
+`ImportAlbums` executes: whole-tree groups via `ImportDir`, file-list groups
+via batched per-file imports that are additive-only (no reconcile — a partial
+view must not version away siblings). CLI has `--dry-run` and `-y`.
+
 `verify` is the store's fsck (see docs/verify.md). Bare `tie verify` is a
 read-only scan of the whole collection for lost or incomplete nodes: orphaned
 dirs/files (no `parent` edge — unreachable from the root), dangling parent
