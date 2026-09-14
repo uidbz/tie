@@ -80,6 +80,8 @@ type repair struct {
 	protected map[string]bool   // nodes referenced by a tiedir-hash edge
 	ancestor  map[string]string // cached nearest live ancestor per ghost
 	handled   map[string]bool   // child+ghost edges already re-parented (dry-run)
+	blobHC    *http.Client      // shared filehost client (per-subject clients fd-exhaust)
+	blobURL   string            // first resolved filehost URL
 	planned   int               // dry-run op counter
 	applied   int
 }
@@ -169,11 +171,26 @@ func main() {
 		}
 	}
 
-	// Ghost fixed-point: re-parent every child off a ghost (to the ghost's
-	// nearest live ancestor, else the restore dir), then delete each childless
-	// ghost. Re-parenting a child that is itself an invisible ghost (no
-	// tie-type, hence absent from verify's universe) enqueues it, so ghost
-	// chains resolve bottom-up.
+	// Re-parent every verify-reported dangling ref directly: the ghost loop
+	// below relies on reverse parent queries (childrenOf), which themselves
+	// can be victims of the reverse-index inconsistency (live entries whose
+	// reverse index no longer lists them). The report's child+parent pairs
+	// come from forward expands, so they are reliable.
+	var phase1 []op
+	for _, ref := range rep.DanglingParentRefs {
+		r.handled[ref.Child+"\x00"+ref.Parent] = true
+		phase1 = append(phase1, op{api.BatchDelete, ref.Child, relParent, ref.Parent, "dangling ref"})
+		if anc := r.nearestLiveAncestor(ref.Parent); anc != "" && anc != ref.Child {
+			phase1 = append(phase1, op{api.BatchAdd, ref.Child, relParent, anc, "re-parent to live ancestor of " + short(ref.Parent)})
+		} else {
+			phase1 = append(phase1, op{api.BatchAdd, ref.Child, relParent, "DEST", "re-parent to " + r.dest + " (no live ancestor)"})
+		}
+	}
+	r.run("re-parent", phase1)
+
+	// Ghost fixed-point: delete each childless ghost. Re-parenting a child
+	// that is itself an invisible ghost (no tie-type, hence absent from
+	// verify's universe) enqueues it, so ghost chains resolve bottom-up.
 	for round := 0; round < 20; round++ {
 		var ops []op
 		for g := range r.ghosts {
@@ -185,10 +202,7 @@ func main() {
 				r.done[g] = true // already gone
 				continue
 			}
-			if fileLike(row) {
-				r.done[g] = true // a real file someone parented to; leave it
-				continue
-			}
+			fileLikeG := fileLike(row)
 			children := r.childrenOf(g)
 			moved := false
 			for _, child := range children {
@@ -215,6 +229,10 @@ func main() {
 			if moved {
 				continue // delete on a later round, once childless
 			}
+			if fileLikeG {
+				r.done[g] = true // a real file someone parented to; children moved, node stays
+				continue
+			}
 			if ok := r.noTiedirRefs(g); !ok {
 				continue
 			}
@@ -222,7 +240,7 @@ func main() {
 			// filehost is content (a real file), never a ghost — dir UIDs are
 			// random and never uploaded. fileLike alone is not enough: an
 			// import interrupted early can leave a file with only a name.
-			exists, _, err := r.tie.StatBlob(g)
+			exists, _, err := r.statBlob(g)
 			if err == nil && exists {
 				r.done[g] = true
 				continue
@@ -389,7 +407,7 @@ func (r *repair) fixFile(subject string) ([]op, error) {
 	filename := client.RowFirst(row, relFilename)
 	name := client.RowFirst(row, relName)
 
-	exists, size, err := r.tie.StatBlob(subject)
+	exists, size, err := r.statBlob(subject)
 	if err != nil {
 		return nil, err
 	}
@@ -443,24 +461,66 @@ func (r *repair) fixFile(subject string) ([]op, error) {
 	return ops, nil
 }
 
+// blobClient returns the shared filehost HTTP client + base URL, built once
+// from the first resolved default host. Per-subject clients (as
+// client.StatBlob/HTTPClientFor would each create) exhaust fds on large
+// collections via TIME_WAIT pileup.
+func (r *repair) blobClient() (*http.Client, string, error) {
+	if r.blobHC != nil {
+		return r.blobHC, r.blobURL, nil
+	}
+	hosts := r.tie.ResolveHosts(r.collection, nil)
+	if len(hosts) == 0 {
+		return nil, "", fmt.Errorf("no filehosts configured")
+	}
+	host, ok := r.tie.Config.FileHosts[hosts[0]]
+	if !ok {
+		return nil, "", fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
+	}
+	r.blobHC = client.HTTPClientFor(host)
+	r.blobURL = host.URL
+	return r.blobHC, r.blobURL, nil
+}
+// statBlob is client.StatBlob reimplemented over the shared client: existence
+// + on-disk size from a HEAD, per-collection host resolution done once.
+func (r *repair) statBlob(hash string) (bool, int64, error) {
+	hc, base, err := r.blobClient()
+	if err != nil {
+		return false, 0, err
+	}
+	req, err := http.NewRequest(http.MethodHead, base+"/"+hash, nil)
+	if err != nil {
+		return false, 0, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return false, 0, err
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, resp.ContentLength, nil
+	case http.StatusNotFound:
+		return false, 0, nil
+	default:
+		return false, 0, fmt.Errorf("filehost stat %s: %s", short(hash), resp.Status)
+	}
+}
+
 // blobHead fetches the first bytes of a blob for sniffing, via an HTTP Range
 // request (the filehost serves blobs with http.ServeFile, which honors Range;
 // if it didn't, we simply read the prefix and close).
 func (r *repair) blobHead(hash string) ([]byte, error) {
-	hosts := r.tie.ResolveHosts(r.collection, nil)
-	if len(hosts) == 0 {
-		return nil, fmt.Errorf("no filehosts configured")
+	hc, base, err := r.blobClient()
+	if err != nil {
+		return nil, err
 	}
-	host, ok := r.tie.Config.FileHosts[hosts[0]]
-	if !ok {
-		return nil, fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
-	}
-	req, err := http.NewRequest(http.MethodGet, host.URL+"/"+hash, nil)
+	req, err := http.NewRequest(http.MethodGet, base+"/"+hash, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Range", "bytes=0-511")
-	resp, err := client.HTTPClientFor(host).Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
