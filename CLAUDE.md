@@ -16,6 +16,7 @@ mounts collections as a FUSE filesystem.
 | `io/putlib/`, `io/getlib/` | Upload / download plumbing. |
 | `tiedb/`             | The triple-store engine (association index; memory-sensitive — see auto-memory). |
 | `test-env/`          | Local end-to-end sandbox. Start here to run anything. |
+| `scripts/repair/`    | fsck-fix tool: repairs what `verify` reports (ghosts, dangling refs, file metadata) after `verify --repair`. |
 
 ## Running the stack (test-env)
 
@@ -142,7 +143,17 @@ orphaned dirs. `verify --repair` re-homes only the orphans under
 re-scans so the exit code is post-repair — every other problem class is reported
 but never auto-fixed. `verify --check-blobs` additionally confirms each file's
 content exists on the filehost via a cheap `HEAD /{hash}` stat endpoint (200/
-404, no body, no cache copy).
+404, no body, no cache copy). `scripts/repair` (Go, dry-run by default,
+`--apply` writes a TSV journal) fixes the classes verify never auto-fixes:
+dangling parent refs are re-parented to the nearest live ancestor, ghost
+nodes (dir-typed, no path, no children, no tiedir-hash referrer, no blob on
+the filehost) are deleted, and files get missing metadata re-derived from
+their blob (size via HEAD, type by sniffing, filename reconstructed from
+name+extension). Nameless leftovers and files whose blob is gone are deleted
+(have a `dump` backup first). **Phantom verify entries** (subjects with zero
+forward triples, e.g. scar tissue from long-running servers) need a
+triplestore restart — the reverse index is rebuilt from live forward triples
+at load; `tiedb/reverseconsistency_test.go` pins the invariant.
 
 `completion <bash|zsh|fish|pwsh>` prints a shell-completion script (the
 urfave/cli built-in, un-hidden in `cmd/tie/main.go` via
