@@ -180,7 +180,7 @@ func main() {
 	for _, ref := range rep.DanglingParentRefs {
 		r.handled[ref.Child+"\x00"+ref.Parent] = true
 		phase1 = append(phase1, op{api.BatchDelete, ref.Child, relParent, ref.Parent, "dangling ref"})
-		if anc := r.nearestLiveAncestor(ref.Parent); anc != "" && anc != ref.Child {
+		if anc := r.nearestLiveAncestor(ref.Parent, ref.Child); anc != "" && anc != ref.Child {
 			phase1 = append(phase1, op{api.BatchAdd, ref.Child, relParent, anc, "re-parent to live ancestor of " + short(ref.Parent)})
 		} else {
 			phase1 = append(phase1, op{api.BatchAdd, ref.Child, relParent, "DEST", "re-parent to " + r.dest + " (no live ancestor)"})
@@ -213,7 +213,7 @@ func main() {
 				r.handled[edge] = true
 				moved = true
 				ops = append(ops, op{api.BatchDelete, child, relParent, g, "dangling ref"})
-				if anc := r.nearestLiveAncestor(g); anc != "" && anc != child {
+				if anc := r.nearestLiveAncestor(g, child); anc != "" && anc != child {
 					ops = append(ops, op{api.BatchAdd, child, relParent, anc, "re-parent to live ancestor of " + short(g)})
 				} else {
 					ops = append(ops, op{api.BatchAdd, child, relParent, "DEST", "re-parent to " + r.dest + " (no live ancestor)"})
@@ -339,15 +339,22 @@ func (r *repair) childrenOf(uid string) []string {
 }
 
 // nearestLiveAncestor walks uid's parent chain until a live dir is found
-// (cached per ghost). Returns "" when the chain dies out or loops.
-func (r *repair) nearestLiveAncestor(uid string) string {
+// (cached per ghost). Returns "" when the chain dies out, loops, or passes
+// through `guard` (the child being re-parented — accepting it as ancestor
+// would close a parent cycle; the caller then falls back to the dest dir).
+func (r *repair) nearestLiveAncestor(uid string, guard ...string) string {
 	if a, ok := r.ancestor[uid]; ok {
 		return a
 	}
+	guarded := len(guard) > 0
 	seen := map[string]bool{}
 	cur := uid
 	for cur != "" && !seen[cur] {
 		seen[cur] = true
+		if guarded && cur == guard[0] {
+			r.ancestor[uid] = ""
+			return ""
+		}
 		if r.liveDir[cur] {
 			r.ancestor[uid] = cur
 			return cur
