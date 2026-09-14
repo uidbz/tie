@@ -64,6 +64,34 @@ func (t *lockedTree[K, V]) Put(key K, value V) {
 	sh.mu.Unlock()
 }
 
+// GetOrPut returns the value stored under key, creating it with make under the
+// shard's write lock when absent. The check and the insert are atomic, so two
+// concurrent callers for the same new key both receive the one value that was
+// stored — never two distinct values of which one is silently dropped. This is
+// the get-or-create the association trees need: their values are sets, and an
+// unconditional Put after a failed Get overwrote a set a concurrent inserter had
+// just created and populated, losing that inserter's entry from the index.
+func (t *lockedTree[K, V]) GetOrPut(key K, make func() V) V {
+	sh := t.shardFor(key)
+	sh.mu.RLock()
+	v, ok := sh.m[key]
+	sh.mu.RUnlock()
+	if ok {
+		return v
+	}
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if v, ok = sh.m[key]; ok {
+		return v
+	}
+	if sh.m == nil {
+		sh.m = map[K]V{}
+	}
+	v = make()
+	sh.m[key] = v
+	return v
+}
+
 func (t *lockedTree[K, V]) Delete(key K) {
 	sh := t.shardFor(key)
 	sh.mu.Lock()

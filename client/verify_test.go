@@ -317,3 +317,45 @@ func hashOf(t *testing.T, path string) string {
 	}
 	return h
 }
+
+// TestCheckIndexRoundTrip exercises the CheckIndex request end to end: a
+// freshly imported tree must report a consistent index with matching entry
+// counts in plain, deep and repair modes, and Delete must remain able to clear
+// a triple after the check has run (the check takes the collection's write
+// lock and must release it).
+func TestCheckIndexRoundTrip(t *testing.T) {
+	tie := freshVerifyClient(t)
+	dir := t.TempDir()
+	writeFile(t, dir+"/a.txt", "hello")
+	writeFile(t, dir+"/b.txt", "world")
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+		t.Fatalf("ImportDir: %v", err)
+	}
+
+	for _, mode := range []struct {
+		name         string
+		deep, repair bool
+	}{{"plain", false, false}, {"deep", true, false}, {"repair", false, true}} {
+		rep, err := tie.CheckIndex("", mode.deep, mode.repair)
+		if err != nil {
+			t.Fatalf("%s: CheckIndex: %v", mode.name, err)
+		}
+		if rep.Problems() != 0 || rep.Repaired != 0 {
+			t.Errorf("%s: fresh import reported index problems: %+v", mode.name, rep)
+		}
+		if rep.ForwardEntries == 0 || rep.ReverseEntries == 0 || rep.ReverseEntries > rep.ForwardEntries {
+			t.Errorf("%s: implausible counts fwd=%d rev=%d", mode.name, rep.ForwardEntries, rep.ReverseEntries)
+		}
+		if rep.Deep != mode.deep {
+			t.Errorf("%s: Deep flag not echoed", mode.name)
+		}
+	}
+
+	// Writers must not stay blocked after the check.
+	if _, err := tie.Add("idxprobe", "tag", "x"); err != nil {
+		t.Fatalf("Add after CheckIndex: %v", err)
+	}
+	if _, err := tie.Delete("idxprobe", "tag", "x"); err != nil {
+		t.Fatalf("Delete after CheckIndex: %v", err)
+	}
+}

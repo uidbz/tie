@@ -181,16 +181,48 @@ Record types (`datastructures.go`):
   the frame's contiguous `parentID(8) + value(24)` region, so `ENTRY_SIZE` is
   unchanged; the level field is always `HASH_LEVEL`. Written by `HashToBytes`,
   parsed by `bufToHash`, loaded in pass 1 (it is an entry, not an association).
-- `TYPE_DELETE` (10) — a tombstone. `deleteAssociation` overwrites a record's
-  first 2 bytes with `TYPE_DELETE`; the slot's offset is pushed onto the
-  `freespace` channel for reuse by the next add.
+- `TYPE_DELETE` (10) — a tombstone. The writer overwrites the whole 50-byte
+  frame with zeros and `TYPE_DELETE` in the first 2 bytes, then pushes the
+  slot's offset onto the `freespace` stack for reuse by the next add.
 
 Writes go through a single serialized writer goroutine (`dBWriter` in
-`filehandling.go`) over `dBWriteQueue`. It reuses a freed slot when one is
-available, otherwise appends at `db_size`. The file is held open for a 10-second
-idle window (`closeAfter`) before being synced and closed — so a `closeDB` right
-after writes can take up to that long to settle. `db_size` must stay a multiple
-of `ENTRY_SIZE`; a mismatch on open is treated as corruption.
+`filehandling.go`) over `dBWriteQueue`. Slot allocation happens in the
+*producer* (`allocSlot`): a reclaimed `freespace` slot when one exists, else
+the `db_size` append cursor; the producer inserts into the in-memory index at
+that final offset and the writer only persists bytes. A slot is freed by the
+writer **after** its tombstone is on the file, so a reused slot is never handed
+out while its old record is still live. The fd stays open for the collection's
+lifetime; durability is a 10-second `Sync` ticker plus a drain-and-sync on
+`closeDB`. `db_size` must stay a multiple of `ENTRY_SIZE`; a partial trailing
+record on open is trimmed as a torn write.
+
+### Forward/reverse index invariants
+
+The forward index is authoritative — the file holds forward records only — and
+the reverse index is derived from it. Three rules keep them in step:
+
+- **Index sets are created atomically.** `putAssoc` uses
+  `lockedTree.GetOrPut`, so two concurrent inserters for a brand-new outer key
+  (the first two triples of a fresh subject; the first two children of a fresh
+  directory) share one `AssociationSet`. A Get-then-Put used to let the second
+  creator overwrite the first's set, dropping its entry from one index while
+  the other index — whose outer key already existed — kept it. The parallel
+  load workers hit this on every start; `TestLoadIndexConsistency` pins it.
+- **`Add` is atomic with respect to dedup.** The exists-check, `allocSlot` and
+  `insertAssociation` run under `changeMutex` (the lock `Delete` holds), so
+  two concurrent adds of one triple cannot both write a record — a second live
+  record would resurrect the triple at the next load after a delete.
+- **Resolved records are validated.** `resolveEntry` checks that the record at
+  an index position has the entry's relation and one of its two members before
+  a query emits it; on mismatch it evicts the cache line, re-reads once, then
+  drops the entry with a warning. A slot reused after a stale cache line can no
+  longer surface as another subject's triple.
+
+`Delete` removes the reverse entry even when the forward one is already gone,
+so a reverse-only residue ("phantom") can be cleared by an ordinary delete.
+`Collection.CheckIndex` (exposed as the `CheckIndex` request, `tie verify
+--index`) walks both trees, reports every divergence, and optionally repairs
+them in memory — see `docs/verify.md`.
 
 ### Loading is two-pass
 

@@ -33,11 +33,15 @@ A node with **no `parent` edge** is unreachable from the root — that is an
 
 ## What it checks
 
-Bare `tie verify` scans the whole collection (both the `directory` and `file`
-universes, unpaginated) and reports:
+Bare `tie verify` runs two scans. It first asks the triplestore to cross-check
+the collection's **forward and reverse association indexes** (see *The index
+check* below) — the tree scan is seeded by reverse queries, so an inconsistent
+index would make it report phantoms and miss children. It then scans the whole
+collection (both the `directory` and `file` universes, unpaginated) and reports:
 
 | Check | Meaning | Auto-repaired? |
 |-------|---------|----------------|
+| **Index inconsistencies** | a triple visible through only one of the forward/reverse indexes (see below) | yes, by `--repair` (in memory) |
 | **Orphaned directories** | a DirUID (other than the root) with no `parent` edge | yes, by `--repair` |
 | **Orphaned files** | a content hash with no `parent` edge | yes, by `--repair` |
 | **Dangling parent references** | an edge `(child, parent, P)` where `P` no longer exists as a directory | no (reported only) |
@@ -46,9 +50,10 @@ universes, unpaginated) and reports:
 | **Missing metadata** | a file lacking `filename`/`filesize`/`media-type` or a concrete tie-type — the triples `appendTagOps` always writes; a sign of an interrupted import | no (reported only) |
 | **Missing blobs** (`--check-blobs`) | a file whose content hash is absent from the filehost (never uploaded, or reaped) | no (reported only) |
 
-Only **orphans** are auto-repairable. The other classes are judgment calls —
-merging two UIDs that claim one path, or breaking a cycle, is destructive and
-deserves a human decision — so `verify` reports them and leaves them alone.
+Only **index divergences and orphans** are auto-repairable. The other classes
+are judgment calls — merging two UIDs that claim one path, or breaking a cycle,
+is destructive and deserves a human decision — so `verify` reports them and
+leaves them alone.
 
 ### Metadata expectations (what is *not* a problem)
 
@@ -75,7 +80,13 @@ tie verify --collection Main
 # Slow on a large store; off by default.
 tie verify --check-blobs
 
-# Re-home every orphan under tie:/restored/<today>/, then re-verify.
+# Index check only (skip the tree scan); --deep also validates every index
+# position against its on-disk record.
+tie verify --index
+tie verify --index --deep
+
+# Repair the index in memory, re-home every orphan under tie:/restored/<today>/,
+# then re-verify.
 tie verify --repair
 
 # Restore into a specific directory instead.
@@ -92,9 +103,70 @@ check:
 15 3 * * *  tie verify || mail -s "tie store has problems" you < /dev/null
 ```
 
+## The index check
+
+The triplestore keeps every triple in two in-memory indexes: the **forward**
+index (subject → relation → value) that `Get`/`Expand` read, and a **reverse**
+index (value → relation → subject) for the relations in `ReverseRelations`,
+which powers every reverse-seeded query — `tag` lookups, "all files", "children
+of this directory". The forward index is the source of truth (the on-disk file
+holds forward records only); the reverse index is derived from it at load and
+maintained alongside it on every add/delete.
+
+When the two disagree a triple is visible through one index only:
+
+| Class | Symptom |
+|-------|---------|
+| **missing-reverse** | a forward triple with no reverse entry: the file has a `parent` edge, but the directory's reverse `parent` lookup (and so `ReadTieDir`, the FUSE mount, `verify`'s tree scan) never lists it |
+| **reverse-only** | a **phantom**: reverse queries return a subject that has no forward triples (`dump` never shows it), and `Delete` used to report "did not find" so it could not be cleared |
+| **position-mismatch** | both entries exist but record different on-disk slots |
+| **misresolved** (`--deep`) | an index position whose on-disk record is a tombstone or a different triple |
+
+Historically this was caused by a lost-update race when two writers created a
+subject's (or a directory's) index set concurrently — including the parallel
+workers of the load at **every server start**, which on a large collection
+dropped a sizeable fraction of forward entries and left their reverse twins
+behind as phantoms. The engine now creates index sets atomically, deduplicates
+concurrent adds, verifies that every resolved record matches the index entry
+that pointed at it, and lets `tie del` clear a reverse-only residue. The check
+exists to find any divergence that is still present in a running server (from
+before the fix, or from an unforeseen cause) and to fix it without a restart.
+
+`verify --repair` fixes the index **in memory**: it adds the reverse entries
+missing for forward triples, drops reverse-only entries, realigns positions,
+and (with `--deep`) rewrites a misresolved record to a fresh slot. Nothing else
+on disk changes, because the file only holds forward records; a restart would
+rebuild the same consistent state. The check holds the collection's write lock
+for its duration — a few seconds for the in-memory pass on millions of triples;
+`--deep` reads every record through the serialized writer and can take much
+longer on a large disk-backed collection, blocking writes meanwhile. Reads are
+never blocked. The `CheckIndex` request is classified as a **write** request
+(even without repair) for that reason.
+
+### Field remedy: `restore --drop`
+
+If a collection's on-disk state itself is suspect — duplicate live records for
+one triple, records whose index owner is gone — the definitive remedy is a full
+rebuild from a dump, which is what `tie restore --drop` is for:
+
+```bash
+tie dump > backup.tsv                 # forward triples only, from the live index
+tie verify --index --repair           # make sure the dump saw a consistent index
+tie dump > backup.tsv                 # re-dump if the repair changed anything
+tie restore --drop < backup.tsv       # drop the collection, then re-add every triple
+```
+
+`--drop` deletes the collection's `.tie` file and in-memory index server-side
+before restoring, so the result contains exactly the dumped triples in a freshly
+written, tombstone-free file. The whole TSV is parsed before anything is
+dropped, but drop+restore is **not atomic**: the collection is empty (and
+readers see nothing) until the batch completes, so run it in a maintenance
+window and keep the dump.
+
 ## How repair works
 
-`--repair` re-homes **only the orphans** from the scan:
+`--repair` first repairs the index (above), then re-homes **only the orphans**
+from the tree scan — in that order, so a phantom is never re-homed:
 
 1. It creates the restore directory (default `tie:/restored/<YYYY-MM-DD>/`) via
    `MkTieDirAll`, so it is a normal, browsable path node.
@@ -146,10 +218,16 @@ one host is what matters for reachability.
 
 ## Implementation map
 
+- `tiedb/checkindex.go` — `Collection.CheckIndex`, `IndexReport`, and the
+  in-memory repair; `tiedb/indexconsistency_test.go` reproduces the load and
+  concurrent-add races and pins the fixes.
+- `api/checkindex.go` — the `CheckIndex` request; `client.TieClient.CheckIndex`
+  is the Go wrapper, `TieClient.check_index` the Python one.
 - `client/verify.go` — `VerifyReport`, `Verify`, `RepairOrphans`, and the
   per-check helpers (`detectCycles`, `checkFileMetadata`, `checkBlobsExist`,
   `blobExists`).
-- `cmd/tie/commands.go` — the `cmdVerify` command and report rendering.
+- `cmd/tie/commands.go` — the `cmdVerify` command and report rendering
+  (`printIndexReport`, `printVerifyReport`).
 - `cmd/tie-filehost/routes.go` + `main.go` — the `HEAD /{hash}` route and
   `StatHandler`.
 - `client/verify_test.go` — integration tests against the test-env triplestore

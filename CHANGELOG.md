@@ -6,6 +6,50 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- **tiedb: forward and reverse indexes could silently diverge.** Creating a
+  subject's (or a directory's) association set was a Get-then-Put on the outer
+  index map, so two concurrent inserters for a brand-new key both created a
+  set and the second overwrote the first — dropping its entry from one index
+  while the other index, whose key already existed, kept it. The parallel
+  load workers hit this on **every server start**: on a 2M-triple file about
+  18% of forward entries were lost per load, surfacing as "phantom" subjects
+  that reverse queries (`tie-type`, `tag`) returned but `dump` never showed
+  and `Delete` could not clear, and as children missing from a directory's
+  reverse `parent` lookup although their forward edge existed. Index sets are
+  now created atomically (`lockedTree.GetOrPut`); `Add` runs its exists-check
+  and insert under the change lock, so two concurrent adds of one triple no
+  longer write two on-disk records (the second of which resurrected a deleted
+  triple at the next load); every record a query resolves is validated
+  against the index entry that pointed at it (a stale cache line or reused
+  slot is evicted, re-read, and dropped rather than served as another
+  subject's triple); the writer frees a slot only after its tombstone is on
+  disk; and `Delete` removes a reverse-only residue and succeeds, so a phantom
+  can be cleared with an ordinary delete. `tiedb/indexconsistency_test.go`
+  reproduces the load and concurrent-add races and pins the fixes. Load speed
+  is unchanged; the heap grows only by the entries that were previously lost.
+
+### Added
+
+- **Server-side index check and repair: `CheckIndex` / `tie verify --index`.**
+  `tiedb.Collection.CheckIndex` walks the forward and reverse indexes and
+  reports every divergence (missing-reverse, reverse-only, position-mismatch,
+  and with `Deep` misresolved positions whose on-disk record no longer
+  matches); `Repair` fixes them in memory — no restart needed. Exposed as the
+  `CheckIndex` request (write role: it blocks writers for the walk), wrapped by
+  `TieClient.CheckIndex` (Go) and `check_index` (Python). Bare `tie verify`
+  now runs the index check **before** the tree scan — the scan is seeded by
+  reverse queries, so an inconsistent index made it report phantoms and miss
+  children — and `--repair` fixes the index first so orphan re-homing never
+  acts on a phantom. `--index` runs the index check alone; `--deep` validates
+  every index position against its record (slow on a large collection).
+- **Docs:** `docs/verify.md` gains the index-check section and documents
+  `tie restore --drop` as the field remedy for a collection whose on-disk
+  state is suspect; `docs/internals.md` now describes the current writer
+  (producer-side slot allocation, tombstone-then-free, 10s sync ticker) and
+  the index invariants.
+
 ## [v0.5.2] - 2026-09-13
 
 ### Added

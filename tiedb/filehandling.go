@@ -276,8 +276,13 @@ func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
 		}
 		b := make([]byte, ENTRY_SIZE)
 		binary.LittleEndian.PutUint16(b, TYPE_DELETE)
-		ic.freeSlot(pos)
 		n, err = db.WriteAt(b, pos)
+		// Free only after the tombstone is on the file (freeSlot's contract): a
+		// crash between the two must not leave a reusable slot whose old record
+		// is still live on disk.
+		if err == nil && n == ENTRY_SIZE {
+			ic.freeSlot(pos)
+		}
 
 	case FILE_ADD:
 		// The producer reserved the offset via allocSlot and already inserted the

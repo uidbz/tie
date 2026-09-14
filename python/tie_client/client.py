@@ -307,6 +307,21 @@ class TieClient:
     def drop_collection(self, collection: str = "") -> None:
         _check(self._triplestore.run("Drop", self._envelope("Drop", collection)))
 
+    def check_index(self, collection: str = "", *, deep: bool = False, repair: bool = False) -> dict:
+        """Cross-check the forward/reverse association indexes server-side.
+
+        Returns the report dict (forwardEntries, reverseEntries, missingReverse,
+        reverseOnly, positionMismatch, misresolved, repaired, deep, samples).
+        ``deep`` also validates each position against its on-disk record (slow);
+        ``repair`` fixes divergences in memory. Counts describe the pre-repair state.
+        """
+        body = self._envelope("CheckIndex", collection)
+        body["Deep"] = deep
+        body["Repair"] = repair
+        reply = self._triplestore.run("CheckIndex", body)
+        _check(reply)
+        return reply.get("Report", {})
+
     def restore(self, triples: list[tuple[str, str, str]], collection: str = "") -> None:
         if not triples:
             return

@@ -73,7 +73,8 @@ cd test-env
   always-authenticated behavior). Passwords are plaintext in config; only the
   wire compare is constant-time (`subtle.ConstantTimeCompare`) — hashing is a
   deliberate non-goal for now. Triplestore read requests: `Dummy`, `Query`, `Expand`,
-  `Associated`, `CoTags`, `Dump`; every other Id (incl. new ones) is write
+  `Associated`, `CoTags`, `Dump`; every other Id (incl. new ones, and
+  `CheckIndex` even without repair — it blocks writers) is write
   (fail-safe). 401 = missing/failed auth; 403 = valid user, insufficient role.
   Client filehost creds live in `[FileHosts.<name>]` (`Username`/`Password`) and
   ride every request via a Basic-Auth `http.RoundTripper` in
@@ -131,29 +132,47 @@ to artist), and annotates warnings (missing tags, dest collisions, nesting).
 via batched per-file imports that are additive-only (no reconcile — a partial
 view must not version away siblings). CLI has `--dry-run` and `-y`.
 
-`verify` is the store's fsck (see docs/verify.md). Bare `tie verify` is a
-read-only scan of the whole collection for lost or incomplete nodes: orphaned
-dirs/files (no `parent` edge — unreachable from the root), dangling parent
-references, parent cycles, duplicate path claims, and files missing core
-metadata; it exits non-zero if anything is found, so it is cron-able. A
-`tiedir` snapshot blob carries `tie-type: directory` but no `path`, so verify
-partitions on the `path` triple and checks such blobs as files, never as
-orphaned dirs. `verify --repair` re-homes only the orphans under
+`verify` is the store's fsck (see docs/verify.md). Bare `tie verify` first
+runs the server-side **index check** (`CheckIndex` request →
+`tiedb.Collection.CheckIndex`), then a read-only scan of the whole collection
+for lost or incomplete nodes: orphaned dirs/files (no `parent` edge —
+unreachable from the root), dangling parent references, parent cycles,
+duplicate path claims, and files missing core metadata; it exits non-zero if
+anything is found, so it is cron-able. A `tiedir` snapshot blob carries
+`tie-type: directory` but no `path`, so verify partitions on the `path` triple
+and checks such blobs as files, never as orphaned dirs. `verify --repair`
+repairs the index in memory, then re-homes only the orphans under
 `tie:/restored/<date>/` (one added parent edge each; metadata untouched) and
 re-scans so the exit code is post-repair — every other problem class is reported
-but never auto-fixed. `verify --check-blobs` additionally confirms each file's
-content exists on the filehost via a cheap `HEAD /{hash}` stat endpoint (200/
-404, no body, no cache copy). `scripts/repair` (Go, dry-run by default,
-`--apply` writes a TSV journal) fixes the classes verify never auto-fixes:
-dangling parent refs are re-parented to the nearest live ancestor, ghost
-nodes (dir-typed, no path, no children, no tiedir-hash referrer, no blob on
-the filehost) are deleted, and files get missing metadata re-derived from
-their blob (size via HEAD, type by sniffing, filename reconstructed from
+but never auto-fixed. `verify --index` runs the index check alone; `--deep`
+also resolves every index position against its on-disk record (slow, blocks
+writers). `verify --check-blobs` additionally confirms each file's content
+exists on the filehost via a cheap `HEAD /{hash}` stat endpoint (200/404, no
+body, no cache copy). `scripts/repair` (Go, dry-run by default, `--apply`
+writes a TSV journal) fixes the classes verify never auto-fixes: dangling
+parent refs are re-parented to the nearest live ancestor, ghost nodes
+(dir-typed, no path, no children, no tiedir-hash referrer, no blob on the
+filehost) are deleted, and files get missing metadata re-derived from their
+blob (size via HEAD, type by sniffing, filename reconstructed from
 name+extension). Nameless leftovers and files whose blob is gone are deleted
-(have a `dump` backup first). **Phantom verify entries** (subjects with zero
-forward triples, e.g. scar tissue from long-running servers) need a
-triplestore restart — the reverse index is rebuilt from live forward triples
-at load; `tiedb/reverseconsistency_test.go` pins the invariant.
+(have a `dump` backup first).
+
+**Forward/reverse index consistency (tiedb).** The forward index is
+authoritative (the `.tie` file holds forward records only); the reverse index
+is derived. Divergence — reverse-only *phantoms* (subjects reverse queries
+return but `dump` never shows, which `Delete` could not clear) and forward
+`parent` edges missing from the directory's reverse lookup — came from a
+lost-update race in `putAssoc` (Get-then-Put of a new `AssociationSet`), hit by
+concurrent `Add`s **and by the 8-worker load on every restart** (on a 2M-triple
+file, ~18% of forward entries were lost per load). Fixed by
+`lockedTree.GetOrPut`; `Add` now runs exists-check + insert under
+`changeMutex` (no duplicate on-disk records); `resolveEntry` validates each
+resolved record against its index entry (stale cache line / reused slot →
+evict, re-read, drop); `Delete` clears a reverse-only residue and returns ok.
+`tiedb/indexconsistency_test.go` reproduces the races and pins the fixes;
+`tie verify --repair` (or `--index --repair`) fixes a live server's divergence
+in memory without a restart; `tie restore --drop` is the field remedy when the
+on-disk state itself is suspect.
 
 `completion <bash|zsh|fish|pwsh>` prints a shell-completion script (the
 urfave/cli built-in, un-hidden in `cmd/tie/main.go` via

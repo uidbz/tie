@@ -305,13 +305,25 @@ default — see *Transfer integrity* above).
 ### Backup / interop
 
 ```sh
-tie dump    > backup.tsv     # every triple as key<TAB>value1<TAB>value2
-tie restore < backup.tsv     # additive, idempotent merge
+tie dump    > backup.tsv          # every triple as key<TAB>value1<TAB>value2
+tie restore < backup.tsv          # additive, idempotent merge
+tie restore --drop < backup.tsv   # drop the collection first: exact rebuild
 ```
 
 Restore re-adds triples via a batch; adding an existing triple is a no-op, so it
 merges rather than replaces. Point `-c` at a config with a different collection
-to copy data between collections.
+to copy data between collections. `--drop` deletes the collection (its `.tie`
+file and in-memory index) before restoring, producing a fresh, tombstone-free
+file holding exactly the dumped triples — the field remedy for a collection
+whose on-disk state is suspect (see `docs/verify.md`). The TSV is parsed in
+full before anything is dropped, but drop+restore is not atomic.
+
+`tie verify` is the store's fsck: it cross-checks the triplestore's forward and
+reverse indexes server-side, then scans the virtual file tree for orphans,
+dangling parents, cycles, duplicate paths and missing metadata; `--repair` fixes
+the index in memory and re-homes orphans, `--index` runs the index check alone,
+`--deep` validates every index position against its on-disk record. See
+`docs/verify.md`.
 
 `tie dump --file <path.tie>` exports directly from an on-disk `.tie` file
 without a running triplestore, for offline backup:
@@ -390,8 +402,8 @@ request needs a valid user):
 
 - **`tie-triplestore` defaults to `"none"`** — it has always required a login, and
   that is unchanged. Read requests are `Query`/`Expand`/`Associated`/`CoTags`/
-  `Dump`; everything else (`Add`/`Delete`/`Set`/`Update`/`Batch`/`Sync`/`Drop`)
-  is a write.
+  `Dump`; everything else (`Add`/`Delete`/`Set`/`Update`/`Batch`/`Sync`/`Drop`/
+  `CheckIndex`) is a write.
 - **`tie-filehost` defaults to `"write"`** — it is fully open out of the box, so
   existing tools that upload anonymously keep working. To lock it down, set
   `AnonymousAccess = "read"` (downloads stay open, uploads require a write user)

@@ -3,6 +3,7 @@ package tiedb
 import (
 	"bytes"
 	"cmp"
+	"log/slog"
 	"slices"
 	"strconv"
 	"sync/atomic"
@@ -134,6 +135,17 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 		Value2:      value2ID,
 	}
 
+	// The exists-check, slot reservation and index insert run as one critical
+	// section: two concurrent Adds of the same triple used to both pass the
+	// check, each write a full record to its own slot, and each overwrite the
+	// forward and reverse entries independently — leaving one live record on
+	// disk that no index owned, which a later Delete could not tombstone and
+	// that resurrected the triple at the next load. changeMutex is the same
+	// lock Delete holds, so an Add can no longer interleave with a Delete of the
+	// same triple between the check and the insert either.
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
+
 	if ic.uniqueAssociationExists(keyLevel, keyID, value1ID, value2ID) {
 		return
 	}
@@ -251,35 +263,48 @@ func (ic *Collection) GetReverseAssociations(value string) (*AssociationSet, boo
 	}
 }
 
+// Delete removes (key, value1, value2) from both indexes and tombstones its
+// record. The forward index is authoritative; the reverse entry is removed by
+// key, whatever position it holds.
+//
+// When the forward entry is absent but a reverse entry for the same triple
+// exists — a phantom: the forward insert was lost, or the forward entry was
+// already deleted while the reverse one lingered — that residue is removed and
+// the call succeeds, so a phantom that reverse queries keep returning can be
+// cleared with an ordinary delete instead of a server restart.
 func (ic *Collection) Delete(key string, value1 string, value2 string) (string, bool) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
 
-	if asses, found := ic.GetAssociations(key); found {
-		k, _, _ := ic.getEntryFromString(key)
-		v1, _, f1 := ic.getEntryFromString(value1)
-		v2, l2, f2 := ic.getEntryFromString(value2)
-
-		if f1 && f2 {
-			assKey := UniqueAssociation{
-				AssociateTo: v2,
-				Relation:    v1,
-			}
-			reverseAssKey := UniqueAssociation{
-				AssociateTo: k,
-				Relation:    v1,
-			}
-
-			if pos, found := asses.Get(assKey); found {
-				ic.deleteAssociation(asses, assKey, pos)
-				ic.getReverseAssociations(l2, v2).Delete(reverseAssKey)
-				return "", true
-			}
-		}
-		return "Did not find '" + value2 + "' with value1 '" + value1 + "'", false
-	} else {
+	k, _, fk := ic.getEntryFromString(key)
+	v1, _, f1 := ic.getEntryFromString(value1)
+	v2, l2, f2 := ic.getEntryFromString(value2)
+	if !fk {
 		return "Did not find '" + key + "'", false
 	}
+	if !f1 || !f2 {
+		return "Did not find '" + value2 + "' with value1 '" + value1 + "'", false
+	}
+
+	assKey := UniqueAssociation{AssociateTo: v2, Relation: v1}
+	reverseAssKey := UniqueAssociation{AssociateTo: k, Relation: v1}
+	rev := ic.getReverseAssociations(l2, v2)
+
+	if asses, found := ic.GetAssociations(key); found {
+		if pos, found := asses.Get(assKey); found {
+			ic.deleteAssociation(asses, assKey, pos)
+			rev.Delete(reverseAssKey)
+			return "", true
+		}
+	}
+	if _, found := rev.Get(reverseAssKey); found {
+		rev.Delete(reverseAssKey)
+		return "removed stale reverse-index entry for '" + key + "' " + value1 + " '" + value2 + "'", true
+	}
+	if _, found := ic.GetAssociations(key); !found {
+		return "Did not find '" + key + "'", false
+	}
+	return "Did not find '" + value2 + "' with value1 '" + value1 + "'", false
 }
 
 func (ic *Collection) Update(key string, value1 string, value2 string, newValue2 string) (string, bool) {
@@ -547,14 +572,17 @@ func (ic *Collection) arenaFreeSlot(pos int64) {
 	ic.arenaFree = append(ic.arenaFree, pos)
 }
 
+// putAssoc inserts subKey -> pos into the set stored under outerKey, creating
+// the set if needed. Creation goes through GetOrPut so concurrent inserters for
+// a brand-new outer key (the first two triples of a fresh subject in the
+// forward tree, or the first two children of a fresh directory in the reverse
+// tree) share one set. A Get-then-Put here used to let the second creator
+// overwrite the first's set, dropping its entry from one index while the other
+// index (whose outer key already existed) kept it — the forward/reverse
+// divergence seen as phantoms and missing children on long-lived servers, and
+// reproduced deterministically by the 8-worker load in TestLoadIndexConsistency.
 func putAssoc(parent *lockedTree[uint64, *AssociationSet], outerKey uint64, subKey UniqueAssociation, pos int64) {
-	if subTree, found := parent.Get(outerKey); found {
-		subTree.Put(subKey, pos)
-		return
-	}
-	subTree := newAssociationSet()
-	subTree.Put(subKey, pos)
-	parent.Put(outerKey, subTree)
+	parent.GetOrPut(outerKey, newAssociationSet).Put(subKey, pos)
 }
 
 func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
@@ -691,6 +719,40 @@ func (ic *Collection) resolveTriple(pos int64) (Triple, bool) {
 	return t, ok
 }
 
+// resolveEntry resolves an index entry's position and verifies that the record
+// it holds is the triple the entry stands for. An AssociationSet entry names
+// the relation and one of the triple's two other members (value2 in a forward
+// set, the subject in a reverse set) — the set does not know its own
+// orientation, so a record is accepted when its relation matches and either
+// member equals AssociateTo. A mismatch means the position was reused by
+// another triple after a stale cache line or a lost delete: the cache line is
+// evicted and the record re-read once from disk; if it still disagrees the
+// entry is dropped (and logged), so a query never emits a triple that belongs
+// to a different subject than the one the index claims.
+func (ic *Collection) resolveEntry(ua UniqueAssociation, pos int64) (Triple, bool) {
+	matches := func(t Triple) bool {
+		return t.Value1 == ua.Relation && (t.Key == ua.AssociateTo || t.Value2 == ua.AssociateTo)
+	}
+	t, ok := ic.resolveTriple(pos)
+	if !ok {
+		return Triple{}, false
+	}
+	if matches(t) {
+		return t, true
+	}
+	if ic.writeToDisk && ic.cache != nil {
+		ic.cache.Evict(pos)
+		if t, ok = ic.readTripleAt(pos); ok && matches(t) {
+			ic.cache.Put(pos, t)
+			return t, true
+		}
+	}
+	slog.Warn("index entry does not match its record; skipping",
+		"position", pos, "relation", ua.Relation, "associateTo", ua.AssociateTo,
+		"recordKey", t.Key, "recordValue1", t.Value1, "recordValue2", t.Value2)
+	return Triple{}, false
+}
+
 // readTripleAt reads and decodes the association record at pos from disk. The
 // read is serviced by the writer goroutine, which owns the file handle; each
 // call has its own reply channel, so concurrent queries do not serialize.
@@ -705,8 +767,8 @@ func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
 // in-memory traversal: memory-only mode reads resident Triples, disk mode
 // resolves positions through the cache/disk. No collection-wide serialization.
 func (ic *Collection) loadTriples(tree *AssociationSet, tripleChan chan Triple) {
-	tree.ForEach(func(_ UniqueAssociation, pos int64) {
-		if t, ok := ic.resolveTriple(pos); ok {
+	tree.ForEach(func(ua UniqueAssociation, pos int64) {
+		if t, ok := ic.resolveEntry(ua, pos); ok {
 			tripleChan <- t
 		}
 	})
@@ -976,7 +1038,7 @@ func (ic *Collection) filterMissingRelation(seed *AssociationSet, relation strin
 		}
 		// The reverse-set entry carries the subject id but not its level; the
 		// stored triple does, so resolve it to reach the subject's forward set.
-		t, ok := ic.resolveTriple(pos)
+		t, ok := ic.resolveEntry(key, pos)
 		if !ok {
 			return
 		}

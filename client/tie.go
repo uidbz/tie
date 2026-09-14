@@ -599,6 +599,26 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 	return reply, nil
 }
 
+// CheckIndex asks the triplestore to cross-check a collection's forward and
+// reverse association indexes (tiedb.Collection.CheckIndex). An empty
+// collection falls back to the bound one. deep also validates each forward
+// position against its on-disk record (slow on a large collection); repair
+// fixes the divergences in memory and reports how many it fixed. The counts in
+// the report describe the state before any repair.
+func (tc *TieClient) CheckIndex(collection string, deep, repair bool) (*tiedb.IndexReport, error) {
+	col := tc.collectionInfo(collection)
+	request := col.NewCheckIndexRequest(deep, repair)
+
+	reply, err := run[api.CheckIndexReply](tc, request)
+	if err != nil {
+		return nil, err
+	}
+	if err := replyError(reply.ReplyStatus); err != nil {
+		return nil, err
+	}
+	return &reply.Report, nil
+}
+
 // DropCollection deletes the entire current collection — its on-disk .tie file
 // and in-memory index — server-side. The collection reloads empty on next
 // access. Unlike Delete (one triple) this discards the whole collection, so it

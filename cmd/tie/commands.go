@@ -399,17 +399,24 @@ func cmdRestore() *cli.Command {
 func cmdVerify() *cli.Command {
 	return &cli.Command{
 		Name:  "verify",
-		Usage: "Check the virtual file tree for lost/incomplete nodes (fsck); exits non-zero if any problem is found",
-		Description: "Verify scans the whole collection and reports structural and metadata problems:\n" +
-			"orphaned directories/files (no parent edge — unreachable from the root), dangling\n" +
-			"parent references, parent cycles, duplicate path claims, files missing core\n" +
-			"metadata, and (with --check-blobs) files whose content is absent from the\n" +
-			"filehost. It is read-only. --repair re-homes orphans under tie:/restored/<date>/\n" +
-			"and is the only mutation; every other problem is reported, never auto-fixed.",
+		Usage: "Check the collection's index and virtual file tree for lost/incomplete nodes (fsck); exits non-zero if any problem is found",
+		Description: "Verify first cross-checks the triplestore's forward and reverse association\n" +
+			"indexes server-side (a divergence makes reverse queries — and therefore the tree\n" +
+			"scan itself — unreliable), then scans the whole collection and reports structural\n" +
+			"and metadata problems: orphaned directories/files (no parent edge — unreachable\n" +
+			"from the root), dangling parent references, parent cycles, duplicate path claims,\n" +
+			"files missing core metadata, and (with --check-blobs) files whose content is absent\n" +
+			"from the filehost. It is read-only. --repair fixes the index in memory (adds lost\n" +
+			"reverse entries, drops phantom reverse-only ones) and re-homes orphans under\n" +
+			"tie:/restored/<date>/; every other problem is reported, never auto-fixed.\n" +
+			"--index runs only the index check; --deep also validates every index position\n" +
+			"against its on-disk record (slow on a large collection).",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "collection", Usage: "Collection to verify (default: config Collection)"},
-			&cli.BoolFlag{Name: "repair", Usage: "Re-home orphaned files/dirs under a restored/ directory (default: report only)"},
+			&cli.BoolFlag{Name: "repair", Usage: "Repair the index in memory and re-home orphaned files/dirs under a restored/ directory (default: report only)"},
 			&cli.BoolFlag{Name: "check-blobs", Usage: "Also stat every file's content hash on the filehost (slow on a large store)"},
+			&cli.BoolFlag{Name: "index", Usage: "Only cross-check the forward/reverse indexes; skip the tree scan"},
+			&cli.BoolFlag{Name: "deep", Usage: "Index check also resolves every position against its on-disk record (slow; blocks writers meanwhile)"},
 			&cli.StringFlag{Name: "dest", Usage: "Directory to restore orphans into (default: tie:/restored/<today>)"},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
@@ -417,6 +424,36 @@ func cmdVerify() *cli.Command {
 				return errors.New("Error: Config not loaded")
 			}
 			collection := ctx.String("collection")
+			repair := ctx.Bool("repair")
+
+			// Index first: the tree scan is seeded by reverse queries, so an
+			// inconsistent index would make it report phantoms and miss
+			// children. With --repair the index is fixed before the scan, so
+			// orphan re-homing never acts on a phantom.
+			idx, err := tie.CheckIndex(collection, ctx.Bool("deep"), repair)
+			if err != nil {
+				return errors.New("Index Check Error: " + err.Error())
+			}
+			printIndexReport(idx)
+			indexProblems := idx.Problems()
+			if repair && idx.Repaired > 0 {
+				fmt.Fprintf(os.Stderr, "Repaired %d index entr%s\n", idx.Repaired, plural(idx.Repaired, "y", "ies"))
+				// Re-check so the exit code reflects the post-repair state.
+				if post, err := tie.CheckIndex(collection, ctx.Bool("deep"), false); err == nil {
+					indexProblems = post.Problems()
+				}
+			}
+			if ctx.Bool("index") {
+				if indexProblems > 0 {
+					return cli.Exit(fmt.Sprintf("verify: %d index problem(s) found", indexProblems), 1)
+				}
+				fmt.Fprintf(os.Stderr, "OK: index consistent (%d forward, %d reverse entries)\n", idx.ForwardEntries, idx.ReverseEntries)
+				return nil
+			}
+			if indexProblems > 0 {
+				fmt.Fprintln(os.Stderr, "Warning: index inconsistent — tree results below may include phantoms or miss children; run `tie verify --repair`")
+			}
+
 			rep, err := tie.Verify(collection, ctx.Bool("check-blobs"))
 			if err != nil && rep == nil {
 				return errors.New("Verify Error: " + err.Error())
@@ -426,7 +463,7 @@ func cmdVerify() *cli.Command {
 				// Partial report (blob check failed after structural checks).
 				return errors.New("Verify Error: " + err.Error())
 			}
-			if ctx.Bool("repair") {
+			if repair {
 				n, rerr := tie.RepairOrphans(collection, rep, ctx.String("dest"))
 				if rerr != nil {
 					return errors.New("Repair Error: " + rerr.Error())
@@ -441,12 +478,48 @@ func cmdVerify() *cli.Command {
 					}
 				}
 			}
-			if rep.Problems() > 0 {
-				return cli.Exit(fmt.Sprintf("verify: %d problem(s) found", rep.Problems()), 1)
+			if total := rep.Problems() + indexProblems; total > 0 {
+				return cli.Exit(fmt.Sprintf("verify: %d problem(s) found", total), 1)
 			}
 			fmt.Fprintf(os.Stderr, "OK: %d directories, %d files — no problems\n", rep.DirCount, rep.FileCount)
 			return nil
 		},
+	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// printIndexReport writes the server-side index cross-check to stderr: one
+// line per problem class with a count, then the sampled entries.
+func printIndexReport(rep *tiedb.IndexReport) {
+	w := os.Stderr
+	if rep.Problems() == 0 {
+		return
+	}
+	mode := ""
+	if rep.Deep {
+		mode = ", deep"
+	}
+	fmt.Fprintf(w, "Index inconsistencies (%d forward, %d reverse entries%s):\n", rep.ForwardEntries, rep.ReverseEntries, mode)
+	line := func(label string, n int) {
+		if n > 0 {
+			fmt.Fprintf(w, "  %-52s %d\n", label, n)
+		}
+	}
+	line("forward triples missing their reverse entry:", rep.MissingReverse)
+	line("reverse-only entries (phantoms, no forward triple):", rep.ReverseOnly)
+	line("forward/reverse position mismatches:", rep.PositionMismatch)
+	line("index positions whose record does not match:", rep.Misresolved)
+	if len(rep.Samples) > 0 {
+		fmt.Fprintf(w, "  samples (%d):\n", len(rep.Samples))
+		for _, s := range rep.Samples {
+			fmt.Fprintf(w, "    %-18s %s  %s  %s\n", s.Kind, s.Key, s.Value1, s.Value2)
+		}
 	}
 }
 

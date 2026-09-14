@@ -267,7 +267,9 @@ High-level helpers on `TieClient` include: `list_tags`, `register_tag`,
 `untagged_files`; `read_tie_dir`, `mk_tie_dir_all`, `set_dir_types`,
 `list_dir_types`, `rename_file`, `rename_dir`; `import_file`, `import_dir`;
 `list_versions`, `restore_version`; `list_favorites`, `register_favorite`,
-`unregister_favorite`; `cotags_for_query`, `relate_files`, `relations_from`.
+`unregister_favorite`; `cotags_for_query`, `relate_files`, `relations_from`;
+`check_index(deep=, repair=)` (server-side forward/reverse index cross-check,
+returns the report dict).
 
 ### Errors
 
