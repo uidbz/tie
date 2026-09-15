@@ -307,6 +307,17 @@ func sniffContentType(path string) string {
 	return ""
 }
 
+// VersionHandler reports the running build as JSON: {"server":"tie-filehost",
+// "build":{version, commit, date, dirty, goVersion}} — the same shape as the
+// triplestore's Version reply, so `tie version` can print both alike.
+func VersionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"server": "tie-filehost",
+		"build":  version.Get(),
+	})
+}
+
 // StatHandler reports whether a blob exists in the store, without transferring
 // it. It answers HEAD /{hash}: 200 with a Content-Length when the blob is
 // present, 404 when absent. Existence is checked against the primary store
@@ -464,6 +475,7 @@ set CertFile/KeyFile to serve HTTPS directly.
 		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
 	}
 	defer cleanup()
+	tielog.LogVersion("tie-filehost")
 
 	if cfg.BlobPath == "" && len(cfg.BlobPaths) == 0 {
 		slog.Error("please provide a BlobPath or BlobPaths in the config file")

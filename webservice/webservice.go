@@ -149,6 +149,7 @@ var readRequests = map[string]bool{
 	"Associated": true,
 	"CoTags":     true,
 	"Dump":       true,
+	"Version":    true,
 }
 
 // accessFor classifies a request Id as read or write. Unknown Ids default to

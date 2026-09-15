@@ -321,9 +321,16 @@ full before anything is dropped, but drop+restore is not atomic.
 `tie verify` is the store's fsck: it cross-checks the triplestore's forward and
 reverse indexes server-side, then scans the virtual file tree for orphans,
 dangling parents, cycles, duplicate paths and missing metadata; `--repair` fixes
-the index in memory and re-homes orphans, `--index` runs the index check alone,
+the index in memory and re-homes orphans (additive), `--fix [--dry-run]`
+also applies the journaled destructive repairs (dangling refs, ghost nodes,
+file metadata, unrecoverable leftovers), `--index` runs the index check alone,
 `--deep` validates every index position against its on-disk record. See
 `docs/verify.md`.
+
+`tie version` shows the client build and the builds the configured triplestore
+and filehosts are running; both servers also log their version at startup.
+`make build` embeds `git describe`; a plain `go build` still carries the commit
+via Go's build info.
 
 `tie dump --file <path.tie>` exports directly from an on-disk `.tie` file
 without a running triplestore, for offline backup:
@@ -402,8 +409,8 @@ request needs a valid user):
 
 - **`tie-triplestore` defaults to `"none"`** — it has always required a login, and
   that is unchanged. Read requests are `Query`/`Expand`/`Associated`/`CoTags`/
-  `Dump`; everything else (`Add`/`Delete`/`Set`/`Update`/`Batch`/`Sync`/`Drop`/
-  `CheckIndex`) is a write.
+  `Dump`/`Version`; everything else (`Add`/`Delete`/`Set`/`Update`/`Batch`/
+  `Sync`/`Drop`/`CheckIndex`) is a write.
 - **`tie-filehost` defaults to `"write"`** — it is fully open out of the box, so
   existing tools that upload anonymously keep working. To lock it down, set
   `AnonymousAccess = "read"` (downloads stay open, uploads require a write user)

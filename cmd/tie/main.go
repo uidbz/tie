@@ -51,6 +51,7 @@ func main() {
 			cmdDel(),
 			cmdGet(),
 			cmdConf(),
+			cmdVersion(),
 			cmdTag(),
 			cmdVersions(),
 			cmdImport(config),

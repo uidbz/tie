@@ -50,10 +50,12 @@ collection (both the `directory` and `file` universes, unpaginated) and reports:
 | **Missing metadata** | a file lacking `filename`/`filesize`/`media-type` or a concrete tie-type — the triples `appendTagOps` always writes; a sign of an interrupted import | no (reported only) |
 | **Missing blobs** (`--check-blobs`) | a file whose content hash is absent from the filehost (never uploaded, or reaped) | no (reported only) |
 
-Only **index divergences and orphans** are auto-repairable. The other classes
-are judgment calls — merging two UIDs that claim one path, or breaking a cycle,
-is destructive and deserves a human decision — so `verify` reports them and
-leaves them alone.
+`--repair` fixes only **index divergences and orphans** — both additive.
+Dangling references, ghost nodes and metadata gaps have a repair too, but it
+deletes triples, so it lives behind the separate `--fix` flag (see *The
+destructive fixes* below). Cycles and duplicate path claims are judgment calls
+— merging two UIDs that claim one path, or breaking a cycle, deserves a human
+decision — so `verify` reports them and leaves them alone.
 
 ### Metadata expectations (what is *not* a problem)
 
@@ -91,6 +93,12 @@ tie verify --repair
 
 # Restore into a specific directory instead.
 tie verify --repair --dest /recovered/2026-08
+
+# Destructive fixes (dangling refs, ghosts, file metadata, leftovers): plan,
+# then apply with a TSV journal of every mutation. Take a dump first.
+tie dump > backup.tsv
+tie verify --fix --dry-run
+tie verify --fix --journal fix-2026-09.tsv
 ```
 
 Output goes to **stderr** (stdout stays clean for scripting), one section per
@@ -184,6 +192,31 @@ Browse the result under `/restored/<date>/` on the live mount
 (`mount --db`), decide where each node really belongs, and move it with a normal
 parent-edge change.
 
+## The destructive fixes (`--fix`)
+
+`--fix` implies `--repair` and then applies what `client.RepairTree` plans for
+the classes `--repair` leaves alone. It is plan-first: `--fix --dry-run`
+prints every mutation and changes nothing; without `--dry-run` each applied
+mutation is appended to a TSV journal (`--journal`, default
+`tie-fix-journal-<collection>-<date>.tsv`: time, op, key, relation, value,
+note) so a mistake can be reversed by hand or via `tie restore`. Take a
+`tie dump` first — it is the full backstop.
+
+Policy is additive-first; triples are deleted only for nodes nothing can reach
+or recover:
+
+| Problem | Fix |
+|---------|-----|
+| **Dangling parent ref** `child -> P` | drop the edge; re-parent `child` to P's nearest live ancestor (walking P's own parent chain), else under `--dest` |
+| **Ghost node** — dir-typed, no `path`, no file metadata, no remaining children, no `tiedir-hash` referrer, and no blob of that hash on the filehost | delete all its triples. Children are re-parented first (same rule as above), so chains of invisible ghosts resolve bottom-up over a few rounds |
+| **File missing `filesize` / `media-type` / concrete tie-type** | re-derive from the blob: size via `HEAD`, type by sniffing the first 512 bytes |
+| **File missing `filename` but carrying `name`** | reconstruct `name` + extension for the sniffed media type |
+| **File with neither `filename` nor `name`, or whose blob is absent from the filehost** | unrecoverable leftover: delete all its triples |
+
+A node referenced by a `tiedir-hash` edge is a directory's content snapshot,
+never a ghost, and is never deleted; a key that exists as a blob on the
+filehost is content, never a ghost.
+
 ## The filehost blob check
 
 `--check-blobs` confirms that every file's content actually exists on the
@@ -226,6 +259,8 @@ one host is what matters for reachability.
 - `client/verify.go` — `VerifyReport`, `Verify`, `RepairOrphans`, and the
   per-check helpers (`detectCycles`, `checkFileMetadata`, `checkBlobsExist`,
   `blobExists`).
+- `client/repair.go` — `RepairTree`, the plan-first destructive fixer behind
+  `--fix`; `TestRepairTree` in `client/verify_test.go` covers it end to end.
 - `cmd/tie/commands.go` — the `cmdVerify` command and report rendering
   (`printIndexReport`, `printVerifyReport`).
 - `cmd/tie-filehost/routes.go` + `main.go` — the `HEAD /{hash}` route and

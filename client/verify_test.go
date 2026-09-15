@@ -1,7 +1,10 @@
 package client
 
 import (
+	"bytes"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/uidbz/tie/metadata"
@@ -357,5 +360,122 @@ func TestCheckIndexRoundTrip(t *testing.T) {
 	}
 	if _, err := tie.Delete("idxprobe", "tag", "x"); err != nil {
 		t.Fatalf("Delete after CheckIndex: %v", err)
+	}
+}
+
+// TestRepairTree exercises the destructive fixes (`tie verify --fix`) end to
+// end on one damaged tree: a file whose parent edge points at a ghost node
+// (dir-typed, no path) that hangs off a live directory, a bare file node whose
+// blob is gone, and an imported file stripped of its size/media-type. The plan
+// must be reported without changes in dry-run mode; applying it must leave a
+// clean tree: the child re-parented to the ghost's live ancestor, the ghost and
+// the blobless leftover deleted, and the metadata re-derived from the blob.
+func TestRepairTree(t *testing.T) {
+	tie := freshVerifyClient(t)
+	dir := t.TempDir()
+	writeFile(t, dir+"/a.txt", "repair me please")
+	writeFile(t, dir+"/b.txt", "i will dangle")
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+		t.Fatalf("ImportDir: %v", err)
+	}
+	root, err := tie.DirUIDFromPath(FileURIScheme + dir)
+	if err != nil || root == "" {
+		t.Fatalf("DirUIDFromPath: uid=%q err=%v", root, err)
+	}
+	must := func(what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	mustAdd := func(what string, k, v1, v2 string) {
+		t.Helper()
+		_, err := tie.Add(k, v1, v2)
+		must(what, err)
+	}
+	mustDel := func(what string, k, v1, v2 string) {
+		t.Helper()
+		_, err := tie.Delete(k, v1, v2)
+		must(what, err)
+	}
+
+	// 1. Ghost: a dir-typed node with no path, parented to the live root, and
+	//    b.txt re-pointed at it (so b's parent edge is dangling).
+	ghost := "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
+	mustAdd("add ghost tie-type", ghost, str(TieTypeProperty), str(TieDirectory))
+	mustAdd("add ghost parent", ghost, str(TieParent), string(root))
+	b := hashOf(t, dir+"/b.txt")
+	mustDel("cut b parent", b, str(TieParent), string(root))
+	mustAdd("dangle b", b, str(TieParent), ghost)
+
+	// 2. Blobless leftover: tie-type file + parent, no name, no blob uploaded.
+	bare := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	mustAdd("add bare tie-type", bare, str(TieTypeProperty), str(TieFile))
+	mustAdd("add bare parent", bare, str(TieParent), string(root))
+
+	// 3. Metadata gap on a real file: strip size and media-type.
+	a := hashOf(t, dir+"/a.txt")
+	row, err := tie.Get(a)
+	must("get a", err)
+	for _, rel := range []string{str(TieFilesize), str(TieMediaType)} {
+		for _, v := range RowValues(row, rel) {
+			mustDel("strip "+rel, a, rel, v)
+		}
+	}
+	must("sync", tie.Sync())
+
+	rep, err := tie.Verify("", false)
+	must("verify", err)
+	if len(rep.DanglingParentRefs) != 1 || rep.DanglingParentRefs[0].Child != b || rep.DanglingParentRefs[0].Parent != ghost {
+		t.Fatalf("DanglingParentRefs = %+v, want b -> ghost", rep.DanglingParentRefs)
+	}
+	if len(rep.MissingMetadata) < 2 {
+		t.Fatalf("MissingMetadata = %+v, want at least the bare node and a.txt", rep.MissingMetadata)
+	}
+
+	// Dry run: a plan, and nothing changes.
+	plan, err := tie.RepairTree("", rep, RepairOptions{})
+	must("plan", err)
+	if len(plan.Planned) == 0 || plan.Applied != 0 {
+		t.Fatalf("dry run: planned=%d applied=%d", len(plan.Planned), plan.Applied)
+	}
+	rep2, err := tie.Verify("", false)
+	must("verify after dry run", err)
+	if rep2.Problems() != rep.Problems() {
+		t.Fatalf("dry run changed the tree: %d -> %d problems", rep.Problems(), rep2.Problems())
+	}
+
+	// Apply.
+	var journal bytes.Buffer
+	res, err := tie.RepairTree("", rep, RepairOptions{Apply: true, Journal: &journal})
+	must("apply", err)
+	if res.Applied != len(res.Planned) || res.Applied == 0 {
+		t.Fatalf("applied %d of %d planned", res.Applied, len(res.Planned))
+	}
+	if lines := strings.Count(journal.String(), "\n"); lines != res.Applied {
+		t.Errorf("journal has %d lines, want %d", lines, res.Applied)
+	}
+
+	rep3, err := tie.Verify("", false)
+	must("verify after apply", err)
+	if rep3.Problems() != 0 {
+		t.Fatalf("tree still has problems after RepairTree: %+v", rep3)
+	}
+	if got := singleParent(t, tie, b); got != string(root) {
+		t.Errorf("b re-parented to %s, want live ancestor %s", got, root)
+	}
+	if _, err := tie.Get(ghost); err == nil {
+		t.Error("ghost node still exists")
+	}
+	if _, err := tie.Get(bare); err == nil {
+		t.Error("blobless leftover still exists")
+	}
+	row, err = tie.Get(a)
+	must("get a after", err)
+	if RowFirst(row, str(TieFilesize)) != strconv.Itoa(len("repair me please")) {
+		t.Errorf("a.txt filesize = %q, want %d", RowFirst(row, str(TieFilesize)), len("repair me please"))
+	}
+	if RowFirst(row, str(TieMediaType)) == "" {
+		t.Error("a.txt media-type not re-derived")
 	}
 }

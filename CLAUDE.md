@@ -16,7 +16,6 @@ mounts collections as a FUSE filesystem.
 | `io/putlib/`, `io/getlib/` | Upload / download plumbing. |
 | `tiedb/`             | The triple-store engine (association index; memory-sensitive — see auto-memory). |
 | `test-env/`          | Local end-to-end sandbox. Start here to run anything. |
-| `scripts/repair/`    | fsck-fix tool: repairs what `verify` reports (ghosts, dangling refs, file metadata) after `verify --repair`. |
 
 ## Running the stack (test-env)
 
@@ -148,14 +147,21 @@ but never auto-fixed. `verify --index` runs the index check alone; `--deep`
 also resolves every index position against its on-disk record (slow, blocks
 writers). `verify --check-blobs` additionally confirms each file's content
 exists on the filehost via a cheap `HEAD /{hash}` stat endpoint (200/404, no
-body, no cache copy). `scripts/repair` (Go, dry-run by default, `--apply`
-writes a TSV journal) fixes the classes verify never auto-fixes: dangling
-parent refs are re-parented to the nearest live ancestor, ghost nodes
-(dir-typed, no path, no children, no tiedir-hash referrer, no blob on the
-filehost) are deleted, and files get missing metadata re-derived from their
-blob (size via HEAD, type by sniffing, filename reconstructed from
-name+extension). Nameless leftovers and files whose blob is gone are deleted
-(have a `dump` backup first).
+body, no cache copy). `verify --fix` (implies `--repair`; `--dry-run` prints
+the plan, every applied mutation is journaled as TSV via `--journal`) applies
+the destructive repairs `client.RepairTree` plans: dangling parent refs are
+re-parented to the nearest live ancestor, ghost nodes (dir-typed, no path, no
+children, no tiedir-hash referrer, no blob on the filehost) are deleted, and
+files get missing metadata re-derived from their blob (size via HEAD, type by
+sniffing, filename reconstructed from name+extension). Nameless leftovers and
+files whose blob is gone are deleted (have a `dump` backup first). Cycles and
+duplicate paths are only ever reported.
+
+`tie version` prints the client build and the builds of the configured
+triplestore (`Version` request, read role) and filehosts (`GET /-/version`).
+`version.Get()` prefers the Makefile's ldflags (`git describe`), else the
+module version / VCS commit Go embeds in build info, so a plain `go build`
+still reports the commit; both servers log it at startup.
 
 **Forward/reverse index consistency (tiedb).** The forward index is
 authoritative (the `.tie` file holds forward records only); the reverse index

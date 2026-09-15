@@ -8,6 +8,10 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **`Expand`/`Get` no longer return an empty row for a fully-deleted
+  subject.** A subject's association set outlives its last triple, so
+  `ExpandKeys` used to emit a row with no attributes, making a deleted node
+  look like it still existed (client `Get` now returns `ErrNotFound`).
 - **tiedb: forward and reverse indexes could silently diverge.** Creating a
   subject's (or a directory's) association set was a Get-then-Put on the outer
   index map, so two concurrent inserters for a brand-new key both created a
@@ -44,6 +48,22 @@ to follow semantic versioning.
   children — and `--repair` fixes the index first so orphan re-homing never
   acts on a phantom. `--index` runs the index check alone; `--deep` validates
   every index position against its record (slow on a large collection).
+- **`tie verify --fix`: the destructive fsck repairs, folded in from
+  `scripts/repair`.** `client.RepairTree` plans (and with `Apply` executes)
+  what `--repair` never touches: dangling parent refs are re-parented to the
+  nearest live ancestor, ghost nodes (dir-typed, no path, no children, no
+  tiedir-hash referrer, no blob) are deleted, files get missing
+  size/media-type/tie-type/filename re-derived from their blob, and nameless
+  leftovers or files whose blob is gone are deleted. `--fix` implies
+  `--repair`; `--fix --dry-run` prints the plan and changes nothing; every
+  applied mutation is journaled as TSV (`--journal`). The standalone
+  `scripts/repair` tool is removed. Covered end to end by `TestRepairTree`.
+- **Version reporting.** `tie version` prints the client build and the builds
+  of the configured triplestore (new read-role `Version` request) and
+  filehosts (`GET /-/version`); both servers log version, commit and
+  toolchain at startup. `version.Get()` falls back to the module version or
+  VCS commit Go embeds in build info, so a plain `go build` no longer reports
+  `dev`.
 - **Docs:** `docs/verify.md` gains the index-check section and documents
   `tie restore --drop` as the field remedy for a collection whose on-disk
   state is suspect; `docs/internals.md` now describes the current writer

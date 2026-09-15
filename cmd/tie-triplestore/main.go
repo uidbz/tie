@@ -120,6 +120,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
 	}
 	defer cleanup()
+	tielog.LogVersion("tie-triplestore")
 
 	users := make(map[string]auth.User, len(cfg.Users))
 	for _, u := range cfg.Users {
@@ -181,6 +182,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		c.NewDropRequest(),
 		c.NewCoTagsRequest(nil, nil, ""),
 		c.NewCheckIndexRequest(false, false),
+		api.NewVersionRequest(),
 	}
 
 	ws := webservice.NewWebservice(config, requests)

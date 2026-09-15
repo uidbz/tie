@@ -23,6 +23,7 @@ import (
 
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tiedb"
+	"github.com/uidbz/tie/version"
 
 	"github.com/uidbz/conf"
 
@@ -408,9 +409,15 @@ func cmdVerify() *cli.Command {
 			"files missing core metadata, and (with --check-blobs) files whose content is absent\n" +
 			"from the filehost. It is read-only. --repair fixes the index in memory (adds lost\n" +
 			"reverse entries, drops phantom reverse-only ones) and re-homes orphans under\n" +
-			"tie:/restored/<date>/; every other problem is reported, never auto-fixed.\n" +
-			"--index runs only the index check; --deep also validates every index position\n" +
-			"against its on-disk record (slow on a large collection).",
+			"tie:/restored/<date>/ — additive only. --fix additionally applies the destructive\n" +
+			"repairs: dangling parent refs are re-parented to the nearest live ancestor, ghost\n" +
+			"nodes (dir-typed, no path, no children, no tiedir-hash referrer, no blob) are\n" +
+			"deleted, files get missing size/media-type/tie-type/filename re-derived from their\n" +
+			"blob, and nameless leftovers or files whose blob is gone are deleted. Use\n" +
+			"--fix --dry-run to see the plan first; every applied --fix mutation is journaled\n" +
+			"as TSV (--journal). Take a `tie dump` before --fix. Cycles and duplicate paths\n" +
+			"are always reported, never auto-fixed. --index runs only the index check; --deep\n" +
+			"also validates every index position against its on-disk record (slow).",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "collection", Usage: "Collection to verify (default: config Collection)"},
 			&cli.BoolFlag{Name: "repair", Usage: "Repair the index in memory and re-home orphaned files/dirs under a restored/ directory (default: report only)"},
@@ -418,13 +425,22 @@ func cmdVerify() *cli.Command {
 			&cli.BoolFlag{Name: "index", Usage: "Only cross-check the forward/reverse indexes; skip the tree scan"},
 			&cli.BoolFlag{Name: "deep", Usage: "Index check also resolves every position against its on-disk record (slow; blocks writers meanwhile)"},
 			&cli.StringFlag{Name: "dest", Usage: "Directory to restore orphans into (default: tie:/restored/<today>)"},
+			&cli.BoolFlag{Name: "fix", Usage: "Also apply the destructive repairs (dangling refs, ghost nodes, file metadata, unrecoverable leftovers); implies --repair"},
+			&cli.BoolFlag{Name: "dry-run", Usage: "With --fix: print the planned mutations and change nothing"},
+			&cli.StringFlag{Name: "journal", Usage: "With --fix: TSV file receiving every applied mutation (default: tie-fix-journal-<collection>-<date>.tsv)"},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
 			collection := ctx.String("collection")
-			repair := ctx.Bool("repair")
+			fix := ctx.Bool("fix")
+			dryRun := ctx.Bool("dry-run")
+			if dryRun && !fix {
+				return errors.New("--dry-run only applies to --fix")
+			}
+			// --fix implies the additive repairs; a dry run applies nothing at all.
+			repair := (ctx.Bool("repair") || fix) && !dryRun
 
 			// Index first: the tree scan is seeded by reverse queries, so an
 			// inconsistent index would make it report phantoms and miss
@@ -463,6 +479,7 @@ func cmdVerify() *cli.Command {
 				// Partial report (blob check failed after structural checks).
 				return errors.New("Verify Error: " + err.Error())
 			}
+			changed := false
 			if repair {
 				n, rerr := tie.RepairOrphans(collection, rep, ctx.String("dest"))
 				if rerr != nil {
@@ -470,13 +487,50 @@ func cmdVerify() *cli.Command {
 				}
 				if n > 0 {
 					fmt.Fprintf(os.Stderr, "Restored %d orphaned node(s) under %s\n", n, restoreDestDisplay(ctx.String("dest")))
-					// Re-verify so the reported problem count and exit code
-					// reflect the post-repair state, not the pre-repair scan.
-					rep, err = tie.Verify(collection, ctx.Bool("check-blobs"))
-					if err != nil {
-						return errors.New("Verify Error: " + err.Error())
-					}
+					changed = true
 				}
+			}
+			if fix {
+				opts := client.RepairOptions{Dest: ctx.String("dest"), Apply: !dryRun, Progress: os.Stderr}
+				if !dryRun {
+					path := ctx.String("journal")
+					if path == "" {
+						name := collection
+						if name == "" {
+							name = tie.CollectionInfo().CollectionId
+						}
+						path = fmt.Sprintf("tie-fix-journal-%s-%s.tsv", name, time.Now().Format("2006-01-02T150405"))
+					}
+					f, ferr := os.Create(path)
+					if ferr != nil {
+						return errors.New("Fix Error: creating journal: " + ferr.Error())
+					}
+					defer f.Close()
+					opts.Journal = f
+					fmt.Fprintf(os.Stderr, "Journal: %s\n", path)
+				}
+				res, ferr := tie.RepairTree(collection, rep, opts)
+				if dryRun {
+					for _, o := range res.Planned {
+						fmt.Printf("%-6s %s %-11s %s   # %s\n", o.Kind, o.Key, o.Relation, shortVal(o.Value), o.Note)
+					}
+					fmt.Fprintf(os.Stderr, "dry-run: %d mutation(s) planned; re-run without --dry-run to apply\n", len(res.Planned))
+				} else if res.Applied > 0 {
+					fmt.Fprintf(os.Stderr, "Applied %d mutation(s)\n", res.Applied)
+					changed = true
+				}
+				if ferr != nil {
+					return errors.New("Fix Error: " + ferr.Error())
+				}
+			}
+			if changed {
+				// Re-verify so the reported problem count and exit code
+				// reflect the post-repair state, not the pre-repair scan.
+				rep, err = tie.Verify(collection, ctx.Bool("check-blobs"))
+				if err != nil {
+					return errors.New("Verify Error: " + err.Error())
+				}
+				printVerifyReport(rep)
 			}
 			if total := rep.Problems() + indexProblems; total > 0 {
 				return cli.Exit(fmt.Sprintf("verify: %d problem(s) found", total), 1)
@@ -485,6 +539,13 @@ func cmdVerify() *cli.Command {
 			return nil
 		},
 	}
+}
+
+func shortVal(s string) string {
+	if len(s) > 48 {
+		return s[:48] + "…"
+	}
+	return s
 }
 
 func plural(n int, one, many string) string {
@@ -719,6 +780,67 @@ func cmdDel() *cli.Command {
 			return nil
 		},
 	}
+}
+
+// cmdVersion prints the client build and, when a config is loaded, the build
+// each configured server is running — the quick way to confirm a deploy landed
+// on a remote triplestore/filehost. Servers that cannot be reached are
+// reported inline rather than failing the command.
+func cmdVersion() *cli.Command {
+	return &cli.Command{
+		Name:  "version",
+		Usage: "Show the client version and the versions of the configured triplestore and filehosts",
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			fmt.Printf("tie (client)      %s\n", describeBuild(version.Get()))
+			if tie == nil {
+				return nil
+			}
+			if v, err := tie.ServerVersion(); err != nil {
+				fmt.Printf("tie-triplestore   unavailable (%s): %v\n", tie.Config.TripleStoreURL, err)
+			} else {
+				fmt.Printf("tie-triplestore   %s  %s\n", describeBuild(v), tie.Config.TripleStoreURL)
+			}
+			names := make([]string, 0, len(tie.Config.FileHosts))
+			for name := range tie.Config.FileHosts {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			seen := map[string]bool{}
+			for _, name := range names {
+				host := tie.Config.FileHosts[name]
+				if seen[host.URL] {
+					continue
+				}
+				seen[host.URL] = true
+				if v, err := client.FileHostVersion(host); err != nil {
+					fmt.Printf("tie-filehost      unavailable (%s): %v\n", host.URL, err)
+				} else {
+					fmt.Printf("tie-filehost      %s  %s\n", describeBuild(v), host.URL)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// describeBuild renders a build as "version (commit, go)" with the commit
+// shown only when it adds information the version string lacks.
+func describeBuild(v version.Info) string {
+	s := v.Version
+	var extra []string
+	if v.Commit != "" && !strings.Contains(v.Version, v.Commit[:min(7, len(v.Commit))]) {
+		extra = append(extra, v.Commit[:min(12, len(v.Commit))])
+	}
+	if v.Dirty && !strings.HasSuffix(v.Version, "-dirty") && !strings.HasSuffix(v.Version, "+dirty") {
+		extra = append(extra, "dirty")
+	}
+	if v.GoVersion != "" {
+		extra = append(extra, v.GoVersion)
+	}
+	if len(extra) > 0 {
+		s += " (" + strings.Join(extra, ", ") + ")"
+	}
+	return s
 }
 
 func cmdConf() *cli.Command {

@@ -1062,6 +1062,12 @@ func (ic *Collection) ExpandKeys(keys []string, filter string) []Row {
 			continue
 		}
 		sorted, _ := ic.Sort(tree, filter, SortOptions{Limit: -1})
+		if len(sorted) == 0 && filter == "" {
+			// The set outlives its last triple (outer keys are never removed),
+			// so a fully-deleted subject would otherwise expand to an empty
+			// row and look like it still exists.
+			continue
+		}
 		attrs := make(map[string][]string)
 		for _, t := range sorted {
 			attrs[t.Value1] = append(attrs[t.Value1], t.Value2)

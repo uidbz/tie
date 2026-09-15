@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/uidbz/tie/version"
 	"golang.org/x/term"
 )
 
@@ -111,4 +112,22 @@ func newPrettyHandler(w *os.File, level slog.Level) slog.Handler {
 		return slog.NewTextHandler(w, opts)
 	}
 	return &prettyHandler{w: w, level: level, mu: &sync.Mutex{}}
+}
+
+// LogVersion writes the standard startup line: which binary, its build
+// version, commit, and toolchain. Call it right after Setup so the first line
+// of every log file identifies the build that wrote it.
+func LogVersion(binary string) {
+	v := version.Get()
+	attrs := []any{"version", v.Version, "go", v.GoVersion}
+	if v.Commit != "" {
+		attrs = append(attrs, "commit", v.Commit)
+	}
+	if v.Date != "" {
+		attrs = append(attrs, "commitDate", v.Date)
+	}
+	if v.Dirty {
+		attrs = append(attrs, "dirty", true)
+	}
+	slog.Info(binary+" starting", attrs...)
 }
