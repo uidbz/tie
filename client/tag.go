@@ -261,6 +261,19 @@ func renderDestTemplate(tmpl string, m metadata.Media) (string, error) {
 	return out.String(), nil
 }
 
+// ValidateDestTemplate reports whether tmpl is a usable import destination
+// template: every {variable} reference is closed and names a known variable
+// (artist, albumartist, album, year, title, track). It renders the template
+// against a fully populated dummy Media, so it cannot catch values that are
+// merely empty at import time — those surface as per-album plan warnings.
+func ValidateDestTemplate(tmpl string) error {
+	probe := metadata.Media{
+		Title: "t", Artist: "a", AlbumArtist: "aa", Album: "al", Year: 2000, Track: 1,
+	}
+	_, err := renderDestTemplate(tmpl, probe)
+	return err
+}
+
 // aggregateMetadata collapses per-file metadata into a single directory-level
 // value per field by taking the most common non-empty value. Album/artist/year
 // describe the directory (album) as a whole, so the modal value is the stable

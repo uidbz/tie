@@ -275,8 +275,20 @@ with per-album warnings. Nothing is uploaded or written in `--dry-run` mode.
 
 Whole-directory groups import as faithful tree mirrors (cue sheets, logs and
 `artwork/` subdirectories included) via the regular `ImportDir` machinery;
-merged/split/tag-clustered groups import their audio files only, preserving
-the subdirectories below their common source directory (disc folders survive).
+merged/split/tag-clustered groups import their audio files only.
+
+**Disc placement** normalizes multi-disc sets below the album root. When the
+tracks carry more than one disc number (DISCNUMBER tags, or — more commonly —
+disc-like directory names such as `CD1`, `Disc 2`, `Album (Disc 2)`), every
+disc'd file lands at `cd<N>/…`: `CD1/01.flac` and `Disc 2/01.flac` become
+`cd1/01.flac` and `cd2/01.flac`. A single-disc album drops the disc level
+entirely (`CD1/01.flac` → `01.flac`). The tag wins over the directory name
+when both exist; files with no disc signal (a `bonus/` folder, loose tracks)
+keep their relative placement, and albums with no disc structure at all
+import exactly as before. A whole-directory group with a disc structure
+converts to an explicit file import (cover art and other sidecars ride
+along) so it normalizes too; destination collisions from the mapping are
+flagged in the warnings column.
 
 **Destinations** are rendered per album from the dir-type's `[ImportDest]`
 template — or from `--dest`, which in `--albums` mode acts as an inline

@@ -6,6 +6,27 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Disc-aware album placement (`cd1`/`cd2` subdirectories).**
+  `PlanAlbumImport` now routes each album member to a disc-aware destination
+  below the album root: a **multi-disc** album (more than one disc number
+  among its tracks, or a disc-total tag above 1) places every disc'd file at
+  `cd<N>/…`, and a **single-disc** album drops disc-like directory levels so
+  it sits flat at its root. The disc number comes from the track's
+  DISCNUMBER tag when present (`metadata.Media` gains `Disc`/`DiscTotal`,
+  populated by `ExtractMediaMetadata` and the planner's probe), falling back
+  to a disc-like directory name (`CD1`, `Disc 2`, `Album (Disc 2)`) — many
+  libraries carry the structure only in their layout. Members with no disc
+  signal keep their legacy relative placement, and albums with no disc
+  structure at all import exactly as before. A dir group with a disc
+  structure converts to an explicit import (`AlbumGroup.Files` +
+  `Sidecars` + `SubPaths`) so faithful mirrors normalize too without losing
+  cover art; colliding destination subpaths surface as plan warnings.
+- **`client.ValidateDestTemplate`** reports whether an `[ImportDest]`
+  template string is renderable (unknown or unterminated `{variables}`), so
+  UIs can reject a bad template before scanning a library.
+
 ### Fixed
 
 - **`Expand`/`Get` no longer return an empty row for a fully-deleted

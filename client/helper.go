@@ -106,6 +106,7 @@ func ExtractMediaMetadata(path string) metadata.Media {
 		return metadata.Media{}
 	}
 	track, _ := m.Track()
+	disc, discTotal := m.Disc()
 	return metadata.Media{
 		Title:       m.Title(),
 		Artist:      m.Artist(),
@@ -113,6 +114,8 @@ func ExtractMediaMetadata(path string) metadata.Media {
 		Album:       m.Album(),
 		Year:        m.Year(),
 		Track:       track,
+		Disc:        disc,
+		DiscTotal:   discTotal,
 		Duration:    m.Duration().Seconds(),
 	}
 }

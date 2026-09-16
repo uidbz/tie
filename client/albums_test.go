@@ -356,10 +356,196 @@ func TestFinalizePlanSortsByDest(t *testing.T) {
 		dirAlbumGroup("/lib/zeta", []scannedFile{audio("/lib/zeta/01.flac", "Zeta", "", "B", 2000)}),
 		dirAlbumGroup("/lib/alpha", []scannedFile{audio("/lib/alpha/01.flac", "Alpha", "", "A", 2000)}),
 	}
-	finalizePlan(groups, "/m/{albumartist}/{album}")
+	finalizePlan(groups, "/m/{albumartist}/{album}", nil)
 	if groups[0].Dest != "/m/Alpha/A" || groups[1].Dest != "/m/Zeta/B" {
 		t.Fatalf("plan not sorted by dest: %q, %q", groups[0].Dest, groups[1].Dest)
 	}
 	_ = byDest
 	_ = findGroup
+}
+
+// audioDisc builds a scanned audio file with disc tags.
+func audioDisc(path, artist, album string, disc, discTotal int) scannedFile {
+	return scannedFile{
+		path: path,
+		size: 100,
+		meta: metadata.Media{Artist: artist, Album: album, Disc: disc, DiscTotal: discTotal},
+	}
+}
+
+func TestParseDiscDir(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want int
+		ok   bool
+	}{
+		{"CD1", 1, true}, {"cd2", 2, true}, {"CD 3", 3, true},
+		{"Disc 1", 1, true}, {"disc 02", 2, true}, {"Disk 4", 4, true},
+		{"Album CD1", 1, true}, {"Album (Disc 2)", 2, true}, {"cd12", 12, true},
+		{"CD", 0, false}, {"Discovery", 0, false}, {"CD00", 0, false},
+		{"Scans", 0, false}, {"bonus", 0, false},
+	} {
+		got, ok := parseDiscDir(tc.name)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("parseDiscDir(%q) = %d, %v; want %d, %v", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestPlaceAlbumDiscsMergedMultiDiscFromDirNames(t *testing.T) {
+	// The classic untagged-disc library: disc subdirs carry the structure.
+	g := fileListGroup([]scannedFile{
+		audio("/lib/A/Alb/CD1/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/CD1/02.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/CD2/01.flac", "A", "", "Alb", 2000),
+	})
+	placeAlbumDiscs(&g, nil)
+	want := map[string]string{
+		"/lib/A/Alb/CD1/01.flac": "cd1/01.flac",
+		"/lib/A/Alb/CD1/02.flac": "cd1/02.flac",
+		"/lib/A/Alb/CD2/01.flac": "cd2/01.flac",
+	}
+	if len(g.SubPaths) != len(want) {
+		t.Fatalf("SubPaths = %v, want %v", g.SubPaths, want)
+	}
+	for src, sp := range want {
+		if g.SubPaths[src] != sp {
+			t.Errorf("SubPaths[%q] = %q, want %q", src, g.SubPaths[src], sp)
+		}
+	}
+	if len(g.Warnings) != 0 {
+		t.Errorf("warnings = %v", g.Warnings)
+	}
+}
+
+func TestPlaceAlbumDiscsTagWinsOverDirName(t *testing.T) {
+	g := fileListGroup([]scannedFile{
+		audioDisc("/lib/A/Alb/CD1/01.flac", "A", "Alb", 2, 2),
+		audioDisc("/lib/A/Alb/CD2/02.flac", "A", "Alb", 1, 2),
+	})
+	placeAlbumDiscs(&g, nil)
+	if g.SubPaths["/lib/A/Alb/CD1/01.flac"] != "cd2/01.flac" {
+		t.Errorf("tag disc 2 must override dir CD1: %v", g.SubPaths)
+	}
+	if g.SubPaths["/lib/A/Alb/CD2/02.flac"] != "cd1/02.flac" {
+		t.Errorf("tag disc 1 must override dir CD2: %v", g.SubPaths)
+	}
+	if len(g.Warnings) != 0 {
+		t.Errorf("warnings = %v", g.Warnings)
+	}
+}
+
+func TestPlaceAlbumDiscsTagOnlyMultiDisc(t *testing.T) {
+	// Flat directory, disc numbers only in tags: files gain cd<N> prefixes.
+	g := dirAlbumGroup("/lib/A/Alb", []scannedFile{
+		audioDisc("/lib/A/Alb/01.flac", "A", "Alb", 1, 2),
+		audioDisc("/lib/A/Alb/02.flac", "A", "Alb", 2, 2),
+	})
+	placeAlbumDiscs(&g, nil)
+	if g.WholeTree() {
+		t.Fatal("disc-structured dir group must convert to an explicit import")
+	}
+	if g.SubPaths["/lib/A/Alb/01.flac"] != "cd1/01.flac" ||
+		g.SubPaths["/lib/A/Alb/02.flac"] != "cd2/02.flac" {
+		t.Errorf("SubPaths = %v", g.SubPaths)
+	}
+}
+
+func TestPlaceAlbumDiscsSingleDiscFlattens(t *testing.T) {
+	// Merged single-disc album: the disc level is dropped, not kept as cd1.
+	g := fileListGroup([]scannedFile{
+		audio("/lib/A/Alb/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/CD1/02.flac", "A", "", "Alb", 2000),
+	})
+	placeAlbumDiscs(&g, nil)
+	if g.SubPaths["/lib/A/Alb/CD1/02.flac"] != "02.flac" {
+		t.Errorf("single-disc level must flatten: %v", g.SubPaths)
+	}
+	if g.SubPaths["/lib/A/Alb/01.flac"] != "01.flac" {
+		t.Errorf("undisc'd member keeps its place: %v", g.SubPaths)
+	}
+}
+
+func TestPlaceAlbumDiscsStraysKeepLegacyPlacement(t *testing.T) {
+	// Multi-disc group with a non-disc subdirectory: no signal → verbatim.
+	g := fileListGroup([]scannedFile{
+		audio("/lib/A/Alb/CD1/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/CD2/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/bonus/01.flac", "A", "", "Alb", 2000),
+	})
+	placeAlbumDiscs(&g, nil)
+	if g.SubPaths["/lib/A/Alb/bonus/01.flac"] != "bonus/01.flac" {
+		t.Errorf("stray member must keep legacy placement: %v", g.SubPaths)
+	}
+}
+
+func TestPlaceAlbumDiscsNoSignalKeepsLegacy(t *testing.T) {
+	g := dirAlbumGroup("/lib/A/Alb", []scannedFile{
+		audio("/lib/A/Alb/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/02.flac", "A", "", "Alb", 2000),
+	})
+	placeAlbumDiscs(&g, []pathSize{{"/lib/A/Alb/cover.jpg", 50}})
+	if g.SubPaths != nil || !g.WholeTree() || g.Sidecars != nil {
+		t.Errorf("no disc signal: group must stay a verbatim mirror: %+v", g)
+	}
+}
+
+func TestPlaceAlbumDiscsConvertsWholeTreeWithSidecars(t *testing.T) {
+	g := dirAlbumGroup("/lib/A/Alb", []scannedFile{
+		audioDisc("/lib/A/Alb/01.flac", "A", "Alb", 1, 2),
+		audioDisc("/lib/A/Alb/02.flac", "A", "Alb", 2, 2),
+	})
+	tree := []pathSize{
+		{"/lib/A/Alb/01.flac", 100},
+		{"/lib/A/Alb/02.flac", 100},
+		{"/lib/A/Alb/cover.jpg", 50},
+		{"/lib/A/Alb/Scans/front.jpg", 60},
+		{"/lib/A/Other/x.flac", 100}, // outside the group tree
+	}
+	placeAlbumDiscs(&g, tree)
+	if g.WholeTree() {
+		t.Fatal("converted group must not report WholeTree")
+	}
+	if len(g.Files) != 2 {
+		t.Errorf("Files = %v", g.Files)
+	}
+	if len(g.Sidecars) != 2 {
+		t.Fatalf("Sidecars = %v, want cover.jpg + Scans/front.jpg", g.Sidecars)
+	}
+	if g.Size != 100+100+50+60 {
+		t.Errorf("Size = %d, want sidecar bytes included", g.Size)
+	}
+	if g.SubPaths["/lib/A/Alb/cover.jpg"] != "cover.jpg" {
+		t.Errorf("root cover stays at the root: %v", g.SubPaths)
+	}
+	if g.SubPaths["/lib/A/Alb/Scans/front.jpg"] != "Scans/front.jpg" {
+		t.Errorf("non-disc sidecar dir keeps its place: %v", g.SubPaths)
+	}
+}
+
+func TestPlaceAlbumDiscsCollisionWarning(t *testing.T) {
+	// Two disc levels flattening onto the same name collide.
+	g := fileListGroup([]scannedFile{
+		audio("/lib/A/Alb/CD1/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/cd1/01.flac", "A", "", "Alb", 2000),
+	})
+	placeAlbumDiscs(&g, nil)
+	if !strings.Contains(strings.Join(g.Warnings, "; "), "collision") {
+		t.Errorf("want a collision warning: %v", g.Warnings)
+	}
+}
+
+func TestValidateDestTemplate(t *testing.T) {
+	for _, tmpl := range []string{
+		"", "/{albumartist}/{year} - {album}", "/music/{artist}/{album}/{track} {title}",
+	} {
+		if err := ValidateDestTemplate(tmpl); err != nil {
+			t.Errorf("ValidateDestTemplate(%q) = %v, want nil", tmpl, err)
+		}
+	}
+	for _, tmpl := range []string{"/{bogus}", "/{album", "/{album artist}"} {
+		if err := ValidateDestTemplate(tmpl); err == nil {
+			t.Errorf("ValidateDestTemplate(%q) = nil, want error", tmpl)
+		}
+	}
 }

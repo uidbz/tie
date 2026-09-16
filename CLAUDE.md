@@ -131,6 +131,17 @@ to artist), and annotates warnings (missing tags, dest collisions, nesting).
 via batched per-file imports that are additive-only (no reconcile — a partial
 view must not version away siblings). CLI has `--dry-run` and `-y`.
 
+Placement is disc-aware: multi-disc albums route each disc'd member to
+`cd<N>/…` and single-disc albums drop disc-like directory levels, keyed off
+`metadata.Media.Disc`/`DiscTotal` (DISCNUMBER tag) with a fallback to
+disc-like directory names (`CD1`, `Disc 2`) for libraries that carry the
+structure only in their layout. The planner writes per-file destinations
+into `AlbumGroup.SubPaths` (nil = legacy verbatim placement); a
+disc-structured dir group converts to an explicit import
+(`Files`+`Sidecars`+`SubPaths`, cover art rides along) instead of an
+`ImportDir` mirror. `client.ValidateDestTemplate` checks a template string
+before scanning.
+
 `verify` is the store's fsck (see docs/verify.md). Bare `tie verify` first
 runs the server-side **index check** (`CheckIndex` request →
 `tiedb.Collection.CheckIndex`), then a read-only scan of the whole collection

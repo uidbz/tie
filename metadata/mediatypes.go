@@ -16,5 +16,9 @@ type Media struct {
 	Album       string
 	Year        int
 	Track       int
-	Duration    float64 // audio playing time in seconds, 0 when unknown
+	// Disc is the disc number (the DISCNUMBER/TPOS tag), 0 when untagged.
+	// DiscTotal is the total disc count when the tag carries it, else 0.
+	// They feed disc-aware album placement (cd1/cd2 subdirectories).
+	Disc, DiscTotal int
+	Duration        float64 // audio playing time in seconds, 0 when unknown
 }

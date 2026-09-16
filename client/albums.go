@@ -7,8 +7,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -56,9 +58,22 @@ type AlbumGroup struct {
 	// the containing directory for an archive group.
 	SourceDir string
 	// Files, when non-nil, is the explicit audio file list to import (merged,
-	// split and tag groups). Nil means the whole SourceDir tree is imported
-	// (dir groups), sidecars and subdirectories included.
+	// split and tag groups, and disc-structured dir groups after conversion).
+	// Nil means the whole SourceDir tree is imported verbatim (dir groups),
+	// sidecars and subdirectories included.
 	Files []string
+	// Sidecars lists non-audio member files to import alongside Files
+	// (cover art, booklets, logs). It is only populated for a dir group the
+	// planner converted to an explicit import because of its disc structure;
+	// merged/split/tag groups never carry sidecars.
+	Sidecars []string
+	// SubPaths maps a member source path (Files and Sidecars) to its
+	// slash-separated destination path below Dest, e.g. "cd2/01.flac". It is
+	// the planner's disc-aware placement: multi-disc groups route each member
+	// to its cd<N> subdirectory, single-disc groups drop disc-like directory
+	// levels. Nil (or a missing key) means legacy placement — the file's
+	// path below SourceDir, preserved verbatim.
+	SubPaths map[string]string
 	// IsArchive marks a single-file group: an archive blob of audio members.
 	// It imports as one file into Dest and gets no dir-type stamp — the blob
 	// itself carries the audio-archive classification.
@@ -78,11 +93,18 @@ type AlbumGroup struct {
 	Warnings []string
 
 	metas []metadata.Media // member audio metadata, for aggregation
+	// audioPaths holds the member audio file paths, parallel to metas. For
+	// file-list groups it duplicates Files; for dir groups it is the tree's
+	// audio content, retained so a disc-structured dir group can convert to
+	// an explicit import without rescanning.
+	audioPaths []string
 }
 
 // WholeTree reports whether the group imports its SourceDir as a faithful
 // tree mirror via ImportDir (sidecars included), rather than an explicit
-// audio file list.
+// audio file list. A dir group with a disc structure converts to an explicit
+// import during planning (Files/Sidecars/SubPaths populated), so it reports
+// false even though its content is the whole tree.
 func (g AlbumGroup) WholeTree() bool { return g.Files == nil && !g.IsArchive }
 
 // AlbumPlanOptions configures PlanAlbumImport.
@@ -123,7 +145,7 @@ func PlanAlbumImport(cfg Config, root string, opts AlbumPlanOptions) ([]AlbumGro
 	if err != nil {
 		return nil, err
 	}
-	audio, err := scanAudioFiles(root, opts.ScanProgress)
+	audio, tree, err := scanAudioFiles(root, opts.ScanProgress)
 	if err != nil {
 		return nil, err
 	}
@@ -133,18 +155,25 @@ func PlanAlbumImport(cfg Config, root string, opts AlbumPlanOptions) ([]AlbumGro
 	if tmpl == "" {
 		tmpl = cfg.ImportDest[opts.DirType]
 	}
-	finalizePlan(groups, tmpl)
+	finalizePlan(groups, tmpl, tree)
 	return groups, nil
 }
 
 // finalizePlan renders every group's destination, fills display fields, adds
-// collision/nesting warnings, and sorts the plan by destination.
-func finalizePlan(groups []AlbumGroup, tmpl string) {
+// collision/nesting warnings, computes disc-aware placement, and sorts the
+// plan by destination.
+func finalizePlan(groups []AlbumGroup, tmpl string, tree []pathSize) {
 	for i := range groups {
 		finalizeAlbumGroup(&groups[i], tmpl)
 	}
 	warnDestCollisions(groups)
 	warnNestedGroups(groups)
+	// Disc placement runs after the nesting analysis: a converted dir group
+	// no longer reads as WholeTree, but it still covers its whole tree, so
+	// nested groups remain double-parented and must keep their warning.
+	for i := range groups {
+		placeAlbumDiscs(&groups[i], tree)
+	}
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].Dest != groups[j].Dest {
 			return groups[i].Dest < groups[j].Dest
@@ -153,16 +182,20 @@ func finalizePlan(groups []AlbumGroup, tmpl string) {
 	})
 }
 
+// pathSize is one file found by the library walk: its path and byte size.
+type pathSize struct {
+	path string
+	size int64
+}
+
 // scanAudioFiles walks root and classifies every file, keeping audio files
-// (with their extracted tags) and audio-archive blobs. Classification runs on
-// a wide worker pool: it is I/O-bound, and libraries may live on high-latency
-// (network) filesystems where many in-flight opens are what buys throughput.
+// (with their extracted tags) and audio-archive blobs. The full walk list is
+// returned alongside so a disc-structured dir group can later collect its
+// sidecar files without a second walk. Classification runs on a wide worker
+// pool: it is I/O-bound, and libraries may live on high-latency (network)
+// filesystems where many in-flight opens are what buys throughput.
 // progress, when non-nil, receives (probed, total) updates.
-func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFile, error) {
-	type pathSize struct {
-		path string
-		size int64
-	}
+func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFile, []pathSize, error) {
 	var paths []pathSize
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -179,7 +212,7 @@ func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFi
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	workers := runtime.NumCPU() * 8
@@ -233,7 +266,7 @@ func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFi
 		progress(len(paths), len(paths))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].path < out[j].path })
-	return out, nil
+	return out, paths, nil
 }
 
 // probeMediaFile classifies path and, for audio files, extracts embedded tags
@@ -262,6 +295,7 @@ func probeMediaFile(path string) (TieType, metadata.Media, error) {
 			return t, metadata.Media{}, nil
 		}
 		track, _ := m.Track()
+		disc, discTotal := m.Disc()
 		return t, metadata.Media{
 			Title:       m.Title(),
 			Artist:      m.Artist(),
@@ -269,6 +303,8 @@ func probeMediaFile(path string) (TieType, metadata.Media, error) {
 			Album:       m.Album(),
 			Year:        m.Year(),
 			Track:       track,
+			Disc:        disc,
+			DiscTotal:   discTotal,
 			Duration:    m.Duration().Seconds(),
 		}, nil
 	case TieArchiveFile:
@@ -371,6 +407,7 @@ func dirAlbumGroup(d string, members []scannedFile) AlbumGroup {
 		g.Tracks++
 		g.Size += f.size
 		g.metas = append(g.metas, f.meta)
+		g.audioPaths = append(g.audioPaths, f.path)
 	}
 	return g
 }
@@ -385,6 +422,7 @@ func fileListGroup(members []scannedFile) AlbumGroup {
 		g.Tracks++
 		g.Size += f.size
 		g.metas = append(g.metas, f.meta)
+		g.audioPaths = append(g.audioPaths, f.path)
 	}
 	return g
 }
@@ -583,6 +621,169 @@ func mixedArtists(metas []metadata.Media) bool {
 	return false
 }
 
+// --- disc-aware placement ---
+
+// discDirPattern recognizes a disc directory level: "CD1", "Disc 2",
+// "disk 03", also embedded in a longer name ("Album CD1", "Album (Disc 2)").
+// The number is captured without leading zeros.
+var discDirPattern = regexp.MustCompile(`(?i)\b(?:cd|disc|disk)[ _-]*0*([1-9][0-9]*)\b`)
+
+// parseDiscDir reports whether name looks like a disc directory and, if so,
+// which disc number it carries.
+func parseDiscDir(name string) (int, bool) {
+	m := discDirPattern.FindStringSubmatch(name)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// cutFirst splits a relative path into its first segment and the remainder.
+// deeper is false when rel names a file directly (no directory level).
+func cutFirst(rel string) (first, rest string, deeper bool) {
+	if i := strings.IndexRune(rel, os.PathSeparator); i >= 0 {
+		return rel[:i], rel[i+1:], true
+	}
+	return rel, "", false
+}
+
+// placeAlbumDiscs computes the group's disc-aware destination subpaths
+// (AlbumGroup.SubPaths). A multi-disc group (more than one disc number among
+// its members, or a disc-total tag above 1) routes each member to its cd<N>
+// subdirectory; a single-disc group drops disc-like directory levels so the
+// album sits flat at its root. A member's disc number comes from its
+// DISCNUMBER tag, falling back to a disc-like directory name ("CD1",
+// "Disc 2") because many libraries lack the tag. Members with no disc signal
+// at all keep their legacy relative placement. A dir group with a disc
+// structure converts to an explicit import (Files + Sidecars + SubPaths) so
+// the normalization applies to faithful tree mirrors too; without a disc
+// structure every group keeps its legacy placement (SubPaths stays nil).
+func placeAlbumDiscs(g *AlbumGroup, tree []pathSize) {
+	if g.IsArchive || len(g.audioPaths) == 0 {
+		return
+	}
+	type member struct {
+		path, rel string
+		disc      int
+		discDir   bool // first rel segment is a disc-like directory
+	}
+	members := make([]member, 0, len(g.audioPaths))
+	seen := map[int]bool{}
+	multiTotal := false
+	for i, p := range g.audioPaths {
+		rel, err := filepath.Rel(g.SourceDir, p)
+		if err != nil {
+			return
+		}
+		disc, discDir := 0, false
+		if first, _, deeper := cutFirst(rel); deeper {
+			disc, discDir = parseDiscDir(first)
+		}
+		if g.metas[i].Disc > 0 {
+			disc = g.metas[i].Disc // the tag wins over the directory name
+		}
+		if disc > 0 {
+			seen[disc] = true
+		}
+		if g.metas[i].DiscTotal > 1 {
+			multiTotal = true
+		}
+		members = append(members, member{p, rel, disc, discDir})
+	}
+	multi := len(seen) > 1 || multiTotal
+	if !multi && len(seen) == 0 {
+		return // no disc structure: legacy verbatim placement
+	}
+
+	subPaths := map[string]string{}
+	counts := map[string]int{}
+	changed := false
+	place := func(src, rel string, disc int, discDir bool) {
+		sp := discSubPath(rel, disc, discDir, multi)
+		if sp != filepath.ToSlash(rel) {
+			changed = true
+		}
+		subPaths[src] = sp
+		counts[sp]++
+	}
+	for _, m := range members {
+		place(m.path, m.rel, m.disc, m.discDir)
+	}
+	// A placement that changes nothing keeps the legacy path — in particular
+	// a dir group stays an ImportDir mirror (with reconciliation) rather
+	// than converting to an additive explicit import for no visible effect.
+	if !changed {
+		return
+	}
+
+	if g.Files == nil {
+		// Convert the dir group to an explicit import so the disc structure
+		// normalizes; sidecars (cover art, booklets, logs) ride along —
+		// dropping them would lose the album's artwork.
+		g.Files = append([]string(nil), g.audioPaths...)
+		audio := make(map[string]bool, len(g.audioPaths))
+		for _, p := range g.audioPaths {
+			audio[p] = true
+		}
+		prefix := g.SourceDir + string(os.PathSeparator)
+		for _, tf := range tree {
+			if !strings.HasPrefix(tf.path, prefix) || audio[tf.path] {
+				continue
+			}
+			g.Sidecars = append(g.Sidecars, tf.path)
+			g.Size += tf.size
+			rel, err := filepath.Rel(g.SourceDir, tf.path)
+			if err != nil {
+				continue
+			}
+			disc, discDir := 0, false
+			if first, _, deeper := cutFirst(rel); deeper {
+				disc, discDir = parseDiscDir(first)
+			}
+			place(tf.path, rel, disc, discDir)
+		}
+	}
+
+	var collisions []string
+	for sp, n := range counts {
+		if n > 1 {
+			collisions = append(collisions, fmt.Sprintf("%d files map to %s", n, sp))
+		}
+	}
+	sort.Strings(collisions)
+	for _, c := range collisions {
+		g.Warnings = append(g.Warnings, "destination collision: "+c)
+	}
+	g.SubPaths = subPaths
+}
+
+// discSubPath maps a member's source-relative path to its destination path
+// below the album root. A disc-like first segment is replaced by cd<N> in a
+// multi-disc group and dropped in a single-disc group; a member whose disc
+// number only comes from a tag gains a cd<N> prefix.
+func discSubPath(rel string, disc int, discDir, multi bool) string {
+	r := filepath.ToSlash(rel)
+	if !multi {
+		if discDir {
+			_, rest, _ := strings.Cut(r, "/")
+			return rest
+		}
+		return r
+	}
+	if disc == 0 {
+		return r // no disc signal: keep the legacy relative placement
+	}
+	if discDir {
+		_, rest, _ := strings.Cut(r, "/")
+		return fmt.Sprintf("cd%d/%s", disc, rest)
+	}
+	return fmt.Sprintf("cd%d/%s", disc, r)
+}
+
 // warnNestedGroups annotates groups nested inside a whole-tree group: the
 // tree import mirrors every file below it, so a nested album's files are
 // parented twice — under its own destination and inside the tree's mirror.
@@ -720,10 +921,12 @@ func (tie *TieClient) importAlbum(g AlbumGroup, opts AlbumImportOptions) error {
 	}
 }
 
-// importAlbumFiles imports an explicit audio file list (a merged, split or
-// tag-clustered group) under the group's destination, mirroring ImportDir's
-// batched tagging: subdirectories below SourceDir are preserved, directory
-// nodes get name/album aggregates, and the root is stamped with the dir-type.
+// importAlbumFiles imports an explicit file list (a merged, split or
+// tag-clustered group, or a disc-converted dir group) under the group's
+// destination, mirroring ImportDir's batched tagging: member placement
+// follows the group's SubPaths when planned (disc-aware cd<N> routing), else
+// subdirectories below SourceDir are preserved; directory nodes get
+// name/album aggregates, and the root is stamped with the dir-type.
 //
 // Unlike ImportDir it is purely additive — no reconciliation — because the
 // file list is a subset view: versioning away children this group did not
@@ -773,10 +976,17 @@ func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) er
 	}
 
 	var total int
-	for _, f := range g.Files {
-		rel, err := filepath.Rel(g.SourceDir, f)
-		if err != nil {
-			return err
+	all := make([]string, 0, len(g.Files)+len(g.Sidecars))
+	all = append(all, g.Files...)
+	all = append(all, g.Sidecars...)
+	for _, f := range all {
+		rel, ok := g.SubPaths[f]
+		if !ok {
+			var err error
+			rel, err = filepath.Rel(g.SourceDir, f)
+			if err != nil {
+				return err
+			}
 		}
 		parent, err := parentFor(rel)
 		if err != nil {
