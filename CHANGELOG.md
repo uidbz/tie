@@ -6,6 +6,8 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+## [v0.6.0] - 2026-10-12
+
 ### Added
 
 - **Media collections are first-class (`client/media.go`).** A shared
@@ -45,6 +47,10 @@ to follow semantic versioning.
   `tie playlist list|show|create|delete|migrate`. `backfill` brings data
   imported before the collection contract up to it; `--rescan` re-reads
   audio tags (ranged head fetches) for fields older imports never wrote.
+
+## [v0.5.3] - 2026-09-16
+
+### Added
 
 - **Disc-aware album placement (`cd1`/`cd2` subdirectories).**
   `PlanAlbumImport` now routes each album member to a disc-aware destination
