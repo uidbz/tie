@@ -62,6 +62,9 @@ func main() {
 			cmdRestore(),
 			cmdVerify(),
 			cmdStat(),
+			cmdMedia(),
+			cmdHistory(),
+			cmdPlaylist(),
 		},
 	}
 	if err := cmd.Run(context.Background(), os.Args); err != nil {

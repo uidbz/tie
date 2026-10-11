@@ -81,8 +81,10 @@ type CollectionConfig struct {
 // from doubling association memory; version-of costs nothing on collections that
 // hold no version records (an empty reverse bucket). The reverse index is
 // rebuilt from forward triples on startup, so changing this takes effect for
-// existing data after one restart.
-var defaultReverseRelations = []string{"tag", "path", "parent", "tie-type", "version-of"}
+// existing data after one restart. member-of lists a media collection's
+// members (album tracks across disc folders, playlist tracks) in one query —
+// see client/media.go; it costs one reverse entry per member.
+var defaultReverseRelations = []string{"tag", "path", "parent", "tie-type", "version-of", "member-of"}
 
 func defaultConfig() TripleStoreConfig {
 	return TripleStoreConfig{

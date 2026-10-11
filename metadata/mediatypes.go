@@ -20,5 +20,13 @@ type Media struct {
 	// DiscTotal is the total disc count when the tag carries it, else 0.
 	// They feed disc-aware album placement (cd1/cd2 subdirectories).
 	Disc, DiscTotal int
-	Duration        float64 // audio playing time in seconds, 0 when unknown
+	// TrackTotal is the album's track count when the TRACKNUMBER tag carries
+	// it ("3/12"), else 0.
+	TrackTotal int
+	// Genre is the raw GENRE tag; client.SplitGenres splits multi-value
+	// spellings (";", "/", NUL) into individual genres. Kept as one string
+	// so Media stays comparable.
+	Genre    string
+	Composer string
+	Duration float64 // audio playing time in seconds, 0 when unknown
 }

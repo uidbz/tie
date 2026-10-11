@@ -523,6 +523,73 @@ A query gives you hashes; download the bytes (or a whole directory tree) with:
 tie download <hash> <dest>
 ```
 
+## Collections: albums, playlists, series, picture sets
+
+A directory labeled with a dir-type is a *collection*. Since v0.6 every
+collection follows one contract (`client/media.go`), so all clients agree on
+what an album or a picture set is:
+
+```
+(C, tie-type, audio-dir)            the kind (audio-dir, image-dir, playlist, …)
+(C, added-at, 2026-10-11T12:00:00Z) first import — stable, unlike tag-date
+(C, member-count, 14)
+(track, member-of, C)               every member, at any folder depth
+```
+
+`member-of` is not `parent`: `parent` says where a file is *filed*,
+`member-of` what it *belongs to*. A multi-disc album files its tracks under
+`cd1/`, `cd2/` (disc folders carry `tie-type disc` and `disc <n>`), yet one
+reverse `member-of` query (`tc.CollectionMembers(uid)`) lists the whole album.
+Audio albums also carry a summary written at import: `album-artist`,
+`genre` (top genres), `track-count`, `disc-count`, `duration` (total). Tracks
+carry `genre`, `composer`, `disc`, `disc-total`, `track-total` besides the
+older title/artist/album/year/track/duration.
+
+Import writes all of this (`ImportDir`/`ImportAlbums` call
+`IndexCollection`). For data imported earlier:
+
+```sh
+tie media backfill            # member-of, added-at, disc labels, album summaries
+tie media backfill --rescan   # also re-read audio tags (genre, disc, composer)
+tie media index /music/Some/Album   # one collection
+```
+
+**Playlists** are their own subjects (`tie-type playlist`, ordered
+`playlist-track "000003:<hash>"` entries, `member-of` from each track) —
+`tie playlist list|show|create|delete|migrate`.
+
+**Video and pictures** share the vocabulary (adopted by clients
+incrementally): `movie` (title, year, runtime, tmdb-id/imdb-id, a poster
+`thumbnail`; members of a movie directory carry `role
+subtitle|extra|trailer|feature`), `tv-series` ⟵member-of⟵ `tv-season`
+(`season <n>`) ⟵member-of⟵ episode files (`season`, `episode`,
+`episode-title`, `air-date`), picture sets as `image-dir` with `taken-from` /
+`taken-to` / `location`.
+
+## Play history
+
+Players record what was played as `play-event` subjects:
+
+```
+(ev, tie-type, play-event)   (ev, play-of, <track hash>)   (ev, play-in, <album>)
+(ev, played-at, RFC3339)     (ev, listened, 212.4)         (ev, outcome, complete|skip)
+(ev, play-source, pwplay@host/1a2b3c4d)
+```
+
+The event id derives from (source, sequence number), so delivering the same
+play twice writes nothing new. `RecordPlays` also keeps statistics on the
+played track and its album — `play-count`, `skip-count`, `first-played`,
+`last-played`, `last-skipped` — so a listing query with `Expand` returns them
+for free; `tie media restat` rebuilds them from the events. A play counts as
+complete when the track is over 30 s long and half of it (or 4 minutes) was
+heard, as a skip when less than 30 s or a quarter was heard
+(`client.ClassifyPlay`). `rating` (1–5) is the shared star rating of any
+subject, the `favorite` tag the shared "liked" flag.
+
+```sh
+tie history --since 7d        # recent plays
+```
+
 ## Backup
 
 The whole collection is triples, so backup is a TSV dump and restore is an
@@ -579,3 +646,6 @@ note the range in the relation name or a companion triple.
 | Read the virtual tree | `client.ReadTieDir(tie, uid)` |
 | Download bytes | `tie download <hash> <dest>` |
 | Backup / restore | `tie dump > f.tsv` / `tie restore < f.tsv` |
+| Index collections | `tie media backfill [--rescan]` |
+| Recent plays | `tie history --since 7d` |
+| Playlists | `tie playlist list` |

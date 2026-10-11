@@ -1032,5 +1032,13 @@ func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) er
 	if err := flush(); err != nil {
 		return err
 	}
-	return tie.SetDirType(rootUID, opts.DirType)
+	if err := tie.SetDirType(rootUID, opts.DirType); err != nil {
+		return err
+	}
+	if IsCollectionLabel(opts.DirType) {
+		if _, err := tie.IndexCollection(rootUID, IndexOptions{Collection: opts.Collection}); err != nil {
+			return fmt.Errorf("index collection: %w", err)
+		}
+	}
+	return nil
 }

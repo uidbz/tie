@@ -100,7 +100,8 @@ cd test-env
   `parseGlobalFlags` (the command tree is built from config first).
 - **Reverse-relation config.** `ReverseRelations` sets which relations (value1)
   every collection indexes in reverse; omit it for the built-in default
-  (`tag`, `path`, `parent`, `tie-type`, `version-of`). `version-of` powers
+  (`tag`, `path`, `parent`, `tie-type`, `version-of`, `member-of`). `member-of`
+  lists media collection members (client/media.go). `version-of` powers
   `tie versions list` in the `<Collection>_prev` history collection and costs
   nothing on collections holding no version records. Add a `[[Collections]]` block
   (`Namespace`, `Collection`, `ReverseRelations`) to override the set for one
@@ -279,3 +280,25 @@ through it via `dBWriteQueue`/`dBReadQueue`; producers never touch the fd.
 - For tiedb changes, memory footprint is weighted ≥ load speed; benchmark old vs
   new under the same conditions before keeping a perf change.
 - filehost stays a pure content-addressed byte store — no media/format parsing.
+
+## Media model (client/media.go, playlist.go, history.go)
+
+Shared media vocabulary + the **collection contract**: members point at
+their collection with `member-of` (reverse-indexed by default — distinct from
+the tree's `parent`, so multi-disc albums under `cd<N>/` list in one query);
+collections carry a write-once `added-at` (RFC3339 UTC, `MediaTimeFormat`,
+fixed width so string sort = chronological) and `member-count`; audio albums
+an album summary (album-artist, genre, track-count, disc-count, duration).
+`IndexCollection` (idempotent; Ops==0 when current; drops stale member-of;
+skips nested collections and `_prev` dirs) runs at the end of
+`ImportDir`/`importAlbumFiles` and tie-fm's `LabelDir`; `Backfill` /
+`tie media backfill` for old data; `RescanAudio` (`--rescan`) re-reads tags
+via ranged GETs for tracks below `meta-version` 2. Playlists are
+`tie-type playlist` subjects (ordered `playlist-track` + member-of; no
+`directory` marker — verify only enumerates directory/file typed subjects,
+so playlists and play events are invisible to it). Play events
+(`tie-type play-event`, id = sha256(source, seq)) with denormalized stats
+(`play-count`, `last-played`, …) on items and collections; `RecordPlays` is
+idempotent (Expand of the ids first). `metadata.Media` must stay comparable
+(tie-fm compares it to the zero value) — hence `Genre string`, split at
+write time.

@@ -172,7 +172,12 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 			IsDir:     stat.IsDir(),
 			Metadata:  ExtractMediaMetadata(file),
 		}
-		return Tag(tie, info, collection)
+		if err := Tag(tie, info, collection); err != nil {
+			return err
+		}
+		// added-at is the stable "date added" (media.go): written once, never
+		// replaced by a re-import the way tag-date is.
+		return tie.ensureAddedAtIn(collection, info.Hash)
 	}
 	return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
 }
@@ -596,6 +601,11 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	if err := tie.SetDirType(rootUID, dirType); err != nil {
 		return fmt.Errorf("import %s: set dir type: %w", dir, err)
 	}
+	if IsCollectionLabel(dirType) {
+		if _, err := tie.IndexCollection(rootUID, IndexOptions{Collection: collection}); err != nil {
+			return fmt.Errorf("import %s: index collection: %w", dir, err)
+		}
+	}
 	return nil
 }
 
@@ -812,6 +822,26 @@ func appendTagOps(batch *api.Batch, info TagInfo) {
 	}
 	if info.Metadata.Track != 0 {
 		batch.Add(hash, str(TieTrack), strconv.Itoa(info.Metadata.Track))
+	}
+	// Media-vocabulary fields (media.go). Set, so a re-tag replaces values
+	// instead of accumulating a stale disc number or genre spelling.
+	if info.Metadata.TrackTotal != 0 {
+		batch.Set(hash, RelTrackTotal, []string{strconv.Itoa(info.Metadata.TrackTotal)})
+	}
+	if info.Metadata.Disc != 0 {
+		batch.Set(hash, RelDisc, []string{strconv.Itoa(info.Metadata.Disc)})
+	}
+	if info.Metadata.DiscTotal != 0 {
+		batch.Set(hash, RelDiscTotal, []string{strconv.Itoa(info.Metadata.DiscTotal)})
+	}
+	if g := SplitGenres(info.Metadata.Genre); len(g) > 0 {
+		batch.Set(hash, RelGenre, g)
+	}
+	if info.Metadata.Composer != "" {
+		batch.Set(hash, RelComposer, []string{info.Metadata.Composer})
+	}
+	if info.TieType == TieAudioFile {
+		batch.Set(hash, RelMetaVersion, []string{MetaVersion})
 	}
 	// Audio playing time in seconds. Written under a raw "duration" property so
 	// no stringer-backed TieProperty enum value has to be regenerated.

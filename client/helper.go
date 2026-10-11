@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/h2non/filetype"
 	"github.com/uidbz/tie/io/archivelib"
@@ -92,7 +93,13 @@ func ExtractMediaMetadata(path string) metadata.Media {
 		return metadata.Media{}
 	}
 	defer f.Close()
+	return ExtractMediaMetadataFrom(f)
+}
 
+// ExtractMediaMetadataFrom is ExtractMediaMetadata over an already open
+// stream (e.g. a downloaded blob, for `tie media backfill --rescan`). Non-audio
+// content yields an empty Media.
+func ExtractMediaMetadataFrom(f io.ReadSeeker) metadata.Media {
 	tieType, err := GetTieType(f)
 	if err != nil || tieType != TieAudioFile {
 		return metadata.Media{}
@@ -105,7 +112,7 @@ func ExtractMediaMetadata(path string) metadata.Media {
 	if err != nil {
 		return metadata.Media{}
 	}
-	track, _ := m.Track()
+	track, trackTotal := m.Track()
 	disc, discTotal := m.Disc()
 	return metadata.Media{
 		Title:       m.Title(),
@@ -116,6 +123,35 @@ func ExtractMediaMetadata(path string) metadata.Media {
 		Track:       track,
 		Disc:        disc,
 		DiscTotal:   discTotal,
+		TrackTotal:  trackTotal,
+		Genre:       strings.TrimSpace(m.Genre()),
+		Composer:    strings.TrimSpace(m.Composer()),
 		Duration:    m.Duration().Seconds(),
 	}
+}
+
+// SplitGenres splits a raw GENRE tag into its individual genres. Multi-value
+// genre tags are stored inconsistently across taggers (";", "/", "," or NUL
+// separators; ID3v1 numeric "(17)" references are already resolved by the tag
+// reader), so all of them separate. Values are trimmed, empty ones dropped and
+// duplicates (case-insensitive) collapsed, keeping first-seen spelling.
+func SplitGenres(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ';' || r == '/' || r == ',' || r == 0
+	})
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		k := strings.ToLower(p)
+		if p == "" || seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, p)
+	}
+	return out
 }

@@ -8,6 +8,44 @@ to follow semantic versioning.
 
 ### Added
 
+- **Media collections are first-class (`client/media.go`).** A shared
+  vocabulary for media collections (albums, playlists, picture sets, and —
+  vocabulary only for now — movies and TV series/seasons/episodes) and the
+  *collection contract*: every member carries `(member, member-of, C)` (so a
+  collection lists in one reverse query whatever its folder depth — the
+  triplestore indexes `member-of` in reverse by default; **restart the
+  triplestore** for existing data), and `C` carries a stable `added-at`
+  (first import; unlike `tag-date` never rewritten) and `member-count`.
+  Audio albums also get an album summary (`album-artist`, top `genre`s,
+  `track-count`, `disc-count`, total `duration`; `album`/`artist`/`year`
+  when the root lacks them, as multi-disc roots do) and disc subfolders are
+  labeled `(uid, tie-type, disc)` + `disc <n>`. `ImportDir` and
+  `ImportAlbums` index the collection they create (`IndexCollection`);
+  `ImportFile` stamps `added-at`. Media value types are declared
+  (`EnsureMediaSchema`).
+- **More per-track metadata at import:** `genre` (multi-valued, split by
+  `SplitGenres`), `composer`, `disc`, `disc-total`, `track-total` and a
+  `meta-version` marker. `metadata.Media` gains `Genre`, `Composer`,
+  `TrackTotal`; `ExtractMediaMetadataFrom(io.ReadSeeker)` reads a stream.
+- **Playlists (`client/playlist.go`):** `tie-type playlist` subjects with an
+  ordered `playlist-track` list and `member-of` edges — no fake parent
+  edges. `CreatePlaylist`, `ReadPlaylist`, `ListPlaylists`,
+  `SetPlaylistTracks`, `RenamePlaylist`, `DeletePlaylist`, and
+  `MigrateLegacyPlaylists` for tie-audio's old audio-dir playlists.
+- **Play history (`client/history.go`):** play events as subjects
+  (`play-of`, `play-in`, `played-at`, `listened`, `outcome`, …) with ids
+  derived from (source, seq), so re-delivery is idempotent; `RecordPlays`
+  keeps `play-count`/`skip-count`/`first-played`/`last-played`/
+  `last-skipped` denormalized on items and collections, `RecentPlays`
+  lists newest first (server-side sort), `RecomputeStats` rebuilds the
+  counters, `ClassifyPlay` is the complete/skip rule (> 30 s long and half
+  or 4 min heard = complete; < 30 s or < 25 % = skip).
+- **CLI:** `tie media index|backfill [--rescan]|restat|schema`,
+  `tie history [--since 30d] [--skips]`,
+  `tie playlist list|show|create|delete|migrate`. `backfill` brings data
+  imported before the collection contract up to it; `--rescan` re-reads
+  audio tags (ranged head fetches) for fields older imports never wrote.
+
 - **Disc-aware album placement (`cd1`/`cd2` subdirectories).**
   `PlanAlbumImport` now routes each album member to a disc-aware destination
   below the album root: a **multi-disc** album (more than one disc number

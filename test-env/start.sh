@@ -53,7 +53,7 @@ if [[ ! -f "$TIE_TRIPLESTORE_CONFIG" ]]; then
 
 		# Default relations indexed in reverse for every collection. Omit to use
 		# the built-in default (tag, path, parent, tie-type, version-of).
-		# ReverseRelations = ["tag", "path", "parent", "tie-type", "version-of"]
+		# ReverseRelations = ["tag", "path", "parent", "tie-type", "version-of", "member-of"]
 
 		# Per-collection override of ReverseRelations (needs a triplestore restart):
 		# [[Collections]]
