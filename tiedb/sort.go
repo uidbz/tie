@@ -63,15 +63,6 @@ func (ic *Collection) firstNumberOf(key, relation string) (float64, bool) {
 // loadTriples walks an association subtree and emits each Triple. It is a pure
 // in-memory traversal: memory-only mode reads resident Triples, disk mode
 // resolves positions through the cache/disk. No collection-wide serialization.
-func (ic *Collection) loadTriples(tree *AssociationSet, tripleChan chan Triple) {
-	tree.ForEach(func(ua UniqueAssociation, pos int64) {
-		if t, ok := ic.resolveEntry(ua, pos); ok {
-			tripleChan <- t
-		}
-	})
-	close(tripleChan)
-}
-
 func (ic *Collection) makeStringTriple(t Triple) StringTriple {
 	st := StringTriple{}
 	st.Key = ic.getValueString(t.Level, t.Key)
@@ -108,18 +99,24 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 	if o.Limit == 0 {
 		o.Limit = 1000
 	}
-	c := make(chan Triple, 10000)
-	go ic.loadTriples(tree, c)
-
-	sorted = make([]StringTriple, 0, 1000)
+	// Resolve straight into a slice sized by the set's cardinality. The old
+	// shape — a 10 000-slot channel, a goroutine, and a 1000-triple
+	// preallocation — cost 533 KB per call regardless of how little it
+	// matched: the single largest allocation in the store (a 1000-row Expand
+	// churned ~266 MB, a dump of 20k subjects ~10 GB).
+	sorted = make([]StringTriple, 0, tree.Size())
 	filterActive := value1Filter != ""
-	for x := range c {
-		t := ic.makeStringTriple(x)
-		if filterActive && t.Value1 != value1Filter {
-			continue
+	tree.ForEach(func(ua UniqueAssociation, pos int64) {
+		t, ok := ic.resolveEntry(ua, pos)
+		if !ok {
+			return
 		}
-		sorted = append(sorted, t)
-	}
+		st := ic.makeStringTriple(t)
+		if filterActive && st.Value1 != value1Filter {
+			return
+		}
+		sorted = append(sorted, st)
+	})
 
 	// When ordering by a relation's value, resolve each key's value once and
 	// cache it — the comparator runs O(n log n) times but the forward lookup
