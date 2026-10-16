@@ -81,21 +81,26 @@ type User struct {
 	Role     Role
 }
 
-// ConfigUser is one account as it appears in a server config file, where the
+// UserConfig is one account as it appears in a server config file, where the
 // role is still the raw string the operator wrote.
-type ConfigUser struct {
+type UserConfig struct {
 	Username string
 	Password string
 	Role     string
 }
 
-// BuildStore validates the configured accounts and builds the Store. Both
-// checks used to be missing (§5.1 L18): a duplicate username was folded into a
-// map so the last entry silently won, and an account with an empty password
-// could be authenticated by anyone who knew the name. A server should refuse to
-// start on a broken access list rather than run with one, so both are errors
-// here.
-func BuildStore(users []ConfigUser, anon Role) (*Store, error) {
+// BuildStore is how a server turns its [[Users]] config into a Store: it parses
+// the anonymous-access string (empty takes def, the server's own default), then
+// validates every account. Both checks used to be missing (§5.1 L18) — a
+// duplicate username was folded into a map so the last entry silently won, and
+// an account with an empty password could be authenticated by anyone who knew
+// the name — and each server had its own loop, so a fix had to be made three
+// times. A server refuses to start on a broken access list.
+func BuildStore(users []UserConfig, anon string, def Role) (*Store, error) {
+	anonRole, err := ParseAnonAccess(anon, def)
+	if err != nil {
+		return nil, err
+	}
 	byName := make(map[string]User, len(users))
 	for _, u := range users {
 		if u.Username == "" {
@@ -113,7 +118,7 @@ func BuildStore(users []ConfigUser, anon Role) (*Store, error) {
 		}
 		byName[u.Username] = User{Password: u.Password, Role: role}
 	}
-	return NewStore(byName, anon), nil
+	return NewStore(byName, anonRole), nil
 }
 
 // Store resolves a request's role from HTTP Basic Auth credentials.

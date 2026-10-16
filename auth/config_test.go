@@ -9,17 +9,17 @@ import (
 // TestBuildStoreRejectsEmptyPassword is the §5.1 L18 guard: an account with no
 // password authenticates anyone who names it.
 func TestBuildStoreRejectsEmptyPassword(t *testing.T) {
-	_, err := BuildStore([]ConfigUser{{Username: "ops", Password: "", Role: "write"}}, RoleNone)
+	_, err := BuildStore([]UserConfig{{Username: "ops", Password: "", Role: "write"}}, "", RoleNone)
 	if err == nil {
 		t.Fatal("an empty password was accepted")
 	}
 
 	// A whitespace-only password is the same hole.
-	if _, err := BuildStore([]ConfigUser{{Username: "ops", Password: "  ", Role: "read"}}, RoleNone); err == nil {
+	if _, err := BuildStore([]UserConfig{{Username: "ops", Password: "  ", Role: "read"}}, "", RoleNone); err == nil {
 		t.Error("a whitespace-only password was accepted")
 	}
 	// An empty username is not an account.
-	if _, err := BuildStore([]ConfigUser{{Username: "", Password: "secret", Role: "read"}}, RoleNone); err == nil {
+	if _, err := BuildStore([]UserConfig{{Username: "", Password: "secret", Role: "read"}}, "", RoleNone); err == nil {
 		t.Error("an empty username was accepted")
 	}
 }
@@ -27,30 +27,53 @@ func TestBuildStoreRejectsEmptyPassword(t *testing.T) {
 // TestBuildStoreRejectsDuplicateUsername: the config used to be folded into a
 // map, so the last entry silently won.
 func TestBuildStoreRejectsDuplicateUsername(t *testing.T) {
-	_, err := BuildStore([]ConfigUser{
+	_, err := BuildStore([]UserConfig{
 		{Username: "ops", Password: "one", Role: "read"},
 		{Username: "ops", Password: "two", Role: "write"},
-	}, RoleNone)
+	}, "", RoleNone)
 	if err == nil {
 		t.Fatal("a duplicate username was accepted silently")
 	}
 
 	// Case matters: two accounts differing only in case are still distinct, and
 	// that is worth a warning-free pass.
-	if _, err := BuildStore([]ConfigUser{
+	if _, err := BuildStore([]UserConfig{
 		{Username: "ops", Password: "one", Role: "read"},
 		{Username: "Ops", Password: "two", Role: "write"},
-	}, RoleNone); err != nil {
+	}, "", RoleNone); err != nil {
 		t.Errorf("distinct usernames rejected: %v", err)
+	}
+}
+
+// TestBuildStoreParsesAnonymousAccess keeps the AnonymousAccess string in the
+// same helper, so every server reads it the same way.
+func TestBuildStoreParsesAnonymousAccess(t *testing.T) {
+	s, err := BuildStore(nil, "read", RoleNone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Resolve(basicRequest("", "")); got != RoleRead {
+		t.Errorf("anonymous role = %v, want read", got)
+	}
+	// Empty takes the server's default.
+	s, err = BuildStore(nil, "", RoleWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Resolve(basicRequest("", "")); got != RoleWrite {
+		t.Errorf("default anonymous role = %v, want write", got)
+	}
+	if _, err := BuildStore(nil, "bogus", RoleNone); err == nil {
+		t.Error("an invalid AnonymousAccess was accepted")
 	}
 }
 
 // TestBuildStoreRejectsBadRole keeps role parsing in one place.
 func TestBuildStoreRejectsBadRole(t *testing.T) {
-	if _, err := BuildStore([]ConfigUser{{Username: "ops", Password: "x", Role: "admin"}}, RoleNone); err == nil {
+	if _, err := BuildStore([]UserConfig{{Username: "ops", Password: "x", Role: "admin"}}, "", RoleNone); err == nil {
 		t.Error("an invalid role string was accepted")
 	}
-	s, err := BuildStore([]ConfigUser{{Username: "ops", Password: "x", Role: "read"}}, RoleWrite)
+	s, err := BuildStore([]UserConfig{{Username: "ops", Password: "x", Role: "read"}}, "", RoleWrite)
 	if err != nil {
 		t.Fatal(err)
 	}

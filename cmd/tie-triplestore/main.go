@@ -1,17 +1,14 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
-	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
-	"github.com/uidbz/tie/tielog"
-	"github.com/uidbz/tie/version"
+	"github.com/uidbz/tie/internal/daemon"
 	"github.com/uidbz/tie/webservice"
 )
 
@@ -27,10 +24,10 @@ type User struct {
 
 // configUsers maps the config file's [[Users]] entries onto the shared
 // validating type, where duplicate names and empty passwords are refused.
-func configUsers(us []User) []auth.ConfigUser {
-	out := make([]auth.ConfigUser, 0, len(us))
+func configUsers(us []User) []auth.UserConfig {
+	out := make([]auth.UserConfig, 0, len(us))
 	for _, u := range us {
-		out = append(out, auth.ConfigUser{Username: u.Username, Password: u.Password, Role: u.Role})
+		out = append(out, auth.UserConfig{Username: u.Username, Password: u.Password, Role: u.Role})
 	}
 	return out
 }
@@ -105,43 +102,21 @@ func defaultConfig() TripleStoreConfig {
 }
 
 func main() {
-	var configPath = flag.String("config", "tie-triplestore.toml", "Path to TOML config file.")
-	var showVersion = flag.Bool("version", false, "Print version and exit.")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `tie triplestore
+	flags := daemon.ParseFlags("tie-triplestore", "tie-triplestore.toml", `tie triplestore
 -----------------------------
 Configuration (server settings and user accounts) is read from a TOML file.
 `)
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("tie-triplestore", version.String())
-		return
-	}
 
 	cfg := defaultConfig()
-	if err := conf.ReadConfig(*configPath, &cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
+	if err := daemon.LoadConfig(flags.ConfigPath, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 
-	cleanup, err := tielog.Setup(tielog.Config{File: cfg.LogFile, Level: cfg.LogLevel})
-	if err != nil {
-		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
-	}
+	cleanup := daemon.SetupLogging("tie-triplestore", cfg.LogFile, cfg.LogLevel)
 	defer cleanup()
-	tielog.LogVersion("tie-triplestore")
 
-	anon, err := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleNone)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error in config:", err)
-		os.Exit(1)
-	}
-	authStore, err := auth.BuildStore(configUsers(cfg.Users), anon)
+	authStore, err := auth.BuildStore(configUsers(cfg.Users), cfg.AnonymousAccess, auth.RoleNone)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error in config:", err)
 		os.Exit(1)

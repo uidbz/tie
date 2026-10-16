@@ -6,22 +6,17 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/go-filesystems/smb"
-	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/internal/daemon"
 	"github.com/uidbz/tie/io/smbfs"
 	"github.com/uidbz/tie/io/tiefs"
-	"github.com/uidbz/tie/tielog"
-	"github.com/uidbz/tie/version"
 )
 
 // User is a single account entry in the tie-smb config. Passwords are stored
@@ -84,37 +79,20 @@ func defaultConfig() SMBConfig {
 }
 
 func main() {
-	var configPath = flag.String("config", "tie-smb.toml", "Path to TOML config file.")
-	var showVersion = flag.Bool("version", false, "Print version and exit.")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `SMB2/3 server for the tie tag-derived filesystem
+	flags := daemon.ParseFlags("tie-smb", "tie-smb.toml", `SMB2/3 server for the tie tag-derived filesystem
 --------------------------------------
 Configuration (listen address, tie config, accounts) is read from a TOML
 file. The share mirrors the "tie mount --db" layout: query, files, tags.
 `)
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("tie-smb", version.String())
-		return
-	}
 
 	cfg := defaultConfig()
-	if err := conf.ReadConfig(*configPath, &cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
+	if err := daemon.LoadConfig(flags.ConfigPath, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 
-	cleanup, err := tielog.Setup(tielog.Config{File: cfg.LogFile, Level: cfg.LogLevel})
-	if err != nil {
-		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
-	}
+	cleanup := daemon.SetupLogging("tie-smb", cfg.LogFile, cfg.LogLevel)
 	defer cleanup()
-	tielog.LogVersion("tie-smb")
 
 	if len(cfg.Users) == 0 {
 		slog.Error("please define at least one [[Users]] entry in the config file")
@@ -187,10 +165,7 @@ file. The share mirrors the "tie mount --db" layout: query, files, tags.
 		"triplestore", tieCfg.TripleStoreURL, "filehost", host.URL,
 		"writeUsers", len(writeUsers))
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
-	slog.Info("shutting down")
+	slog.Info("shutting down", "signal", daemon.WaitForSignal())
 	// srv.Close drops connections; the smb server closes every open handle
 	// on connection teardown, and each handle's Close commits its staged
 	// write. Then release the tree (blob cache + staging dir).
