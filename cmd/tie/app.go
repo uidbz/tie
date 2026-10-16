@@ -72,6 +72,16 @@ func cliLogger(cmd *cli.Command) *slog.Logger {
 	}))
 }
 
+// outFor builds the renderer one command prints through, honouring the global
+// --format flag (§6.4). A bad --format is a usage error, so it exits 2.
+func (a *app) outFor(ctx *cli.Command, header ...string) (*out, error) {
+	format, err := outputFormat(ctx)
+	if err != nil {
+		return nil, exitError{code: 2, msg: err.Error()}
+	}
+	return newOut(format, os.Stdout, header...), nil
+}
+
 // exitError carries the exit code a failure should produce, so a command can
 // distinguish "wrong environment" (2) from "the operation failed" (1).
 type exitError struct {

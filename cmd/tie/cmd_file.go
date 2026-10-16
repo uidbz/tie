@@ -77,18 +77,26 @@ func cmdUpload(a *app) *cli.Command {
 			if result.ErrorMsg != "" && len(result.Items) == 0 {
 				return errors.New(result.ErrorMsg)
 			}
-			if ctx.Bool("json") {
+			format, err := outputFormat(ctx)
+			if err != nil {
+				return err
+			}
+			if ctx.Bool("json") || format == "json" {
 				out, err := json.Marshal(result)
 				if err != nil {
 					return err
 				}
 				fmt.Println(string(out))
-			} else {
-				for _, item := range result.Items {
-					fmt.Println(item.Hash + "\t" + item.Filename)
-				}
+				return nil
 			}
-			return nil
+			o, err := a.outFor(ctx, "hash", "filename")
+			if err != nil {
+				return err
+			}
+			for _, item := range result.Items {
+				o.row(item.Hash, item.Filename)
+			}
+			return o.flush()
 		},
 	}
 }

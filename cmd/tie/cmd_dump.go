@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/uidbz/tie/client"
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tiedb"
 	"github.com/urfave/cli/v3"
@@ -29,26 +30,60 @@ func cmdDump(a *app) *cli.Command {
 			},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
+			// A dump is a stream: it never holds the collection, so the table
+			// format (which has to see every row to size its columns) is not
+			// available here — TSV is the point of the command.
+			format, err := outputFormat(ctx)
+			if err != nil {
+				return err
+			}
+			asJSON := format == "json"
+			if format == "table" {
+				format = "tsv"
+			}
+
 			bw := bufio.NewWriter(os.Stdout)
 			defer bw.Flush()
-			w := csv.NewWriter(bw)
-			w.Comma = '\t'
-			defer w.Flush()
-
-			if path := ctx.String("file"); path != "" {
-				if err := dumpLocalFile(path, w); err != nil {
-					return errors.New("Dump Error: " + err.Error())
+			first := true
+			write := func(t tiedb.StringTriple) error {
+				if !asJSON {
+					_, err := fmt.Fprintln(bw, client.TSVRecord(t.Key, t.Value1, t.Value2))
+					return err
 				}
-			} else {
-				err := a.tie.DumpStream(func(t tiedb.StringTriple) error {
-					return w.Write([]string{t.Key, t.Value1, t.Value2})
-				})
+				if !first {
+					if _, err := fmt.Fprint(bw, ","); err != nil {
+						return err
+					}
+				}
+				first = false
+				rec, err := json.Marshal(map[string]string{"key": t.Key, "value1": t.Value1, "value2": t.Value2})
 				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintf(bw, "\n%s", rec)
+				return err
+			}
+			if asJSON {
+				if _, err := fmt.Fprint(bw, "["); err != nil {
 					return errors.New("Dump Error: " + err.Error())
 				}
 			}
-			w.Flush()
-			return w.Error()
+
+			if path := ctx.String("file"); path != "" {
+				if err := dumpLocalFile(path, write); err != nil {
+					return errors.New("Dump Error: " + err.Error())
+				}
+			} else {
+				if err := a.tie.DumpStream(write); err != nil {
+					return errors.New("Dump Error: " + err.Error())
+				}
+			}
+			if asJSON {
+				if _, err := fmt.Fprint(bw, "\n]\n"); err != nil {
+					return errors.New("Dump Error: " + err.Error())
+				}
+			}
+			return bw.Flush()
 		},
 	}
 }
@@ -57,7 +92,7 @@ func cmdDump(a *app) *cli.Command {
 // bypassing the server, and streams each as a TSV record to w (no in-memory
 // buffering of the whole collection). It reflects flushed on-disk state only,
 // so it is meant for offline export when no server holds the file open.
-func dumpLocalFile(path string, w *csv.Writer) error {
+func dumpLocalFile(path string, write func(tiedb.StringTriple) error) error {
 	if !strings.HasSuffix(path, ".tie") {
 		return fmt.Errorf("not a .tie file: %q", path)
 	}
@@ -74,7 +109,7 @@ func dumpLocalFile(path string, w *csv.Writer) error {
 		if writeErr != nil {
 			return
 		}
-		writeErr = w.Write([]string{t.Key, t.Value1, t.Value2})
+		writeErr = write(t)
 	})
 	return writeErr
 }
@@ -170,16 +205,21 @@ func cmdRestore(a *app) *cli.Command {
 // it checked. It is the pre-flight pass that lets --drop refuse a malformed
 // input instead of destroying the collection first.
 func validateTSV(src io.Reader) (int, error) {
-	r := csv.NewReader(bufio.NewReader(src))
-	r.Comma = '\t'
-	r.FieldsPerRecord = 3
+	r := bufio.NewReader(src)
 	lines := 0
 	for {
-		lines++
-		if _, err := r.Read(); err == io.EOF {
-			return lines - 1, nil
-		} else if err != nil {
-			return lines, fmt.Errorf("malformed line %d: %w", lines, err)
+		text, err := r.ReadString('\n')
+		if text != "" {
+			lines++
+			if _, perr := client.SplitTSVRecord(strings.TrimRight(text, "\r\n"), 3); perr != nil {
+				return lines, fmt.Errorf("malformed line %d: %w", lines, perr)
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				return lines, nil
+			}
+			return lines, err
 		}
 	}
 }

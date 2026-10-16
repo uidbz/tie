@@ -8,6 +8,15 @@ to follow semantic versioning.
 
 ### Added
 
+- **Global `--format tsv|json|table` on `tie`.** One format for every listing
+  command — `get`, `dump`, `upload`, `stat`, `tag list|files|untagged|show`,
+  `versions list`, `media index|backfill|restat`, `import` — instead of `--json`
+  on two of them and nothing elsewhere. The default is the aligned table on a
+  terminal and TSV on anything else, so a pipe or a script keeps getting
+  machine-readable rows. `--format json` keys each row by its column names
+  (`{"key": …, "value1": …, "value2": …}`); the table names its columns. A bad
+  `--format` is a usage error (exit 2). `upload --json` and `stat --json` still
+  work and mean `--format json`.
 - **`tie import` prints data on stdout: `hash<TAB>virtual-path` per imported
   item**, the same shape `tie upload` prints, so `tie import … | cut -f1` gives
   the hashes. Items are reported once the batch carrying them has been
@@ -178,6 +187,21 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie dump` writes escaped TSV, not quoted TSV.** A field containing a tab,
+  newline, carriage return or backslash is written with the PostgreSQL COPY
+  escapes (`\t`, `\n`, `\r`, `\\`) instead of being wrapped in quotes with
+  doubled quotes. One record stays one line, and `cut`, `awk` and `sort` no
+  longer see `"…"` artefacts in front of the column they asked for. `tie
+  restore` reads the new format and still accepts dumps written in the old
+  quoted form — except a quoted field holding a real newline, which cannot be
+  recovered line by line; re-export it with the current `tie dump`.
+- **`tie get` output is sorted: by key, then relation.** The relations of a row
+  live in a map, so the same query printed its rows in a different order on
+  every run, which made `diff`, `comm` and golden tests useless. Values keep the
+  order the store returned them in.
+- **`tie import`'s stdout rows carry four columns** — `hash`, virtual path,
+  tie-type, size — where they used to carry two. `cut -f1` still gives the
+  hashes.
 - **`tie import --albums` no longer reads the confirmation from stdin.** It asks
   on stderr and reads the answer from the controlling terminal (`/dev/tty`), so
   a pipe or `/dev/null` on stdin — cron, `xargs`, a script piping something else

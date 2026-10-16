@@ -113,18 +113,17 @@ func TestVersionFailsWhenAServerIsUnreachable(t *testing.T) {
 // TestSummaryRowsAreTSV pins the shape the media commands print: the old
 // `members=… added=…` form mixed labels into the data.
 func TestSummaryRowsAreTSV(t *testing.T) {
-	out, err := captureStdout(t, func() error {
-		indexResultRow("tie:/music/album", client.IndexResult{
-			Members: 12, AddedMembers: 3, DroppedStale: 1, Discs: 2, Ops: 40,
-		})
-		countRow("rescanned-tracks", 7)
-		return nil
+	var buf bytes.Buffer
+	o := newOut("tsv", &buf, "subject", "members", "added", "stale", "discs", "ops")
+	indexResultRow(o, "tie:/music/album", client.IndexResult{
+		Members: 12, AddedMembers: 3, DroppedStale: 1, Discs: 2, Ops: 40,
 	})
-	if err != nil {
+	countRow(o, "rescanned-tracks", 7)
+	if err := o.flush(); err != nil {
 		t.Fatal(err)
 	}
 	want := "tie:/music/album\t12\t3\t1\t2\t40\nrescanned-tracks\t7\n"
-	if out != want {
-		t.Errorf("summary rows =\n%q\nwant\n%q", out, want)
+	if buf.String() != want {
+		t.Errorf("summary rows =\n%q\nwant\n%q", buf.String(), want)
 	}
 }

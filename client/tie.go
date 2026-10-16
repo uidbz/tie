@@ -3,7 +3,6 @@ package client
 import (
 	"bufio"
 	"crypto/tls"
-	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/uidbz/tie/api"
@@ -789,9 +789,7 @@ func (tc *TieClient) Restore(triples [][3]string) error {
 // its line number. progress, when non-nil, is called after each chunk with the
 // running total.
 func (tc *TieClient) RestoreStream(src io.Reader, progress func(done int)) (int, error) {
-	r := csv.NewReader(bufio.NewReader(src))
-	r.Comma = '\t'
-	r.FieldsPerRecord = 3
+	r := bufio.NewReader(src)
 
 	done := 0
 	line := 0
@@ -814,20 +812,26 @@ func (tc *TieClient) RestoreStream(src io.Reader, progress func(done int)) (int,
 	}
 
 	for {
-		line++
-		rec, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return done, fmt.Errorf("malformed line %d: %w", line, err)
-		}
-		b.Add(rec[0], rec[1], rec[2])
-		done++
-		if len(b.Ops) >= restoreBatchOps {
-			if err := flush(); err != nil {
-				return done, err
+		text, readErr := r.ReadString('\n')
+		if text != "" {
+			line++
+			rec, err := SplitTSVRecord(strings.TrimRight(text, "\r\n"), 3)
+			if err != nil {
+				return done, fmt.Errorf("malformed line %d: %w", line, err)
 			}
+			b.Add(rec[0], rec[1], rec[2])
+			done++
+			if len(b.Ops) >= restoreBatchOps {
+				if err := flush(); err != nil {
+					return done, err
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				return done, readErr
+			}
+			break
 		}
 	}
 	if err := flush(); err != nil {

@@ -53,6 +53,7 @@ func main() {
 			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection)"},
 			&cli.BoolFlag{Name: "quiet", Aliases: []string{"q"}, Usage: "Report errors only; silence library warnings and progress"},
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "Also report what the library does per file"},
+			&cli.StringFlag{Name: "format", Usage: "Output format for listings: tsv, json or table (default: table on a terminal, tsv otherwise)"},
 		},
 		Commands: []*cli.Command{
 			cmdAdd(a),

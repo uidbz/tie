@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/uidbz/tie/client"
@@ -31,10 +32,14 @@ func cmdTag(a *app) *cli.Command {
 					if err != nil {
 						return errors.New("Tag list Error: " + err.Error())
 					}
-					for _, t := range tags {
-						fmt.Println(t)
+					o, err := a.outFor(ctx, "tag")
+					if err != nil {
+						return err
 					}
-					return nil
+					for _, t := range tags {
+						o.row(t)
+					}
+					return o.flush()
 				},
 			},
 			{
@@ -91,10 +96,14 @@ func cmdTag(a *app) *cli.Command {
 					if err != nil {
 						return errors.New("Tag files Error: " + err.Error())
 					}
-					for _, f := range files {
-						fmt.Println(f.Hash + "\t" + f.Filename)
+					o, err := a.outFor(ctx, "hash", "filename")
+					if err != nil {
+						return err
 					}
-					return nil
+					for _, f := range files {
+						o.row(f.Hash, f.Filename)
+					}
+					return o.flush()
 				},
 			},
 			{
@@ -110,10 +119,14 @@ func cmdTag(a *app) *cli.Command {
 					if err != nil {
 						return errors.New("Tag untagged Error: " + err.Error())
 					}
-					for _, f := range files {
-						fmt.Println(f.Hash + "\t" + f.Filename)
+					o, err := a.outFor(ctx, "hash", "filename")
+					if err != nil {
+						return err
 					}
-					return nil
+					for _, f := range files {
+						o.row(f.Hash, f.Filename)
+					}
+					return o.flush()
 				},
 			},
 			{
@@ -127,10 +140,14 @@ func cmdTag(a *app) *cli.Command {
 					if err != nil {
 						return errors.New("Tag show Error: " + err.Error())
 					}
-					for _, t := range tags {
-						fmt.Println(t)
+					o, err := a.outFor(ctx, "tag")
+					if err != nil {
+						return err
 					}
-					return nil
+					for _, t := range tags {
+						o.row(t)
+					}
+					return o.flush()
 				},
 			},
 			{
@@ -172,10 +189,14 @@ func cmdVersions(a *app) *cli.Command {
 					if err != nil {
 						return errors.New("Versions list Error: " + err.Error())
 					}
-					for _, v := range versions {
-						fmt.Printf("%s\t%s\t%d\t%s\n", v.Hash, v.Date.Format(time.RFC3339), v.Size, v.Filename)
+					o, err := a.outFor(ctx, "hash", "date", "size", "filename")
+					if err != nil {
+						return err
 					}
-					return nil
+					for _, v := range versions {
+						o.row(v.Hash, v.Date.Format(time.RFC3339), strconv.Itoa(v.Size), v.Filename)
+					}
+					return o.flush()
 				},
 			},
 			{

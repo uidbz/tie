@@ -5,12 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/uidbz/tie/client"
 	"github.com/urfave/cli/v3"
-	"golang.org/x/term"
 )
 
 func cmdAdd(a *app) *cli.Command {
@@ -86,7 +85,13 @@ func cmdGet(a *app) *cli.Command {
 				}
 				return errors.New("Get Error: " + err.Error())
 			}
-			printRows(rows)
+			o, err := a.outFor(ctx, "key", "value1", "value2")
+			if err != nil {
+				return err
+			}
+			if err := printRows(o, rows); err != nil {
+				return errors.New("Get Error: " + err.Error())
+			}
 
 			return nil
 		},
@@ -168,28 +173,35 @@ func cmdDel(a *app) *cli.Command {
 // renders aligned, headered columns for readability; when stdout is piped or
 // redirected it emits plain tab-separated lines so downstream tools like
 // cut/awk/sort keep working unchanged.
-func printRows(rows []client.Row) {
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		for _, r := range rows {
-			for relation, values := range r.Attributes {
-				for _, v := range values {
-					fmt.Println(r.Key + "\t" + relation + "\t" + v)
-				}
-			}
-		}
-		return
-	}
-
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "KEY\tVALUE1\tVALUE2")
+// printRows writes the rows of a get/query through the shared renderer, in a
+// fixed order: by key, then relation. The relations of a row live in a map, so
+// the old code printed the same query in a different order on every run, which
+// broke diff, comm and golden tests (§6.4). Values keep the order the store
+// returned them in.
+func printRows(o *out, rows []client.Row) error {
+	records := make([][]string, 0, len(rows))
 	for _, r := range rows {
-		for relation, values := range r.Attributes {
-			for _, v := range values {
-				fmt.Fprintln(tw, r.Key+"\t"+relation+"\t"+v)
+		relations := make([]string, 0, len(r.Attributes))
+		for relation := range r.Attributes {
+			relations = append(relations, relation)
+		}
+		sort.Strings(relations)
+		for _, relation := range relations {
+			for _, v := range r.Attributes[relation] {
+				records = append(records, []string{r.Key, relation, v})
 			}
 		}
 	}
-	tw.Flush()
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i][0] != records[j][0] {
+			return records[i][0] < records[j][0]
+		}
+		return records[i][1] < records[j][1]
+	})
+	for _, rec := range records {
+		o.row(rec...)
+	}
+	return o.flush()
 }
 
 // resolveFileHost picks the filehost for a file command. A raw --server address

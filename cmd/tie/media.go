@@ -54,15 +54,16 @@ func parseSince(s string) (time.Time, error) {
 // indexResultRow prints one index pass as data: subject and the counts,
 // tab-separated in a fixed order. The old `members=… added=…` form mixed
 // labels into what should be a parseable row (§6.2).
-func indexResultRow(subject string, r client.IndexResult) {
-	fmt.Printf("%s\t%d\t%d\t%d\t%d\t%d\n",
-		subject, r.Members, r.AddedMembers, r.DroppedStale, r.Discs, r.Ops)
+func indexResultRow(o *out, subject string, r client.IndexResult) {
+	o.row(subject,
+		strconv.Itoa(r.Members), strconv.Itoa(r.AddedMembers), strconv.Itoa(r.DroppedStale),
+		strconv.Itoa(r.Discs), strconv.Itoa(r.Ops))
 }
 
 // countRow prints a command's result count as a data row — label and value,
 // the shape `tie stat` already prints — instead of a sentence (§6.2).
-func countRow(label string, n int) {
-	fmt.Println(label + "\t" + strconv.Itoa(n))
+func countRow(o *out, label string, n int) {
+	o.row(label, strconv.Itoa(n))
 }
 
 func cmdMedia(a *app) *cli.Command {
@@ -79,6 +80,10 @@ func cmdMedia(a *app) *cli.Command {
 					if c.Args().Len() == 0 {
 						return errors.New("need at least one collection path or uid")
 					}
+					o, err := a.outFor(c, "subject", "members", "added", "stale", "discs", "ops")
+					if err != nil {
+						return err
+					}
 					for _, arg := range c.Args().Slice() {
 						uid, err := resolveSubject(a, arg)
 						if err != nil {
@@ -88,9 +93,9 @@ func cmdMedia(a *app) *cli.Command {
 						if err != nil {
 							return err
 						}
-						indexResultRow(uid, r)
+						indexResultRow(o, uid, r)
 					}
-					return nil
+					return o.flush()
 				},
 			},
 			{
@@ -108,6 +113,10 @@ func cmdMedia(a *app) *cli.Command {
 				},
 				Action: func(_ context.Context, c *cli.Command) error {
 					dry := c.Bool("dry-run")
+					o, err := a.outFor(c, "subject", "members", "added", "stale", "discs", "ops")
+					if err != nil {
+						return err
+					}
 					if c.Bool("rescan") {
 						n, err := a.tie.RescanAudio(client.RescanOptions{DryRun: dry, Progress: func(done, total int, hash string, err error) {
 							if err != nil {
@@ -117,7 +126,7 @@ func cmdMedia(a *app) *cli.Command {
 								fmt.Fprintf(os.Stderr, "rescanned %d/%d\n", done, total)
 							}
 						}})
-						countRow("rescanned-tracks", n)
+						countRow(o, "rescanned-tracks", n)
 						if err != nil {
 							fmt.Fprintln(os.Stderr, "rescan: first error:", err)
 						}
@@ -127,14 +136,14 @@ func cmdMedia(a *app) *cli.Command {
 						if err != nil {
 							return err
 						}
-						countRow("migrated-playlists", n)
+						countRow(o, "migrated-playlists", n)
 					}
 					if c.Bool("names") {
 						n, err := a.tie.RepairNames()
 						if err != nil {
 							return err
 						}
-						countRow("names-repaired", n)
+						countRow(o, "names-repaired", n)
 					}
 					var types []string
 					if t := c.StringSlice("type"); len(t) > 0 {
@@ -144,29 +153,33 @@ func cmdMedia(a *app) *cli.Command {
 						if err != nil {
 							fmt.Fprintln(os.Stderr, err)
 						} else if r.Ops > 0 {
-							indexResultRow(string(r.Collection), r)
+							indexResultRow(o, string(r.Collection), r)
 						}
 					}})
 					if err != nil {
 						return err
 					}
-					countRow("collections", res.Collections)
-					countRow("changed", res.Changed)
-					countRow("archives-stamped", res.Archives)
-					countRow("errors", len(res.Errors))
-					return nil
+					countRow(o, "collections", res.Collections)
+					countRow(o, "changed", res.Changed)
+					countRow(o, "archives-stamped", res.Archives)
+					countRow(o, "errors", len(res.Errors))
+					return o.flush()
 				},
 			},
 			{
 				Name:  "restat",
 				Usage: "Rebuild play-count / last-played statistics from the play events",
 				Action: func(_ context.Context, c *cli.Command) error {
+					o, err := a.outFor(c, "result", "count")
+					if err != nil {
+						return err
+					}
 					n, err := a.tie.RecomputeStats()
 					if err != nil {
 						return err
 					}
-					countRow("subjects-updated", n)
-					return nil
+					countRow(o, "subjects-updated", n)
+					return o.flush()
 				},
 			},
 			{
@@ -301,12 +314,16 @@ func cmdPlaylist(a *app) *cli.Command {
 				Name:  "migrate",
 				Usage: "Convert legacy (audio-dir) playlists to the playlist type",
 				Action: func(_ context.Context, c *cli.Command) error {
+					o, err := a.outFor(c, "result", "count")
+					if err != nil {
+						return err
+					}
 					n, err := a.tie.MigrateLegacyPlaylists()
 					if err != nil {
 						return err
 					}
-					countRow("migrated", n)
-					return nil
+					countRow(o, "migrated", n)
+					return o.flush()
 				},
 			},
 		},

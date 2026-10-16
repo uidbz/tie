@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/uidbz/conf"
@@ -17,7 +16,6 @@ import (
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/version"
 	"github.com/urfave/cli/v3"
-	"golang.org/x/term"
 )
 
 // cmdVersion prints the client build and, when a config is loaded, the build
@@ -142,7 +140,7 @@ func cmdStat(a *app) *cli.Command {
 		Usage: "Show info about a file or directory: stat [path-or-hash]",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "check", Usage: "HEAD the filehost to confirm the blob exists and report its on-disk size"},
-			&cli.BoolFlag{Name: "json", Usage: "Emit the raw StatInfo as JSON"},
+			&cli.BoolFlag{Name: "json", Usage: "Emit the raw StatInfo as JSON (same as --format json)"},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if ctx.Args().Len() < 1 {
@@ -168,20 +166,27 @@ func cmdStat(a *app) *cli.Command {
 				return errors.New("Stat Error: " + err.Error())
 			}
 
-			if ctx.Bool("json") {
+			format, err := outputFormat(ctx)
+			if err != nil {
+				return err
+			}
+			if ctx.Bool("json") || format == "json" {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
 				return enc.Encode(info)
 			}
-			printStat(info)
-			return nil
+			o, err := a.outFor(ctx, "field", "value")
+			if err != nil {
+				return err
+			}
+			return printStat(o, info)
 		},
 	}
 }
 
-// printStat renders a StatInfo as aligned LABEL/VALUE rows on a TTY, or plain
-// tab-separated lines when stdout is piped (mirrors printRows).
-func printStat(info client.StatInfo) {
+// printStat writes a StatInfo as field/value rows through the shared renderer,
+// so it follows the global --format like every other listing (§6.4).
+func printStat(o *out, info client.StatInfo) error {
 	type kv struct{ k, v string }
 	var rows []kv
 	add := func(k, v string) {
@@ -233,17 +238,10 @@ func printStat(info client.StatInfo) {
 		add("Versions", strconv.Itoa(len(info.Versions)))
 	}
 
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		for _, r := range rows {
-			fmt.Println(r.k + "\t" + r.v)
-		}
-		return
-	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	for _, r := range rows {
-		fmt.Fprintln(tw, r.k+"\t"+r.v)
+		o.row(r.k, r.v)
 	}
-	tw.Flush()
+	return o.flush()
 }
 
 // humanizeBytes formats a byte count with a binary (KiB/MiB/…) unit, e.g.

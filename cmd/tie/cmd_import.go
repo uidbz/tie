@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -47,8 +48,12 @@ func runImport(a *app, ctx *cli.Command, label string) error {
 	// stdout carries data: one line per imported item, hash and virtual path,
 	// the same shape `tie upload` prints, so `tie import ... | cut -f1` works
 	// (§6.1). Everything else the import says goes to stderr or the logger.
+	importOut, err := a.outFor(ctx, "hash", "path", "tie-type", "size")
+	if err != nil {
+		return err
+	}
 	a.tie.OnImport = func(it client.ImportedItem) {
-		fmt.Println(it.Hash + "\t" + it.Path)
+		importOut.row(it.Hash, it.Path, it.TieType.String(), strconv.Itoa(it.Size))
 	}
 	dirType := label
 	var forcedArchive client.TieType
@@ -94,6 +99,9 @@ func runImport(a *app, ctx *cli.Command, label string) error {
 				}
 			}
 		}
+	}
+	if err := importOut.flush(); err != nil {
+		return err
 	}
 	if len(failed) > 0 {
 		return fmt.Errorf("%d import(s) failed: %s", len(failed), strings.Join(failed, ", "))
