@@ -63,13 +63,13 @@ func cmdMount(a *app) *cli.Command {
 			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
 				<-sig
-				fmt.Println("\nUnmounting", mountpoint)
+				fmt.Fprintln(os.Stderr, "\nUnmounting", mountpoint)
 				if err := server.Unmount(); err != nil {
-					fmt.Println("Unmount error:", err.Error())
+					fmt.Fprintln(os.Stderr, "Unmount error:", err.Error())
 				}
 			}()
 
-			fmt.Println("Mounted", what, "at", mountpoint, "(Ctrl-C to unmount)")
+			fmt.Fprintf(os.Stderr, "Mounted %s at %s (Ctrl-C to unmount)\n", what, mountpoint)
 			server.Wait()
 
 			return nil

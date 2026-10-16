@@ -133,7 +133,7 @@ func runImportAlbums(a *app, ctx *cli.Command, dirType string, forcedArchive cli
 			fail(root, errors.New("not a directory (--albums scans library roots)"))
 			continue
 		}
-		fmt.Println("scanning", root, "…")
+		fmt.Fprintln(os.Stderr, "scanning", root, "…")
 		plan, err := client.PlanAlbumImport(a.tie.Config, root, client.AlbumPlanOptions{
 			DirType:  dirType,
 			Template: ctx.String("dest"),
@@ -150,7 +150,7 @@ func runImportAlbums(a *app, ctx *cli.Command, dirType string, forcedArchive cli
 			continue
 		}
 		if len(plan) == 0 {
-			fmt.Println(root + ": no albums found")
+			fmt.Fprintln(os.Stderr, root+": no albums found")
 			continue
 		}
 		printAlbumPlan(plan)
@@ -158,11 +158,11 @@ func runImportAlbums(a *app, ctx *cli.Command, dirType string, forcedArchive cli
 			continue
 		}
 		if !ctx.Bool("yes") && !confirmAlbumImport(len(plan)) {
-			fmt.Println("aborted")
+			fmt.Fprintln(os.Stderr, "aborted")
 			continue
 		}
 		for _, h := range hosts {
-			fmt.Println("Uploading to", h)
+			fmt.Fprintln(os.Stderr, "Uploading to", h)
 			results := a.tie.ImportAlbums(plan, client.AlbumImportOptions{
 				Host:          a.tie.Config.FileHosts[h],
 				Collection:    ctx.String("collection"),
@@ -170,7 +170,7 @@ func runImportAlbums(a *app, ctx *cli.Command, dirType string, forcedArchive cli
 				Tags:          ctx.StringSlice("tags"),
 				ForcedArchive: forcedArchive,
 				Progress: func(done, total int, g client.AlbumGroup) {
-					fmt.Printf("[%d/%d] %s (%d tracks)\n", done+1, total, g.Dest, g.Tracks)
+					fmt.Fprintf(os.Stderr, "[%d/%d] %s (%d tracks)\n", done+1, total, g.Dest, g.Tracks)
 				},
 			})
 			for _, r := range results {
@@ -196,7 +196,7 @@ func printAlbumPlan(plan []client.AlbumGroup) {
 			g.Dest, g.Artist, g.Album, g.Tracks, humanizeBytes(g.Size), strings.Join(g.Warnings, "; "))
 	}
 	w.Flush()
-	fmt.Println(len(plan), "albums")
+	fmt.Fprintf(os.Stderr, "%d albums\n", len(plan))
 }
 
 // confirmAlbumImport asks before starting a bulk import; anything but

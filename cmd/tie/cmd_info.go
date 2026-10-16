@@ -28,33 +28,50 @@ func cmdVersion(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "version",
 		Usage: "Show the client version and the versions of the configured triplestore and filehosts",
+		Description: "One row per component, tab-separated: component, version, URL.\n" +
+			"A configured server that cannot be reached prints `unavailable` and\n" +
+			"makes the command exit non-zero, so `tie version` works as a health\n" +
+			"check (§6.2). Why it failed goes to stderr.",
 		Action: func(_ context.Context, ctx *cli.Command) error {
-			fmt.Printf("tie (client)      %s\n", describeBuild(version.Get()))
-			if a.tie == nil {
-				return nil
-			}
-			if v, err := a.tie.ServerVersion(); err != nil {
-				fmt.Printf("tie-triplestore   unavailable (%s): %v\n", a.tie.Config.TripleStoreURL, err)
-			} else {
-				fmt.Printf("tie-triplestore   %s  %s\n", describeBuild(v), a.tie.Config.TripleStoreURL)
-			}
-			names := make([]string, 0, len(a.tie.Config.FileHosts))
-			for name := range a.tie.Config.FileHosts {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			seen := map[string]bool{}
-			for _, name := range names {
-				host := a.tie.Config.FileHosts[name]
-				if seen[host.URL] {
-					continue
+			type row struct{ component, ver, url string }
+			rows := []row{{"client", describeBuild(version.Get()), "-"}}
+			unreachable := 0
+			probe := func(component, url string, v version.Info, err error) {
+				if err != nil {
+					unreachable++
+					fmt.Fprintf(os.Stderr, "tie: %s unreachable at %s: %v\n", component, url, err)
+					rows = append(rows, row{component, "unavailable", url})
+					return
 				}
-				seen[host.URL] = true
-				if v, err := client.FileHostVersion(host); err != nil {
-					fmt.Printf("tie-filehost      unavailable (%s): %v\n", host.URL, err)
-				} else {
-					fmt.Printf("tie-filehost      %s  %s\n", describeBuild(v), host.URL)
+				rows = append(rows, row{component, describeBuild(v), url})
+			}
+
+			if a.tie != nil {
+				v, err := a.tie.ServerVersion()
+				probe("triplestore", a.tie.Config.TripleStoreURL, v, err)
+
+				names := make([]string, 0, len(a.tie.Config.FileHosts))
+				for name := range a.tie.Config.FileHosts {
+					names = append(names, name)
 				}
+				sort.Strings(names)
+				seen := map[string]bool{}
+				for _, name := range names {
+					host := a.tie.Config.FileHosts[name]
+					if seen[host.URL] {
+						continue
+					}
+					seen[host.URL] = true
+					v, err := client.FileHostVersion(host)
+					probe("filehost:"+name, host.URL, v, err)
+				}
+			}
+
+			for _, r := range rows {
+				fmt.Println(r.component + "\t" + r.ver + "\t" + r.url)
+			}
+			if unreachable > 0 {
+				return exitError{code: 1, msg: fmt.Sprintf("%d %s unreachable", unreachable, plural(unreachable, "server", "servers"))}
 			}
 			return nil
 		},
@@ -102,7 +119,7 @@ func cmdConf(a *app) *cli.Command {
 						return err
 					}
 					path, err := conf.PathUserConfigDir("tie", client.ConfigFileName(name))
-					fmt.Println("Config created here:", path)
+					fmt.Fprintln(os.Stderr, "Config created here:", path)
 
 					return err
 				},

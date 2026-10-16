@@ -51,6 +51,20 @@ func parseSince(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("--since %q: want a duration (72h), days (30d) or a date (2026-01-31)", s)
 }
 
+// indexResultRow prints one index pass as data: subject and the counts,
+// tab-separated in a fixed order. The old `members=… added=…` form mixed
+// labels into what should be a parseable row (§6.2).
+func indexResultRow(subject string, r client.IndexResult) {
+	fmt.Printf("%s\t%d\t%d\t%d\t%d\t%d\n",
+		subject, r.Members, r.AddedMembers, r.DroppedStale, r.Discs, r.Ops)
+}
+
+// countRow prints a command's result count as a data row — label and value,
+// the shape `tie stat` already prints — instead of a sentence (§6.2).
+func countRow(label string, n int) {
+	fmt.Println(label + "\t" + strconv.Itoa(n))
+}
+
 func cmdMedia(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "media",
@@ -74,7 +88,7 @@ func cmdMedia(a *app) *cli.Command {
 						if err != nil {
 							return err
 						}
-						fmt.Printf("%s\tmembers=%d added=%d stale=%d discs=%d ops=%d\n", uid, r.Members, r.AddedMembers, r.DroppedStale, r.Discs, r.Ops)
+						indexResultRow(uid, r)
 					}
 					return nil
 				},
@@ -82,6 +96,9 @@ func cmdMedia(a *app) *cli.Command {
 			{
 				Name:  "backfill",
 				Usage: "Index every collection in the store (data imported before the collection contract)",
+				Description: "One row per changed collection on stdout, tab-separated: subject,\n" +
+					"members, added-members, dropped-stale, discs, ops; then the summary\n" +
+					"as label/value rows.",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "dry-run", Usage: "Report what would change"},
 					&cli.StringSliceFlag{Name: "type", Usage: "Only collections with this label (repeatable; default: all)"},
@@ -100,7 +117,7 @@ func cmdMedia(a *app) *cli.Command {
 								fmt.Fprintf(os.Stderr, "rescanned %d/%d\n", done, total)
 							}
 						}})
-						fmt.Printf("rescanned tracks: %d\n", n)
+						countRow("rescanned-tracks", n)
 						if err != nil {
 							fmt.Fprintln(os.Stderr, "rescan: first error:", err)
 						}
@@ -110,14 +127,14 @@ func cmdMedia(a *app) *cli.Command {
 						if err != nil {
 							return err
 						}
-						fmt.Printf("migrated playlists: %d\n", n)
+						countRow("migrated-playlists", n)
 					}
 					if c.Bool("names") {
 						n, err := a.tie.RepairNames()
 						if err != nil {
 							return err
 						}
-						fmt.Printf("names repaired: %d\n", n)
+						countRow("names-repaired", n)
 					}
 					var types []string
 					if t := c.StringSlice("type"); len(t) > 0 {
@@ -127,13 +144,16 @@ func cmdMedia(a *app) *cli.Command {
 						if err != nil {
 							fmt.Fprintln(os.Stderr, err)
 						} else if r.Ops > 0 {
-							fmt.Printf("%s\tmembers=%d added=%d stale=%d discs=%d ops=%d\n", r.Collection, r.Members, r.AddedMembers, r.DroppedStale, r.Discs, r.Ops)
+							indexResultRow(string(r.Collection), r)
 						}
 					}})
 					if err != nil {
 						return err
 					}
-					fmt.Printf("collections: %d, changed: %d, archives stamped: %d, errors: %d\n", res.Collections, res.Changed, res.Archives, len(res.Errors))
+					countRow("collections", res.Collections)
+					countRow("changed", res.Changed)
+					countRow("archives-stamped", res.Archives)
+					countRow("errors", len(res.Errors))
 					return nil
 				},
 			},
@@ -145,7 +165,7 @@ func cmdMedia(a *app) *cli.Command {
 					if err != nil {
 						return err
 					}
-					fmt.Printf("subjects updated: %d\n", n)
+					countRow("subjects-updated", n)
 					return nil
 				},
 			},
@@ -285,7 +305,7 @@ func cmdPlaylist(a *app) *cli.Command {
 					if err != nil {
 						return err
 					}
-					fmt.Printf("migrated: %d\n", n)
+					countRow("migrated", n)
 					return nil
 				},
 			},

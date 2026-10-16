@@ -119,7 +119,7 @@ func cmdDel(a *app) *cli.Command {
 					if errors.Is(err, client.ErrNotFound) {
 						return nil
 					}
-					fmt.Println("Error:", err.Error())
+					fmt.Fprintln(os.Stderr, "Error:", err.Error())
 					return nil
 				}
 				b := a.tie.NewBatch()
@@ -143,8 +143,8 @@ func cmdDel(a *app) *cli.Command {
 				return deleteBatch(args[1])
 
 			case args[1] == "*" && args[2] != "*":
-				fmt.Println("Function to delete specific value2 from all value1's is not implemented, because it is most likely a typo.")
-				fmt.Println("Did you mean: tie delete", args[0], args[2], "* (delete all value2's from specific key + value1 pair?)")
+				fmt.Fprintln(os.Stderr, "Function to delete specific value2 from all value1's is not implemented, because it is most likely a typo.")
+				fmt.Fprintf(os.Stderr, "Did you mean: tie delete %s %s * (delete all value2's from specific key + value1 pair?)\n", args[0], args[2])
 
 			default:
 				if _, err := a.tie.Delete(args[0], args[1], args[2]); err != nil {

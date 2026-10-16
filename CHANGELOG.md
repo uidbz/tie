@@ -178,6 +178,21 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie version` is now a health check.** It answers one row per component —
+  `component<TAB>version<TAB>url` — instead of an aligned human table, prints
+  `unavailable` in the version column for a server it cannot reach (the reason
+  goes to stderr), and exits 1 when any configured server is unreachable.
+  `tie version | cut -f2` and `tie version >/dev/null; echo $?` now mean
+  something.
+- **`tie media index` / `backfill` / `restat` / `playlist migrate` print data,
+  not sentences.** An index pass is `subject<TAB>members<TAB>added<TAB>stale<TAB>discs<TAB>ops`
+  (the labels were previously glued into the TSV as `members=12 added=3`), and
+  the summary counts are `label<TAB>value` rows like `tie stat`.
+- **CLI chatter moved to stderr**: `tie import`'s `Uploading to …`, `scanning …`,
+  `[3/10] … (N tracks)`, `N albums`, `no albums found` and `aborted`;
+  `tie mount`'s `Mounted …`, `Unmounting` and unmount errors; `tie conf create`'s
+  confirmation; `tie get`'s per-key error lines. stdout carries only the
+  command's result.
 - **Library code no longer writes to stdout or stderr.** `client` printed
   `Importing: …`, `tagging <hash>` (twice per file on the single-file path),
   `reconcile: versioning superseded …` and various warnings directly to the
