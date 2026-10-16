@@ -122,9 +122,20 @@ func (ic *Collection) shouldBuildReverse(a *Triple) bool {
 }
 
 func (ic *Collection) Add(key string, value1 string, value2 string) {
-	keyID, keyLevel := ic.insert(key)
-	value1ID, value1Level := ic.insert(value1)
-	value2ID, value2Level := ic.insert(value2)
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
+	ic.addLocked(key, value1, value2)
+}
+
+// addLocked is Add's body; the caller must hold changeMutex. The *Locked
+// helpers let composite operations (Update, SetValues, batches) run several
+// mutations as one critical section: a concurrent reader never sees the
+// relation momentarily empty, and two concurrent Sets cannot interleave into
+// the union of both value sets.
+func (ic *Collection) addLocked(key string, value1 string, value2 string) {
+	keyID, keyLevel := ic.insertLocked(key)
+	value1ID, value1Level := ic.insertLocked(value1)
+	value2ID, value2Level := ic.insertLocked(value2)
 
 	ass := Triple{
 		Key:         keyID,
@@ -143,9 +154,6 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 	// that resurrected the triple at the next load. changeMutex is the same
 	// lock Delete holds, so an Add can no longer interleave with a Delete of the
 	// same triple between the check and the insert either.
-	ic.changeMutex.Lock()
-	defer ic.changeMutex.Unlock()
-
 	if ic.uniqueAssociationExists(keyLevel, keyID, value1ID, value2ID) {
 		return
 	}
@@ -279,7 +287,11 @@ func (ic *Collection) GetReverseAssociations(value string) (*AssociationSet, boo
 func (ic *Collection) Delete(key string, value1 string, value2 string) (string, bool) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	return ic.deleteLocked(key, value1, value2)
+}
 
+// deleteLocked is Delete's body; the caller must hold changeMutex.
+func (ic *Collection) deleteLocked(key string, value1 string, value2 string) (string, bool) {
 	k, _, fk := ic.getEntryFromString(key)
 	v1, _, f1 := ic.getEntryFromString(value1)
 	v2, l2, f2 := ic.getEntryFromString(value2)
@@ -311,9 +323,14 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (string, 
 	return "Did not find '" + value2 + "' with value1 '" + value1 + "'", false
 }
 
+// Update replaces value2 with newValue2 under a single changeMutex hold: a
+// concurrent reader never observes the relation momentarily empty, and the
+// delete+add cannot interleave with another writer's pair.
 func (ic *Collection) Update(key string, value1 string, value2 string, newValue2 string) (string, bool) {
-	if msg, ok := ic.Delete(key, value1, value2); ok {
-		ic.Add(key, value1, newValue2)
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
+	if msg, ok := ic.deleteLocked(key, value1, value2); ok {
+		ic.addLocked(key, value1, newValue2)
 		return "", true
 	} else {
 		return msg, false
@@ -324,10 +341,13 @@ func (ic *Collection) Update(key string, value1 string, value2 string, newValue2
 // original (key, value1, value2) did not exist. It always succeeds; the message
 // notes when a fallback add was used instead of an update.
 func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (string, bool) {
-	if msg, ok := ic.Update(key, value1, value2, newValue2); ok {
-		return msg, true
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
+	if msg, ok := ic.deleteLocked(key, value1, value2); ok {
+		ic.addLocked(key, value1, newValue2)
+		return "", true
 	} else {
-		ic.Add(key, value1, newValue2)
+		ic.addLocked(key, value1, newValue2)
 		return msg + ": could not update; adding new value as requested.", true
 	}
 }
@@ -341,20 +361,22 @@ func (ic *Collection) Sync() {
 // When the field does not yet exist it adds newValue2 only if addOnFail is set.
 // Use this for fields that are meant to hold exactly one value.
 func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (string, bool) {
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
 	existing, found := ic.Get(key, value1)
 	if !found {
 		if addOnFail {
-			ic.Add(key, value1, newValue2)
+			ic.addLocked(key, value1, newValue2)
 			return "", true
 		}
 		return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
 	}
 	if set, ok := existing[key][value1]; ok {
 		set.ForEach(func(value2 string) {
-			ic.Delete(key, value1, value2)
+			ic.deleteLocked(key, value1, value2)
 		})
 	}
-	ic.Add(key, value1, newValue2)
+	ic.addLocked(key, value1, newValue2)
 	return "", true
 }
 
@@ -409,6 +431,11 @@ func (ic *Collection) valueExists(level int, parentId uint64, value [SIZE_VALUE]
 func (ic *Collection) insert(value string) (entryID uint64, level int) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	return ic.insertLocked(value)
+}
+
+// insertLocked interns value into the trie; the caller must hold changeMutex.
+func (ic *Collection) insertLocked(value string) (entryID uint64, level int) {
 
 	if raw, ok := ic.asBlob(value); ok {
 		return ic.insertHash(raw), HASH_LEVEL
@@ -1092,15 +1119,17 @@ func (ic *Collection) ExpandKeys(keys []string, filter string) []Row {
 // relation" primitive, so clients no longer Get-then-Delete-each-then-Add.
 // Passing an empty values slice clears the relation.
 func (ic *Collection) SetValues(key string, value1 string, values []string) {
+	ic.changeMutex.Lock()
+	defer ic.changeMutex.Unlock()
 	if existing, found := ic.Get(key, value1); found {
 		if set, ok := existing[key][value1]; ok {
 			set.ForEach(func(value2 string) {
-				ic.Delete(key, value1, value2)
+				ic.deleteLocked(key, value1, value2)
 			})
 		}
 	}
 	for _, v := range values {
-		ic.Add(key, value1, v)
+		ic.addLocked(key, value1, v)
 	}
 }
 
