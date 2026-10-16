@@ -10,19 +10,13 @@ import (
 )
 
 // ResolveHost looks up one filehost by name. An empty name selects the first
-// host of the client's bound collection — the same list ResolveHosts computes,
-// so the two cannot disagree about what "the default host" means (§8 S11).
+// host of the client's scoped collection — the same list ResolveHosts computes,
+// so the two cannot disagree about what "the default host" means (§8 S11). It
+// is the single path from a scope to a FileHost: upload, verify, repair and the
+// CLI resolve the same way, so a batch of triples and the blob they describe
+// cannot end up on different hosts.
 func (tc *TieClient) ResolveHost(name string) (FileHost, error) {
-	return tc.ResolveHostIn("", name)
-}
-
-// ResolveHostIn is ResolveHost for a named collection (empty selects the
-// client's bound one). It is the single path from a (collection, host name)
-// pair to a FileHost: upload, verify, repair and the CLI resolve the same way,
-// so a batch of triples and the blob they describe cannot end up on different
-// hosts.
-func (tc *TieClient) ResolveHostIn(collection, name string) (FileHost, error) {
-	hosts := tc.ResolveHosts(collection, nil)
+	hosts := tc.ResolveHosts(nil)
 	if name != "" {
 		hosts = []string{name}
 	}

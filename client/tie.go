@@ -258,19 +258,16 @@ type ResolvedCollection struct {
 	FileHosts      []string
 }
 
-// ResolveHosts picks the filehost names an upload/import targets. An explicit
-// list (e.g. one or more --host flags) wins. Otherwise the hosts come from the
-// resolved entry of the named collection — the client's bound collection (the
-// global -c selection) when collection is empty — so a collection's own
-// FileHosts override the top-level DefaultFileHosts.
-func (tc *TieClient) ResolveHosts(collection string, explicit []string) []string {
+// ResolveHosts picks the filehost names an upload or import targets. An
+// explicit list (one or more --host flags) wins; otherwise the hosts come from
+// the client's scoped collection, so a collection's own FileHosts override the
+// top-level DefaultFileHosts. For another collection, scope first:
+// tc.In(name).ResolveHosts(nil).
+func (tc *TieClient) ResolveHosts(explicit []string) []string {
 	if len(explicit) > 0 {
 		return explicit
 	}
-	if collection == "" {
-		return tc.active.FileHosts
-	}
-	return tc.Config.ResolveCollection(collection).FileHosts
+	return tc.active.FileHosts
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
@@ -470,23 +467,11 @@ func (tc *TieClient) NewBatch() *api.Batch {
 	}
 }
 
-// NewBatchIn makes a Batch targeting a specific collection. An empty collection
-// falls back to the configured default.
-func (tc *TieClient) NewBatchIn(collection string) *api.Batch {
-	return &api.Batch{
-		Collection: tc.collectionInfo(collection),
-	}
-}
-
+// CollectionInfo is the collection this client is scoped to. Everything a
+// client does — queries, batches, sync, directory creation, host resolution —
+// addresses it; a caller that needs another collection uses In().
 func (tc *TieClient) CollectionInfo() api.CollectionInfo {
-	return tc.collectionInfo("")
-}
-
-func (tc *TieClient) collectionInfo(collection string) api.CollectionInfo {
-	if collection == "" {
-		collection = tc.active.Collection
-	}
-	return api.CollectionInfo{Namespace: tc.active.Namespace, CollectionId: collection}
+	return api.CollectionInfo{Namespace: tc.active.Namespace, CollectionId: tc.active.Collection}
 }
 
 // run sends a request and returns the typed reply. err is non-nil on transport
@@ -516,8 +501,7 @@ func replyError(status ws.ReplyStatus) error {
 
 // Add a triple to the collection
 func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewAddRequest(key, value1, value2)
+	request := tc.CollectionInfo().NewAddRequest(key, value1, value2)
 
 	reply, err := run[api.AddReply](tc, request)
 	if err != nil {
@@ -531,13 +515,7 @@ func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
 // visible to reads as soon as the write request returns. Use it only to bound
 // what a server crash can lose.
 func (tc *TieClient) Sync() error {
-	return tc.SyncIn("")
-}
-
-// SyncIn asks the server to make writes to a specific collection durable.
-// An empty collection falls back to the configured default.
-func (tc *TieClient) SyncIn(collection string) error {
-	request := tc.collectionInfo(collection).NewSyncRequest()
+	request := tc.CollectionInfo().NewSyncRequest()
 
 	reply, err := run[api.SyncReply](tc, request)
 	if err != nil {
@@ -549,8 +527,7 @@ func (tc *TieClient) SyncIn(collection string) error {
 // Get a TripleSet with all triples that are associated with 'key'.
 // Returns ErrNotFound if nothing is associated with the key.
 func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewAssociatedRequest(key)
+	request := tc.CollectionInfo().NewAssociatedRequest(key)
 
 	reply, err := run[api.AssociatedReply](tc, request)
 	if err != nil {
@@ -563,13 +540,7 @@ func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 // paginated per spec), the total match count before pagination, and an error.
 // Returns ErrNotFound (with nil rows) when nothing matches.
 func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
-	return tc.QueryIn("", spec)
-}
-
-// QueryIn runs a Query against a specific collection. An empty collection falls
-// back to the configured default.
-func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, error) {
-	request := tc.collectionInfo(collection).NewQueryRequest()
+	request := tc.CollectionInfo().NewQueryRequest()
 	request.Terms = spec.Terms
 	request.Exclude = spec.Exclude
 	request.Scope = spec.Scope
@@ -607,13 +578,7 @@ func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, err
 // the key has no associated values. It is Expand for one key; use Query to
 // search for keys by their associations.
 func (tc *TieClient) Get(key string) (Row, error) {
-	return tc.GetIn("", key)
-}
-
-// GetIn fetches the forward attributes of a single key from a specific
-// collection. An empty collection falls back to the configured default.
-func (tc *TieClient) GetIn(collection, key string) (Row, error) {
-	rows, err := tc.ExpandIn(collection, []string{key})
+	rows, err := tc.Expand([]string{key})
 	if err != nil {
 		return Row{}, err
 	}
@@ -626,14 +591,7 @@ func (tc *TieClient) GetIn(collection, key string) (Row, error) {
 // Expand fetches the forward attributes of many keys in one round trip, one Row
 // per key that exists (missing keys are omitted). Order follows keys.
 func (tc *TieClient) Expand(keys []string) ([]Row, error) {
-	return tc.ExpandIn("", keys)
-}
-
-// ExpandIn fetches the forward attributes of many keys from a specific
-// collection in one round trip. An empty collection falls back to the
-// configured default.
-func (tc *TieClient) ExpandIn(collection string, keys []string) ([]Row, error) {
-	request := tc.collectionInfo(collection).NewExpandRequest(keys, "")
+	request := tc.CollectionInfo().NewExpandRequest(keys, "")
 
 	reply, err := run[api.ExpandReply](tc, request)
 	if err != nil {
@@ -648,8 +606,7 @@ func (tc *TieClient) ExpandIn(collection string, keys []string) ([]Row, error) {
 // Set makes (key, relation) hold exactly values, replacing any existing values
 // for that relation in one server-side op. An empty values slice clears it.
 func (tc *TieClient) Set(key, relation string, values []string) error {
-	col := tc.collectionInfo("")
-	request := col.NewSetRequest(key, relation, values)
+	request := tc.CollectionInfo().NewSetRequest(key, relation, values)
 
 	reply, err := run[api.SetReply](tc, request)
 	if err != nil {
@@ -660,8 +617,7 @@ func (tc *TieClient) Set(key, relation string, values []string) error {
 
 // Delete a triple from the collection
 func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewDeleteRequest(key, value1, value2)
+	request := tc.CollectionInfo().NewDeleteRequest(key, value1, value2)
 
 	reply, err := run[api.DeleteReply](tc, request)
 	if err != nil {
@@ -672,8 +628,7 @@ func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
 
 // Update a triple in the collection
 func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewUpdateRequest(update)
+	request := tc.CollectionInfo().NewUpdateRequest(update)
 
 	reply, err := run[api.UpdateReply](tc, request)
 	if err != nil {
@@ -703,8 +658,7 @@ func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
 	if tc.runErr != nil {
 		return tc.runErr
 	}
-	col := tc.collectionInfo("")
-	request := col.NewDumpRequest()
+	request := tc.CollectionInfo().NewDumpRequest()
 
 	return tc.client.RunStream(request, func(r io.Reader) error {
 		dec := json.NewDecoder(r)
@@ -744,10 +698,8 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 // position against its on-disk record (slow on a large collection); repair
 // fixes the divergences in memory and reports how many it fixed. The counts in
 // the report describe the state before any repair.
-func (tc *TieClient) CheckIndex(collection string, deep, repair bool) (*tiedb.IndexReport, error) {
-	tc = tc.In(collection)
-	col := tc.collectionInfo(collection)
-	request := col.NewCheckIndexRequest(deep, repair)
+func (tc *TieClient) CheckIndex(deep, repair bool) (*tiedb.IndexReport, error) {
+	request := tc.CollectionInfo().NewCheckIndexRequest(deep, repair)
 
 	reply, err := run[api.CheckIndexReply](tc, request)
 	if err != nil {
@@ -764,8 +716,7 @@ func (tc *TieClient) CheckIndex(collection string, deep, repair bool) (*tiedb.In
 // access. Unlike Delete (one triple) this discards the whole collection, so it
 // is the destructive setup for an overwriting Restore.
 func (tc *TieClient) DropCollection() error {
-	col := tc.collectionInfo("")
-	request := col.NewDropRequest()
+	request := tc.CollectionInfo().NewDropRequest()
 
 	reply, err := run[api.DropReply](tc, request)
 	if err != nil {

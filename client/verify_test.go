@@ -57,11 +57,11 @@ func TestVerifyCleanTree(t *testing.T) {
 	mkdir(t, dir+"/sub")
 	writeFile(t, dir+"/sub/b.txt", "world")
 
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 	mkdir(t, dir+"/sub")
 	writeFile(t, dir+"/sub/b.txt", "keep me")
 
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -97,7 +97,7 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 		t.Fatalf("OrphanFiles = %v, want [%s]", rep.OrphanFiles, hash)
 	}
 
-	n, err := tie.RepairOrphans("", rep, "")
+	n, err := tie.RepairOrphans(rep, "")
 	if err != nil {
 		t.Fatalf("RepairOrphans: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 		t.Errorf("RepairOrphans restored %d nodes, want 1", n)
 	}
 
-	rep2, err := tie.Verify("", false)
+	rep2, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify after repair: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestVerifyDetectsOrphanDir(t *testing.T) {
 	mkdir(t, dir+"/sub")
 	writeFile(t, dir+"/sub/b.txt", "nested")
 
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestVerifyDetectsOrphanDir(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -160,10 +160,10 @@ func TestVerifyDetectsOrphanDir(t *testing.T) {
 		t.Errorf("OrphanFiles = %v, want empty (nested file keeps its parent)", rep.OrphanFiles)
 	}
 
-	if _, err := tie.RepairOrphans("", rep, ""); err != nil {
+	if _, err := tie.RepairOrphans(rep, ""); err != nil {
 		t.Fatalf("RepairOrphans: %v", err)
 	}
-	rep2, err := tie.Verify("", false)
+	rep2, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify after repair: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestVerifyMissingMetadata(t *testing.T) {
 	tie := freshVerifyClient(t)
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "metadata")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -199,7 +199,7 @@ func TestVerifyMissingMetadata(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestVerifyDetectsCycle(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, dir+"/one")
 	mkdir(t, dir+"/two")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestVerifyDetectsCycle(t *testing.T) {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestCheckIndexRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "hello")
 	writeFile(t, dir+"/b.txt", "world")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestCheckIndexRoundTrip(t *testing.T) {
 		name         string
 		deep, repair bool
 	}{{"plain", false, false}, {"deep", true, false}, {"repair", false, true}} {
-		rep, err := tie.CheckIndex("", mode.deep, mode.repair)
+		rep, err := tie.CheckIndex(mode.deep, mode.repair)
 		if err != nil {
 			t.Fatalf("%s: CheckIndex: %v", mode.name, err)
 		}
@@ -373,7 +373,7 @@ func TestRepairTree(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "repair me please")
 	writeFile(t, dir+"/b.txt", "i will dangle")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 	root, err := tie.DirUIDFromPath(FileURIScheme + dir)
@@ -422,7 +422,7 @@ func TestRepairTree(t *testing.T) {
 	}
 	must("sync", tie.Sync())
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	must("verify", err)
 	if len(rep.DanglingParentRefs) != 1 || rep.DanglingParentRefs[0].Child != b || rep.DanglingParentRefs[0].Parent != ghost {
 		t.Fatalf("DanglingParentRefs = %+v, want b -> ghost", rep.DanglingParentRefs)
@@ -432,12 +432,12 @@ func TestRepairTree(t *testing.T) {
 	}
 
 	// Dry run: a plan, and nothing changes.
-	plan, err := tie.RepairTree("", rep, RepairOptions{})
+	plan, err := tie.RepairTree(rep, RepairOptions{})
 	must("plan", err)
 	if len(plan.Planned) == 0 || plan.Applied != 0 {
 		t.Fatalf("dry run: planned=%d applied=%d", len(plan.Planned), plan.Applied)
 	}
-	rep2, err := tie.Verify("", false)
+	rep2, err := tie.Verify(false)
 	must("verify after dry run", err)
 	if rep2.Problems() != rep.Problems() {
 		t.Fatalf("dry run changed the tree: %d -> %d problems", rep.Problems(), rep2.Problems())
@@ -445,7 +445,7 @@ func TestRepairTree(t *testing.T) {
 
 	// Apply.
 	var journal bytes.Buffer
-	res, err := tie.RepairTree("", rep, RepairOptions{Apply: true, Journal: &journal})
+	res, err := tie.RepairTree(rep, RepairOptions{Apply: true, Journal: &journal})
 	must("apply", err)
 	if res.Applied != len(res.Planned) || res.Applied == 0 {
 		t.Fatalf("applied %d of %d planned", res.Applied, len(res.Planned))
@@ -454,7 +454,7 @@ func TestRepairTree(t *testing.T) {
 		t.Errorf("journal has %d lines, want %d", lines, res.Applied)
 	}
 
-	rep3, err := tie.Verify("", false)
+	rep3, err := tie.Verify(false)
 	must("verify after apply", err)
 	if rep3.Problems() != 0 {
 		t.Fatalf("tree still has problems after RepairTree: %+v", rep3)

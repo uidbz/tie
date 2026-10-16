@@ -42,7 +42,7 @@ func checkConsistency(t *testing.T, tc *client.TieClient) string {
 	if err := tc.Sync(); err != nil {
 		return "sync: " + err.Error()
 	}
-	rep, err := tc.Verify("", false)
+	rep, err := tc.Verify(false)
 	if err != nil {
 		return "verify: " + err.Error()
 	}

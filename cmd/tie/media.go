@@ -119,7 +119,7 @@ func cmdMedia() *cli.Command {
 						fmt.Printf("migrated playlists: %d\n", n)
 					}
 					if c.Bool("names") {
-						n, err := tie.RepairNames("")
+						n, err := tie.RepairNames()
 						if err != nil {
 							return err
 						}

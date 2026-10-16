@@ -10,7 +10,7 @@ func TestSyncInSurfacesServerFailure(t *testing.T) {
 
 	// The server refuses a malformed collection name and answers Success:false;
 	// SyncIn used to throw that reply away.
-	if err := tie.SyncIn("bad/name"); err == nil {
+	if err := tie.In("bad/name").Sync(); err == nil {
 		t.Error("SyncIn reported success for a request the server rejected")
 	}
 
@@ -21,7 +21,7 @@ func TestSyncInSurfacesServerFailure(t *testing.T) {
 	if err := tie.Sync(); err != nil {
 		t.Errorf("Sync on a live collection: %v", err)
 	}
-	if err := tie.SyncIn(tie.Config.Collection); err != nil {
+	if err := tie.Sync(); err != nil {
 		t.Errorf("SyncIn on a live collection: %v", err)
 	}
 }

@@ -27,7 +27,7 @@ func hostTestConfig() Config {
 func TestResolveHostAgreesWithResolveHosts(t *testing.T) {
 	tc := NewTieClientFor(hostTestConfig(), "")
 
-	names := tc.ResolveHosts("", nil)
+	names := tc.ResolveHosts(nil)
 	if len(names) == 0 {
 		t.Fatal("ResolveHosts returned no hosts")
 	}
@@ -68,20 +68,20 @@ func TestResolveHostHonoursTheName(t *testing.T) {
 func TestResolveHostInUsesTheCollection(t *testing.T) {
 	tc := NewTieClientFor(hostTestConfig(), "")
 
-	got, err := tc.ResolveHostIn("coll", "")
+	got, err := tc.In("coll").ResolveHost("")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.URL != "http://slow.example" {
-		t.Errorf("ResolveHostIn(\"coll\", \"\") = %+v, want the collection's own host", got)
+		t.Errorf("In(\"coll\").ResolveHost(\"\") = %+v, want the collection's own host", got)
 	}
 	// The bound collection is unaffected.
-	if def, err := tc.ResolveHostIn("", ""); err != nil || def.URL != "http://fast.example" {
-		t.Errorf("ResolveHostIn(\"\", \"\") = %+v, %v", def, err)
+	if def, err := tc.ResolveHost(""); err != nil || def.URL != "http://fast.example" {
+		t.Errorf("ResolveHost(\"\") = %+v, %v", def, err)
 	}
 	// An explicit name still wins over the collection's list.
-	if named, err := tc.ResolveHostIn("coll", "default"); err != nil || named.URL != "http://fast.example" {
-		t.Errorf("ResolveHostIn(\"coll\", \"default\") = %+v, %v", named, err)
+	if named, err := tc.In("coll").ResolveHost("default"); err != nil || named.URL != "http://fast.example" {
+		t.Errorf("In(\"coll\").ResolveHost(\"default\") = %+v, %v", named, err)
 	}
 }
 
@@ -119,7 +119,7 @@ func TestCheckBlobsAsksTheVerifiedCollection(t *testing.T) {
 
 	rows := []Row{{Key: strings.Repeat("ab", 32)}}
 
-	missing, err := tc.checkBlobsExist("coll", rows)
+	missing, err := tc.In("coll").checkBlobsExist(rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestCheckBlobsAsksTheVerifiedCollection(t *testing.T) {
 
 	// The bound collection still resolves to its own host, which does not have
 	// the blob: the check is not simply always answering "present".
-	missing, err = tc.checkBlobsExist("", rows)
+	missing, err = tc.checkBlobsExist(rows)
 	if err != nil {
 		t.Fatal(err)
 	}

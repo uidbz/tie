@@ -434,6 +434,9 @@ func cmdVerify() *cli.Command {
 				return errors.New("Error: Config not loaded")
 			}
 			collection := ctx.String("collection")
+			// One scoped client: the index check, the tree scan and every
+			// repair address the same collection (§3.8).
+			scoped := tie.In(collection)
 			fix := ctx.Bool("fix")
 			dryRun := ctx.Bool("dry-run")
 			if dryRun && !fix {
@@ -446,7 +449,7 @@ func cmdVerify() *cli.Command {
 			// inconsistent index would make it report phantoms and miss
 			// children. With --repair the index is fixed before the scan, so
 			// orphan re-homing never acts on a phantom.
-			idx, err := tie.CheckIndex(collection, ctx.Bool("deep"), repair)
+			idx, err := scoped.CheckIndex(ctx.Bool("deep"), repair)
 			if err != nil {
 				return errors.New("Index Check Error: " + err.Error())
 			}
@@ -455,7 +458,7 @@ func cmdVerify() *cli.Command {
 			if repair && idx.Repaired > 0 {
 				fmt.Fprintf(os.Stderr, "Repaired %d index entr%s\n", idx.Repaired, plural(idx.Repaired, "y", "ies"))
 				// Re-check so the exit code reflects the post-repair state.
-				if post, err := tie.CheckIndex(collection, ctx.Bool("deep"), false); err == nil {
+				if post, err := scoped.CheckIndex(ctx.Bool("deep"), false); err == nil {
 					indexProblems = post.Problems()
 				}
 			}
@@ -470,7 +473,7 @@ func cmdVerify() *cli.Command {
 				fmt.Fprintln(os.Stderr, "Warning: index inconsistent — tree results below may include phantoms or miss children; run `tie verify --repair`")
 			}
 
-			rep, err := tie.Verify(collection, ctx.Bool("check-blobs"))
+			rep, err := scoped.Verify(ctx.Bool("check-blobs"))
 			if err != nil && rep == nil {
 				return errors.New("Verify Error: " + err.Error())
 			}
@@ -492,7 +495,7 @@ func cmdVerify() *cli.Command {
 
 			changed := false
 			if repair {
-				n, rerr := tie.RepairOrphans(collection, rep, ctx.String("dest"))
+				n, rerr := scoped.RepairOrphans(rep, ctx.String("dest"))
 				if rerr != nil {
 					return errors.New("Repair Error: " + rerr.Error())
 				}
@@ -508,7 +511,7 @@ func cmdVerify() *cli.Command {
 					if path == "" {
 						name := collection
 						if name == "" {
-							name = tie.CollectionInfo().CollectionId
+							name = scoped.CollectionInfo().CollectionId
 						}
 						path = fmt.Sprintf("tie-fix-journal-%s-%s.tsv", name, time.Now().Format("2006-01-02T150405"))
 					}
@@ -520,7 +523,7 @@ func cmdVerify() *cli.Command {
 					opts.Journal = f
 					fmt.Fprintf(os.Stderr, "Journal: %s\n", path)
 				}
-				res, ferr := tie.RepairTree(collection, rep, opts)
+				res, ferr := scoped.RepairTree(rep, opts)
 				if dryRun {
 					for _, o := range res.Planned {
 						fmt.Printf("%-6s %s %-11s %s   # %s\n", o.Kind, o.Key, o.Relation, shortVal(o.Value), o.Note)
@@ -537,7 +540,7 @@ func cmdVerify() *cli.Command {
 			if changed {
 				// Re-verify so the reported problem count and exit code
 				// reflect the post-repair state, not the pre-repair scan.
-				rep, err = tie.Verify(collection, ctx.Bool("check-blobs"))
+				rep, err = scoped.Verify(ctx.Bool("check-blobs"))
 				if err != nil {
 					return errors.New("Verify Error: " + err.Error())
 				}
@@ -1082,7 +1085,7 @@ func cmdVersions() *cli.Command {
 					if ctx.Args().Len() < 1 {
 						return errors.New("Need 1 arg: path")
 					}
-					versions, err := tie.ListVersions("", ctx.Args().First())
+					versions, err := tie.ListVersions(ctx.Args().First())
 					if err != nil {
 						return errors.New("Versions list Error: " + err.Error())
 					}
@@ -1102,7 +1105,7 @@ func cmdVersions() *cli.Command {
 					if ctx.Args().Len() < 1 {
 						return errors.New("Need at least 1 arg: path (optional 2nd arg: version hash)")
 					}
-					hash, err := tie.RestoreVersion("", ctx.Args().Get(0), ctx.Args().Get(1))
+					hash, err := tie.RestoreVersion(ctx.Args().Get(0), ctx.Args().Get(1))
 					if err != nil {
 						return errors.New("Versions restore Error: " + err.Error())
 					}
@@ -1159,9 +1162,10 @@ func runImport(ctx *cli.Command, label string) error {
 	if ctx.Bool("albums") {
 		return runImportAlbums(ctx, dirType, forcedArchive)
 	}
-	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
+	scoped := tie.In(ctx.String("collection"))
+	hosts := scoped.ResolveHosts(ctx.StringSlice("host"))
 	for _, h := range hosts {
-		if _, err := tie.ResolveHost(h); err != nil {
+		if _, err := scoped.ResolveHost(h); err != nil {
 			return err
 		}
 	}
@@ -1182,11 +1186,11 @@ func runImport(ctx *cli.Command, label string) error {
 		}
 		for _, h := range hosts {
 			if fi.IsDir() {
-				if err := tie.ImportDir(file, tie.Config.FileHosts[h], ctx.String("collection"), dirType, ctx.StringSlice("tags"), ctx.String("dest"), forcedArchive); err != nil {
+				if err := scoped.ImportDir(file, tie.Config.FileHosts[h], dirType, ctx.StringSlice("tags"), ctx.String("dest"), forcedArchive); err != nil {
 					fail(file+" -> "+h, err)
 				}
 			} else {
-				if err := tie.ImportFile(file, tie.Config.FileHosts[h], ctx.String("collection"), ctx.StringSlice("tags"), "", forcedArchive); err != nil {
+				if err := scoped.ImportFile(file, tie.Config.FileHosts[h], ctx.StringSlice("tags"), "", forcedArchive); err != nil {
 					fail(file+" -> "+h, err)
 				}
 			}
@@ -1208,9 +1212,10 @@ func runImportAlbums(ctx *cli.Command, dirType string, forcedArchive client.TieT
 	if err != nil {
 		return err
 	}
-	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
+	scoped := tie.In(ctx.String("collection"))
+	hosts := scoped.ResolveHosts(ctx.StringSlice("host"))
 	for _, h := range hosts {
-		if _, err := tie.ResolveHost(h); err != nil {
+		if _, err := scoped.ResolveHost(h); err != nil {
 			return err
 		}
 	}

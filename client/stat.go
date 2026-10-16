@@ -199,7 +199,7 @@ func (tc *TieClient) stat(subject, knownPath string, opts StatOptions) (StatInfo
 				path = tc.reconstructPath(info)
 			}
 			if path != "" {
-				if vers, err := tc.ListVersions("", path); err == nil {
+				if vers, err := tc.ListVersions(path); err == nil {
 					info.Versions = vers
 				}
 			}

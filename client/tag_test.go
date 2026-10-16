@@ -47,7 +47,7 @@ func TestRepairNames(t *testing.T) {
 	if err := tie.Sync(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tie.RepairNames(""); err != nil {
+	if _, err := tie.RepairNames(); err != nil {
 		t.Fatal(err)
 	}
 	row, err := tie.Get(subj)
@@ -59,7 +59,7 @@ func TestRepairNames(t *testing.T) {
 		t.Errorf("name after repair = %v, want [map]", names)
 	}
 	// Idempotent: a second pass must not rewrite the row.
-	n, err := tie.RepairNames("")
+	n, err := tie.RepairNames()
 	if err != nil {
 		t.Fatal(err)
 	}

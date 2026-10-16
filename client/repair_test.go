@@ -52,7 +52,7 @@ func TestRepairJournalOnlyRecordsAppliedOps(t *testing.T) {
 	tie := freshVerifyClient(t)
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "keep me")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 	root, err := tie.DirUIDFromPath(FileURIScheme + dir)
@@ -71,12 +71,12 @@ func TestRepairJournalOnlyRecordsAppliedOps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Dry-run first: the plan is what the failing run would have journaled.
-	plan, err := tie.RepairTree("", rep, RepairOptions{})
+	plan, err := tie.RepairTree(rep, RepairOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestRepairJournalOnlyRecordsAppliedOps(t *testing.T) {
 	broken := NewTieClientFor(cfg, "")
 
 	var journal bytes.Buffer
-	res, err := broken.RepairTree("", rep, RepairOptions{Apply: true, Journal: &journal})
+	res, err := broken.RepairTree(rep, RepairOptions{Apply: true, Journal: &journal})
 	if err == nil {
 		t.Fatal("a refused Batch was reported as success")
 	}

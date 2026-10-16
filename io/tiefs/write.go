@@ -173,7 +173,7 @@ func (h *WriteHandle) commitLocked() error {
 			return err
 		}
 	}
-	newHash, err := t.Tie.WriteFile(t.host, "", parentUID, h.name, h.tmpPath, nil)
+	newHash, err := t.Tie.WriteFile(t.host, parentUID, h.name, h.tmpPath, nil)
 	if err != nil {
 		return err
 	}

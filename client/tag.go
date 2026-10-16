@@ -148,8 +148,9 @@ func applyArchiveOverride(sniffed, forced TieType) TieType {
 	return sniffed
 }
 
-func (tie *TieClient) ImportFile(file string, host FileHost, collection string, tags []string, directory DirUID, forcedArchive TieType) error {
-	tie = tie.In(collection)
+// ImportFile uploads one file and links it into `directory` (or the import root
+// when empty) in the client's scoped collection.
+func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, directory DirUID, forcedArchive TieType) error {
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
@@ -174,12 +175,12 @@ func (tie *TieClient) ImportFile(file string, host FileHost, collection string, 
 			IsDir:     stat.IsDir(),
 			Metadata:  ExtractMediaMetadata(file),
 		}
-		if err := Tag(tie, info, collection); err != nil {
+		if err := Tag(tie, info); err != nil {
 			return err
 		}
 		// added-at is the stable "date added" (media.go): written once, never
 		// replaced by a re-import the way tag-date is.
-		return tie.ensureAddedAtIn(collection, info.Hash)
+		return tie.EnsureAddedAt(info.Hash)
 	}
 	return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
 }
@@ -419,8 +420,10 @@ func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
 	}
 }
 
-func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string, forcedArchive TieType) error {
-	tie = tie.In(collection)
+// ImportDir uploads a directory tree and writes its tree triples into the
+// client's scoped collection: one collection for the directory nodes, the file
+// rows and the tags, so parent edges cannot point outside it (§3.8).
+func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags []string, dest string, forcedArchive TieType) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
@@ -596,7 +599,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	// deleted down to zero is handled.
 	for relDir := range dirCache {
 		uid := dirCache[relDir]
-		if err := reconcileDir(tie, collection, uid, want[uid], tie.Config.PrevVersions); err != nil {
+		if err := reconcileDir(tie, uid, want[uid], tie.Config.PrevVersions); err != nil {
 			return fmt.Errorf("import %s: reconcile %s: %w", dir, relDir, err)
 		}
 	}
@@ -605,7 +608,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		return fmt.Errorf("import %s: set dir type: %w", dir, err)
 	}
 	if IsCollectionLabel(dirType) {
-		if _, err := tie.IndexCollection(rootUID, IndexOptions{Collection: collection}); err != nil {
+		if _, err := tie.IndexCollection(rootUID, IndexOptions{}); err != nil {
 			return fmt.Errorf("import %s: index collection: %w", dir, err)
 		}
 	}
@@ -709,8 +712,8 @@ func parentCount(tie *TieClient, hash string) (int, error) {
 // last parent, its per-hash metadata (filename/name/tie-type/... and the tags it
 // carries) is also deleted, since the content is no longer reachable from any
 // directory. Shared content (still parented elsewhere) keeps its metadata.
-func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID) error {
-	tie = tie.In(collection)
+// detachChild runs in the scoped client's collection.
+func detachChild(tie *TieClient, hash string, fromDir DirUID) error {
 	b := tie.NewBatch()
 	b.Delete(hash, str(TieParent), str(fromDir))
 	if _, err := tie.Batch(b); err != nil {
@@ -748,8 +751,8 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 // keeping at most prevVersions of each (oldest dropped first); when prevVersions
 // is 0 the old edge is removed outright and the content is garbage-collected if
 // no directory still references it. Diagnostics go to stderr so stdout stays clean.
-func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string]bool, prevVersions int) error {
-	tie = tie.In(collection)
+// reconcileDir runs in the scoped client's collection.
+func reconcileDir(tie *TieClient, uid DirUID, want map[string]bool, prevVersions int) error {
 	children, err := fileChildren(tie, uid)
 	if err != nil {
 		return err
@@ -761,15 +764,14 @@ func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string
 
 	for _, c := range superseded {
 		fmt.Fprintf(os.Stderr, "reconcile: versioning superseded %s (%s) from %s\n", c.Filename, c.Hash, uid)
-		if err := supersedeToPrev(tie, collection, uid, c.Filename, c.Hash); err != nil {
+		if err := supersedeToPrev(tie, uid, c.Filename, c.Hash); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func Tag(tie *TieClient, info TagInfo, collection string) error {
-	tie = tie.In(collection)
+func Tag(tie *TieClient, info TagInfo) error {
 	fmt.Println("tagging", info.Hash)
 	batch := tie.NewBatch()
 	appendTagOps(batch, info)
@@ -797,8 +799,8 @@ func nameFromFilename(filename string) string {
 // so stems ending in a character that also appears in the extension were
 // truncated ("map.mp3" → "ma"). It returns how many subjects were rewritten.
 // An empty collection targets the bound one.
-func (tc *TieClient) RepairNames(collection string) (int, error) {
-	tc = tc.In(collection)
+// RepairNames backfills missing display names in the scoped collection.
+func (tc *TieClient) RepairNames() (int, error) {
 	rows, err := tc.allOfType(str(TieFile))
 	if err != nil {
 		return 0, err
@@ -1277,7 +1279,7 @@ func collectDescendantDirs(tie *TieClient, root DirUID) ([]SubDirectory, error) 
 // guard the import reconciliation uses (detachChild). The blob itself stays in
 // the filehost; its retention policy governs when the bytes go.
 func DeleteFile(tie *TieClient, hash string, parent DirUID) error {
-	return detachChild(tie, "", hash, parent)
+	return detachChild(tie, hash, parent)
 }
 
 // DeleteDir removes a directory from the path tree: it deletes the
@@ -1903,7 +1905,7 @@ func (tie *TieClient) MkTieDir(dirPath string) (DirUID, error) {
 // already there — which is the other creator's UID when a concurrent request
 // won, so the caller never has to re-query or guess.
 func (tie *TieClient) mkdir(parentUID DirUID, dirPath string, newUID DirUID) (DirUID, bool, error) {
-	request := tie.collectionInfo("").NewMkDirRequest(tiedb.DirSpec{
+	request := tie.CollectionInfo().NewMkDirRequest(tiedb.DirSpec{
 		Path:           dirPath,
 		NewUID:         string(newUID),
 		ParentUID:      string(parentUID),

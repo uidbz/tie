@@ -78,11 +78,10 @@ type RepairResult struct {
 
 // repairSession carries the per-run caches of RepairTree.
 type repairSession struct {
-	tie        *TieClient
-	collection string
-	opts       RepairOptions
-	res        *RepairResult
-	journal    *csv.Writer
+	tie     *TieClient // scoped to the collection being repaired
+	opts    RepairOptions
+	res     *RepairResult
+	journal *csv.Writer
 
 	liveDir   map[string]bool   // DirUIDs carrying a path triple
 	ghosts    map[string]bool   // ghost candidates
@@ -100,8 +99,10 @@ type repairSession struct {
 // collection. Without opts.Apply it returns the plan and changes nothing. It
 // does not re-home orphans (RepairOrphans) or touch the index (CheckIndex);
 // `tie verify --fix` composes all three.
-func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts RepairOptions) (*RepairResult, error) {
-	tie = tie.In(collection)
+// RepairTree fixes the dangling-reference, ghost-node and file-metadata
+// problems in rep, in the client's scoped collection — which should be the one
+// the Verify that produced rep ran on.
+func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*RepairResult, error) {
 	if opts.Dest == "" {
 		opts.Dest = FileURIScheme + "/restored/" + time.Now().Format("2006-01-02")
 	}
@@ -109,7 +110,7 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 		opts.Dest = FileURIScheme + "/" + opts.Dest
 	}
 	r := &repairSession{
-		tie: tie, collection: collection, opts: opts, res: &RepairResult{},
+		tie: tie, opts: opts, res: &RepairResult{},
 		liveDir: map[string]bool{}, ghosts: map[string]bool{}, done: map[string]bool{},
 		protected: map[string]bool{}, ancestor: map[string]string{}, handled: map[string]bool{},
 	}
@@ -270,7 +271,7 @@ func (r *repairSession) reparentOps(child, parent string) []RepairOp {
 // loadLiveDirs builds the set of DirUIDs that carry a path triple (the same
 // universe Verify partitions on).
 func (r *repairSession) loadLiveDirs() error {
-	rows, _, err := r.tie.QueryIn(r.collection, QuerySpec{
+	rows, _, err := r.tie.Query(QuerySpec{
 		Terms: []string{str(TieDirectory)}, Filter: str(TieTypeProperty), Reverse: true, Expand: true, Limit: -1,
 	})
 	if err != nil && err != ErrNotFound {
@@ -296,7 +297,7 @@ func fileLike(row Row) bool {
 
 // childrenOf returns the keys of every node with a parent edge to uid.
 func (r *repairSession) childrenOf(uid string) []string {
-	rows, _, err := r.tie.QueryIn(r.collection, QuerySpec{
+	rows, _, err := r.tie.Query(QuerySpec{
 		Terms: []string{uid}, Filter: str(TieParent), Reverse: true, Limit: -1,
 	})
 	if err != nil {
@@ -329,7 +330,7 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 			r.ancestor[uid] = cur
 			return cur
 		}
-		row, err := r.tie.GetIn(r.collection, cur)
+		row, err := r.tie.Get(cur)
 		if err != nil {
 			break
 		}
@@ -343,7 +344,7 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 // tiedir-hash edge — such a node is a directory's content snapshot, not a
 // ghost.
 func (r *repairSession) noTiedirRefs(uid string) bool {
-	rows, _, err := r.tie.QueryIn(r.collection, QuerySpec{
+	rows, _, err := r.tie.Query(QuerySpec{
 		Terms: []string{uid}, Filter: str(TieTiedirHash), Reverse: true, Limit: -1,
 	})
 	if err == nil && len(rows) > 0 {
@@ -355,7 +356,7 @@ func (r *repairSession) noTiedirRefs(uid string) bool {
 
 // deleteAll expands every triple of uid into a delete op.
 func (r *repairSession) deleteAll(uid, note string) ([]RepairOp, error) {
-	row, err := r.tie.GetIn(r.collection, uid)
+	row, err := r.tie.Get(uid)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +378,7 @@ func (r *repairSession) deleteAll(uid, note string) ([]RepairOp, error) {
 // can be derived from the blob, or delete the subject's triples when the file
 // is unrecoverable (no name at all, or blob absent from the filehost).
 func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
-	row, err := r.tie.GetIn(r.collection, subject)
+	row, err := r.tie.Get(subject)
 	if err != nil {
 		return nil, err
 	}
@@ -439,7 +440,7 @@ func (r *repairSession) blobFH() (*fhclient.Client, error) {
 	if r.fh != nil {
 		return r.fh, nil
 	}
-	host, err := r.tie.ResolveHostIn(r.collection, "")
+	host, err := r.tie.ResolveHost("")
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +519,7 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 	}
 	const chunk = 500
 	for i := 0; i < len(ops); i += chunk {
-		batch := r.tie.NewBatchIn(r.collection)
+		batch := r.tie.NewBatch()
 		// The journal lines and the Applied count are held until the batch has
 		// succeeded: a journal line is a record of something that happened, and
 		// Applied counts operations that were executed. Writing them first made
@@ -560,7 +561,7 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 		}
 		r.res.Applied += len(pending)
 	}
-	return r.tie.SyncIn(r.collection)
+	return r.tie.Sync()
 }
 
 func short(s string) string {

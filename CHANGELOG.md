@@ -119,6 +119,15 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`client.TieClient` addresses one collection; `tc.In(name)` picks which.**
+  The per-call `collection string` argument is gone from `Verify`, `CheckIndex`,
+  `RepairTree`, `RepairOrphans`, `ImportDir`, `ImportFile`, `ImportAlbums`,
+  `WriteFile`, `WriteFileWithProgress`, `ListVersions`, `RestoreVersion`,
+  `RepairNames`, `Tag`, `ResolveHosts` and the internal helpers, and so is the
+  whole `*In` family (`QueryIn`, `GetIn`, `ExpandIn`, `SyncIn`, `NewBatchIn`,
+  `ResolveHostIn`): the argument was honoured by only some of a method's internal
+  calls, which is what split one import across two collections. Scope a client
+  instead — `tie.In("music").Verify(false)` — and it cannot mix.
 - **The triplestore client no longer replays writes, and it has a timeout.**
   `webservice.Client.Run` retried *every* request after a transport error, on the
   grounds that writes are idempotent — but an `Update` whose response was lost has

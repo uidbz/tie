@@ -309,9 +309,8 @@ func discNumberFromName(name string) int {
 }
 
 // childRows returns the expanded rows of every child (files and subdirs) of a
-// directory via its reverse parent edges.
-func (tc *TieClient) childRows(collection string, uid string) ([]Row, error) {
-	tc = tc.In(collection)
+// directory via its reverse parent edges, in the client's scoped collection.
+func (tc *TieClient) childRows(uid string) ([]Row, error) {
 	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: str(TieParent), Expand: true, Limit: -1})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
@@ -339,7 +338,7 @@ type memberInfo struct {
 // descending into plain subdirectories (disc folders, artwork/, …) but not
 // into nested collections (their members belong to them) or version-history
 // "_prev" directories. It also returns the disc subdirectories it saw.
-func (tc *TieClient) walkCollection(collection, root string) (members []memberInfo, discDirs map[string]int, err error) {
+func (tc *TieClient) walkCollection(root string) (members []memberInfo, discDirs map[string]int, err error) {
 	discDirs = map[string]int{}
 	type item struct {
 		uid  string
@@ -350,7 +349,7 @@ func (tc *TieClient) walkCollection(collection, root string) (members []memberIn
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		rows, err := tc.childRows(collection, cur.uid)
+		rows, err := tc.childRows(cur.uid)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -475,7 +474,10 @@ func addedAtFor(row Row, now time.Time) string {
 // only (Ops == 0).
 func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult, error) {
 	res := IndexResult{Collection: uid}
-	root, err := tc.GetIn(opts.Collection, string(uid))
+	// Everything below addresses the collection the options name: reads, the
+	// walk and the batch cannot end up in different ones (§3.8).
+	tc = tc.In(opts.Collection)
+	root, err := tc.Get(string(uid))
 	if err != nil {
 		return res, fmt.Errorf("index %s: %w", uid, err)
 	}
@@ -483,13 +485,13 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 		return res, nil // a playlist's membership is its explicit track list (playlist.go)
 	}
 	labels := collectionLabels(root)
-	members, discDirs, err := tc.walkCollection(opts.Collection, string(uid))
+	members, discDirs, err := tc.walkCollection(string(uid))
 	if err != nil {
 		return res, fmt.Errorf("index %s: %w", uid, err)
 	}
 	res.Members = len(members)
 	now := time.Now()
-	b := tc.NewBatchIn(opts.Collection)
+	b := tc.NewBatch()
 
 	inWalk := map[string]bool{}
 	var memberRows []Row
@@ -522,7 +524,7 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 	// Stale edges: members that left the collection (moved, deleted). Needs the
 	// reverse member-of index; an older triplestore without it yields nothing
 	// here, which merely leaves stale edges in place.
-	if existing, err := tc.collectionMembersIn(opts.Collection, string(uid)); err == nil {
+	if existing, err := tc.CollectionMembers(string(uid)); err == nil {
 		for _, row := range existing {
 			if !inWalk[row.Key] {
 				b.Delete(row.Key, RelMemberOf, string(uid))
@@ -606,7 +608,7 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 			for id := range discDirs {
 				ids = append(ids, id)
 			}
-			rows, err := tc.ExpandIn(opts.Collection, ids)
+			rows, err := tc.Expand(ids)
 			if err != nil {
 				return res, fmt.Errorf("index %s: %w", uid, err)
 			}
@@ -634,15 +636,6 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 	return res, nil
 }
 
-func (tc *TieClient) collectionMembersIn(collection, uid string) ([]Row, error) {
-	tc = tc.In(collection)
-	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: RelMemberOf, Expand: true, Limit: -1})
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	return rows, err
-}
-
 func uniqueNonEmpty(values []string) []string {
 	var out []string
 	for _, v := range values {
@@ -655,11 +648,6 @@ func uniqueNonEmpty(values []string) []string {
 
 // EnsureAddedAt stamps added-at on subject unless it already has one.
 func (tc *TieClient) EnsureAddedAt(subject string) error {
-	return tc.ensureAddedAtIn("", subject)
-}
-
-func (tc *TieClient) ensureAddedAtIn(collection, subject string) error {
-	tc = tc.In(collection)
 	row, err := tc.Get(subject)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err

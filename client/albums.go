@@ -887,6 +887,7 @@ type AlbumImportResult struct {
 // and collecting per-group errors (one failure does not abort the rest).
 // Groups without a destination are recorded as errors.
 func (tie *TieClient) ImportAlbums(plan []AlbumGroup, opts AlbumImportOptions) []AlbumImportResult {
+	tie = tie.In(opts.Collection)
 	results := make([]AlbumImportResult, 0, len(plan))
 	for i, g := range plan {
 		if opts.Progress != nil {
@@ -913,9 +914,9 @@ func (tie *TieClient) importAlbum(g AlbumGroup, opts AlbumImportOptions) error {
 		if err != nil {
 			return err
 		}
-		return tie.ImportFile(g.Files[0], opts.Host, opts.Collection, opts.Tags, uid, opts.ForcedArchive)
+		return tie.ImportFile(g.Files[0], opts.Host, opts.Tags, uid, opts.ForcedArchive)
 	case g.WholeTree():
-		return tie.ImportDir(g.SourceDir, opts.Host, opts.Collection, opts.DirType, opts.Tags, g.Dest, opts.ForcedArchive)
+		return tie.ImportDir(g.SourceDir, opts.Host, opts.DirType, opts.Tags, g.Dest, opts.ForcedArchive)
 	default:
 		return tie.importAlbumFiles(g, opts)
 	}
@@ -937,7 +938,7 @@ func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) er
 		return err
 	}
 	const flushThreshold = 1000
-	batch := tie.NewBatchIn(opts.Collection)
+	batch := tie.NewBatch()
 	flush := func() error {
 		if len(batch.Ops) == 0 {
 			return nil
@@ -945,7 +946,7 @@ func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) er
 		if _, err := tie.Batch(batch); err != nil {
 			return err
 		}
-		batch = tie.NewBatchIn(opts.Collection)
+		batch = tie.NewBatch()
 		return nil
 	}
 

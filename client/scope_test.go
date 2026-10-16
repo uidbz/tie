@@ -91,8 +91,8 @@ func TestImportDirStaysInItsCollection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The CLI's shape: one client, the collection named per call.
-	if err := tc.ImportDir(dir, tc.Config.FileHosts["default"], "other", "directory", nil, "/imported", 0); err != nil {
+	// The CLI's shape: one config, a client scoped to the named collection.
+	if err := tc.In("other").ImportDir(dir, tc.Config.FileHosts["default"], "directory", nil, "/imported", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -137,7 +137,7 @@ func TestImportDirResolvesTheConfigEntryName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := tc.ImportDir(dir, tc.Config.FileHosts["default"], "music", "directory", nil, "/records", 0); err != nil {
+	if err := tc.In("music").ImportDir(dir, tc.Config.FileHosts["default"], "directory", nil, "/records", 0); err != nil {
 		t.Fatal(err)
 	}
 	music := tc.In("music")

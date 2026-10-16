@@ -85,8 +85,10 @@ const rootPathValue = FileURIScheme + "/"
 // The pass is read-only. It fetches the full directory and file universes
 // (unpaginated) and expands each node's forward attributes; memory is O(tree
 // size), consistent with the rest of the client.
-func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport, error) {
-	tie = tie.In(collection)
+// Verify reads the whole tree of the client's scoped collection and reports what
+// is wrong with it. checkBlobs additionally stats every content hash on the
+// collection's filehost.
+func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	rep := &VerifyReport{DuplicatePaths: make(map[string][]DirUID)}
 
 	// The structural tie-type "directory" marker is written on two different
@@ -183,7 +185,7 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 	sort.Slice(rep.MissingMetadata, func(i, j int) bool { return rep.MissingMetadata[i].Subject < rep.MissingMetadata[j].Subject })
 
 	if checkBlobs {
-		missing, err := tie.checkBlobsExist(collection, files)
+		missing, err := tie.checkBlobsExist(files)
 		if err != nil {
 			return rep, err // return the partial structural report plus the error
 		}
@@ -334,8 +336,7 @@ const blobCheckWorkers = 16
 // filehost and returns the hashes absent from all of them. One HEAD request per
 // hash; the work runs through a small worker pool and the result is sorted, so
 // it is the same list whatever the scheduling.
-func (tie *TieClient) checkBlobsExist(collection string, files []Row) ([]string, error) {
-	tie = tie.In(collection)
+func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 	// The first host of the collection being verified, not of the client's
 	// bound collection: `tie verify -c other --check-blobs` has to ask the
 	// filehost that collection writes to (§8 S11). Only the first host is
@@ -428,8 +429,9 @@ func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) 
 // rep should come from a just-run Verify on the same collection; stale reports
 // are harmless (re-parenting an already-parented node just adds another parent
 // edge), but a fresh pass avoids re-homing nodes another client already fixed.
-func (tie *TieClient) RepairOrphans(collection string, rep *VerifyReport, destDir string) (int, error) {
-	tie = tie.In(collection)
+// RepairOrphans re-homes the orphan files and directories verify found in the
+// client's scoped collection, under destDir.
+func (tie *TieClient) RepairOrphans(rep *VerifyReport, destDir string) (int, error) {
 	if rep == nil || (len(rep.OrphanDirs) == 0 && len(rep.OrphanFiles) == 0) {
 		return 0, nil
 	}

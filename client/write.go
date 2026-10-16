@@ -27,16 +27,17 @@ import (
 // recomputed from the new bytes (filename/name/filesize/tag-date/media-type/
 // tie-type) and the parent edge are set fresh. An unchanged re-save (identical
 // bytes → identical hash) is a no-op. Returns the new content hash.
-func (tc *TieClient) WriteFile(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string) (string, error) {
-	tc = tc.In(collection)
-	return tc.WriteFileWithProgress(host, collection, parent, name, srcPath, extraTags, nil)
+func (tc *TieClient) WriteFile(host FileHost, parent DirUID, name, srcPath string, extraTags []string) (string, error) {
+	return tc.WriteFileWithProgress(host, parent, name, srcPath, extraTags, nil)
 }
 
 // WriteFileWithProgress behaves exactly like WriteFile but, when progress is
 // non-nil, writes each chunk of uploaded bytes to it so callers can render an
 // upload progress bar. The total byte count equals srcPath's size.
-func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string, progress io.Writer) (string, error) {
-	tc = tc.In(collection)
+// WriteFileWithProgress and WriteFile write in the client's scoped collection:
+// the children and old metadata they read and the batch they write belong to the
+// same one (§3.8).
+func (tc *TieClient) WriteFileWithProgress(host FileHost, parent DirUID, name, srcPath string, extraTags []string, progress io.Writer) (string, error) {
 	stat, err := os.Stat(srcPath)
 	if err != nil {
 		return "", err
@@ -123,7 +124,7 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 
 	// Version (or, at PrevVersions<=0, drop) the superseded content into the
 	// isolated history collection. Same helper reconcileDir uses.
-	if err := supersedeToPrev(tc, collection, parent, name, oldHash); err != nil {
+	if err := supersedeToPrev(tc, parent, name, oldHash); err != nil {
 		return "", err
 	}
 	return newHash, nil
