@@ -19,6 +19,7 @@ import (
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/metadata"
+	tiedb "github.com/uidbz/tie/tiedb"
 	"github.com/uidbz/tie/webservice"
 )
 
@@ -113,6 +114,7 @@ func TestMain(m *testing.M) {
 		c.NewDropRequest(),
 		c.NewCoTagsRequest(nil, nil, ""),
 		c.NewCheckIndexRequest(false, false),
+		c.NewMkDirRequest(tiedb.DirSpec{}),
 		api.NewVersionRequest(),
 	}
 	ws := webservice.NewWebservice(webservice.WebserviceConfig{

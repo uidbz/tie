@@ -9,6 +9,7 @@ import (
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/internal/daemon"
+	tiedb "github.com/uidbz/tie/tiedb"
 	"github.com/uidbz/tie/webservice"
 )
 
@@ -168,6 +169,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		c.NewDropRequest(),
 		c.NewCoTagsRequest(nil, nil, ""),
 		c.NewCheckIndexRequest(false, false),
+		c.NewMkDirRequest(tiedb.DirSpec{}),
 		api.NewVersionRequest(),
 	}
 

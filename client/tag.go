@@ -17,6 +17,7 @@ import (
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/io/putlib"
 	"github.com/uidbz/tie/metadata"
+	tiedb "github.com/uidbz/tie/tiedb"
 )
 
 //go:generate stringer -type=TieType -linecomment
@@ -961,26 +962,32 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 	return uid, nil
 }
 
+// ErrDirExists reports that the directory a caller asked to create was already
+// there. MkTieDir returns it together with the existing UID, so a caller that
+// wants "create if absent" tests errors.Is and carries on. Before it, control
+// flow hinged on strings.HasPrefix(err.Error(), "Root dir already exists") —
+// wording changes silently inverted the check (§4.10).
+var ErrDirExists = errors.New("directory exists")
+
+// tieRootDir returns the UID of the collection's root directory, creating it
+// when absent. The root is its own parent, so one MkDir covers it; the reply
+// says whether it was already there.
+func (tie *TieClient) tieRootDir() (DirUID, bool, error) {
+	newUID := tie.newDirUID()
+	uid, existed, err := tie.mkdir(newUID, FileURIScheme+"/", newUID)
+	return uid, existed, err
+}
+
+// CreateTieRootDir creates the collection's root directory. It returns an
+// error wrapping ErrDirExists when the root is already there, naming its UID.
 func (tie *TieClient) CreateTieRootDir() error {
-	rootpath := FileURIScheme + "/"
-	uid, err := tie.DirUIDFromPath(rootpath)
+	uid, existed, err := tie.tieRootDir()
 	if err != nil {
 		return err
 	}
-	if uid != "" {
-		return errors.New("Root dir already exists, with UID: " + uid.String())
+	if existed {
+		return fmt.Errorf("root dir already exists, with UID: %s: %w", uid, ErrDirExists)
 	}
-
-	uid = tie.newDirUID()
-
-	b := tie.NewBatch()
-	b.Add(str(uid), str(TieParent), str(uid))
-	b.Add(str(uid), str(TiePath), rootpath)
-	b.Add(str(uid), str(TieTypeProperty), str(TieDirectory))
-	if _, err := tie.Batch(b); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -1830,57 +1837,99 @@ func tieDirAncestors(p string) []string {
 	return ancestors
 }
 
+// MkTieDirAll creates every missing directory of dirPath, top-down, and returns
+// the UID of the deepest one.
+//
+// Each level is one atomic MkDir whose parent is the level above, so the walk
+// costs one request per level: it no longer asks for the UID of every ancestor
+// twice per call (the old version cost up to three round trips per level even
+// when the whole chain already existed, §4.10).
 func (tie *TieClient) MkTieDirAll(dirPath string) (DirUID, error) {
-	if err := tie.CreateTieRootDir(); err != nil &&
-		!strings.HasPrefix(err.Error(), "Root dir already exists") {
-		return "", err
-	}
-
-	var uid DirUID
-	for _, ancestor := range tieDirAncestors(dirPath) {
-		created, err := tie.MkTieDir(ancestor)
-		if err != nil && !strings.HasSuffix(err.Error(), "Directory exists") {
-			return "", err
-		}
-		uid = created
-	}
-
-	return uid, nil
-}
-
-func (tie *TieClient) MkTieDir(path string) (DirUID, error) {
-	if !strings.HasPrefix(path, FileURIScheme) {
-		path = FileURIScheme + path
-	}
-	uid, err := tie.DirUIDFromPath(path)
+	parentUID, _, err := tie.tieRootDir()
 	if err != nil {
 		return "", err
 	}
-	if uid != "" { // Dir already exists
-		return uid, errors.New("Cannot create directory '" + path + "': Directory exists")
+	uid := parentUID
+	for _, ancestor := range tieDirAncestors(dirPath) {
+		next, _, err := tie.mkdir(parentUID, ancestor, tie.newDirUID())
+		if err != nil {
+			return "", err
+		}
+		parentUID = next
+		uid = next
 	}
+	return uid, nil
+}
 
-	parentPath := filepath.Dir(path)
-	if parentPath == FileURIScheme {
-		parentPath = FileURIScheme + "/"
+// MkTieDir creates one directory; its parent must already exist (use
+// MkTieDirAll to create a chain). The check for an existing node and the
+// creation are one server-side step, so two concurrent creators end up sharing
+// one node rather than minting two for the same path.
+//
+// When the path is already owned, the existing UID is returned along with an
+// error wrapping ErrDirExists.
+func (tie *TieClient) MkTieDir(dirPath string) (DirUID, error) {
+	if !strings.HasPrefix(dirPath, FileURIScheme) {
+		dirPath = FileURIScheme + dirPath
 	}
-
-	uid = tie.newDirUID()
-
+	parentPath := FileURIScheme + virtualDir(dirPath)
 	parentUID, err := tie.DirUIDFromPath(parentPath)
 	if err != nil {
 		return "", err
 	}
-
-	b := tie.NewBatch()
-	b.Add(str(uid), str(TieParent), str(parentUID))
-	b.Add(str(uid), str(TiePath), path)
-	b.Add(str(uid), str(TieTypeProperty), str(TieDirectory))
-	if _, err := tie.Batch(b); err != nil {
-		return uid, err
+	if parentUID == "" {
+		return "", fmt.Errorf("cannot create directory '%s': no such parent '%s'", dirPath, parentPath)
 	}
 
+	uid, existed, err := tie.mkdir(parentUID, dirPath, tie.newDirUID())
+	if err != nil {
+		return uid, err
+	}
+	if existed {
+		return uid, fmt.Errorf("cannot create directory '%s': %w", dirPath, ErrDirExists)
+	}
 	return uid, nil
+}
+
+// mkdir is the atomic create: the server looks the path up and writes the three
+// triples under newUID only if no subject owns the path, all under one
+// changeMutex hold. It returns the UID that owns the path and whether it was
+// already there — which is the other creator's UID when a concurrent request
+// won, so the caller never has to re-query or guess.
+func (tie *TieClient) mkdir(parentUID DirUID, dirPath string, newUID DirUID) (DirUID, bool, error) {
+	request := tie.collectionInfo("").NewMkDirRequest(tiedb.DirSpec{
+		Path:           dirPath,
+		NewUID:         string(newUID),
+		ParentUID:      string(parentUID),
+		PathRelation:   str(TiePath),
+		ParentRelation: str(TieParent),
+		TypeRelation:   str(TieTypeProperty),
+		TypeValue:      str(TieDirectory),
+	})
+	reply, err := run[api.MkDirReply](tie, request)
+	if err != nil {
+		return "", false, err
+	}
+	if err := replyError(reply.ReplyStatus); err != nil {
+		return "", false, err
+	}
+	return DirUID(reply.UID), reply.Existed, nil
+}
+
+// virtualDir is the directory above a virtual tie path, without the scheme:
+// "/a/b" -> "/a", "/a" -> "/". Virtual paths are always slash-separated, so
+// this must not use filepath: on Windows filepath.Dir would split on '\' and
+// hand the triplestore a parent path it has never seen (§4.10).
+func virtualDir(virtualPath string) string {
+	p := strings.TrimPrefix(virtualPath, FileURIScheme)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	dir := path.Dir(p)
+	if dir == "." || dir == "/" {
+		return "/"
+	}
+	return dir
 }
 
 // typeRegistrySubject is the subject of the dir-type registry: a directory's

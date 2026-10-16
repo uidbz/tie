@@ -42,6 +42,17 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **Two concurrent `mkdir`s no longer mint two directories.** `MkTieDir` asked
+  "is there a UID for this path?", saw none, minted one and wrote it — so two
+  creators racing on one path (two imports, a FUSE `mkdir` against an import, an
+  SMB client) both wrote, which is where the duplicate-path state `verify`
+  reports comes from. There is now a `MkDir` request that does the lookup and
+  the writes under one lock on the server and answers with the UID the path
+  actually has. `MkTieDirAll` also walks top-down passing each level's UID to
+  the next: one request per level instead of up to three round trips per level.
+  "Already exists" is the sentinel `client.ErrDirExists` rather than an error
+  string matched with `strings.HasSuffix`, and virtual `tie:/…` paths are split
+  with `path`, not `filepath` (which would break on Windows).
 - **A mount write that cannot be committed keeps its bytes.** `Close()` on a
   staged FUSE/SMB write committed and then always deleted the staging file, so
   if the filehost or triplestore was unreachable the user's just-written file

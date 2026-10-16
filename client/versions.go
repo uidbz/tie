@@ -3,7 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -182,13 +182,13 @@ func dropVersion(tc *TieClient, prevCol, hash, locKey string) error {
 // resolveFileLoc splits a virtual file path (e.g. "/docs/note.txt" or
 // "tie:/docs/note.txt") into the parent directory's DirUID (resolved in the
 // main collection) and the file's basename.
-func (tc *TieClient) resolveFileLoc(path string) (DirUID, string, error) {
-	clean := strings.TrimPrefix(path, FileURIScheme)
+func (tc *TieClient) resolveFileLoc(virtualPath string) (DirUID, string, error) {
+	clean := strings.TrimPrefix(virtualPath, FileURIScheme)
 	if !strings.HasPrefix(clean, "/") {
 		clean = "/" + clean
 	}
-	name := filepath.Base(clean)
-	dir := filepath.Dir(clean)
+	name := path.Base(clean)
+	dir := path.Dir(clean)
 	parentUID, err := tc.DirUIDFromPath(dir)
 	if err != nil {
 		return "", "", err
