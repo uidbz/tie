@@ -99,23 +99,47 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 	if o.Limit == 0 {
 		o.Limit = 1000
 	}
+	// Resolve the relation filter to its entry id once, and skip the entries
+	// that cannot match before resolveEntry touches the record file (§5.2 item
+	// 5). The relation id is already in the UniqueAssociation key, so a
+	// high-fan-in node read through Get(hub, rel) no longer pays for every
+	// other relation it holds. An unresolvable filter means no triple in this
+	// collection carries that relation at all.
+	var filterID uint64
+	filterActive := value1Filter != ""
+	if filterActive {
+		id, _, found := ic.getEntryFromString(value1Filter)
+		if !found {
+			return []StringTriple{}, 0
+		}
+		filterID = id
+	}
+
 	// Resolve straight into a slice sized by the set's cardinality. The old
 	// shape — a 10 000-slot channel, a goroutine, and a 1000-triple
 	// preallocation — cost 533 KB per call regardless of how little it
 	// matched: the single largest allocation in the store (a 1000-row Expand
 	// churned ~266 MB, a dump of 20k subjects ~10 GB).
-	sorted = make([]StringTriple, 0, tree.Size())
-	filterActive := value1Filter != ""
+	//
+	// A relation filter makes the set's cardinality the wrong estimate: a hub
+	// with 2 000 relations read through one of them would preallocate 2 000
+	// slots to hold a handful, so the filtered path starts small and grows.
+	if filterActive {
+		sorted = nil
+	} else {
+		sorted = make([]StringTriple, 0, tree.Size())
+	}
 	tree.ForEach(func(ua UniqueAssociation, pos int64) {
+		// Entry ids are unique per string, so the id test replaces the string
+		// comparison that used to happen after decoding.
+		if filterActive && ua.Relation != filterID {
+			return
+		}
 		t, ok := ic.resolveEntry(ua, pos)
 		if !ok {
 			return
 		}
-		st := ic.makeStringTriple(t)
-		if filterActive && st.Value1 != value1Filter {
-			return
-		}
-		sorted = append(sorted, st)
+		sorted = append(sorted, ic.makeStringTriple(t))
 	})
 
 	// When ordering by a relation's value, resolve each key's value once and

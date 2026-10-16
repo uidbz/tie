@@ -1,6 +1,7 @@
 package tiedb
 
 import (
+	"fmt"
 	"strconv"
 	"testing"
 )
@@ -64,6 +65,33 @@ func BenchmarkGetValueLong(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		if v := col.getValue(level, id); len(v) == 0 {
 			b.Fatal("empty value")
+		}
+	}
+}
+
+// BenchmarkGetFilteredFanIn measures Get(hub, rel) on a node holding many
+// relations — the shape of a directory with thousands of tags, or a hub file
+// with thousands of edges. The filter should skip the relations that cannot
+// match before resolveEntry reads their record (§5.2 item 5).
+func BenchmarkGetFilteredFanIn(b *testing.B) {
+	db := NewDB(true)
+	defer db.Close()
+	col := db.GetCollection(CollectionKey{b.TempDir(), "fanin"})
+
+	const relations = 2000
+	for i := 0; i < relations; i++ {
+		if err := col.Add("hub", fmt.Sprintf("rel-%04d", i), fmt.Sprintf("val-%04d", i)); err != nil {
+			b.Fatal(err)
+		}
+	}
+	col.Sync()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		set, found := col.Get("hub", "rel-0007")
+		if !found || len(set["hub"]["rel-0007"]) != 1 {
+			b.Fatalf("Get(hub, rel-0007) = %v, %v", set, found)
 		}
 	}
 }

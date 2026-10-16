@@ -32,6 +32,14 @@ to follow semantic versioning.
 
 ### Performance
 
+- **Reading one relation of a busy node reads only that relation.** `Sort`
+  resolved every association's record from disk and then dropped the ones whose
+  relation string differed from the filter. The relation id is already in the
+  association key, so the filter is resolved to an id once and non-matching
+  entries are skipped before the record read; a filtered query also stops
+  preallocating a slot per association. `Get(hub, rel)` on a node holding 2000
+  relations: 409 µs / 307 kB / 12 167 allocations, now 13 µs / 922 B / 13
+  allocations.
 - **`tie verify --check-blobs` runs 16 HEAD requests at a time.** It used to
   ask for one blob per round trip, so a library with a million files cost a
   million sequential requests — hours. With a small worker pool the same check
