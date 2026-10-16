@@ -169,27 +169,54 @@ func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request, h string)
 
 func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	slog.Info("serving blob", "hash", hash)
+	// The name passed to ServeContent is the blob's file name, which is what
+	// http.ServeFile would have used.
+	s.serveBlob(w, r, hash, hash, st)
+}
+
+// serveBlob answers a GET for hash. With a read cache configured, a cached
+// copy is served through its handle — so an eviction mid-request cannot turn a
+// download into a 404 — and a cold blob is answered straight from the store
+// while the cache fills behind the response. Copying the whole blob before the
+// first byte used to put seconds to minutes between a client's request and the
+// first byte of a multi-GB object (§4.16).
+func (s *server) serveBlob(w http.ResponseWriter, r *http.Request, name, hash string, st *blobStore) {
 	path, err := PathFromHash(st.path, hash)
 	if err != nil { // unreachable: withHash validated the hash
 		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return
 	}
-	if s.cache != nil {
-		if cached, err := s.cache.get(hash, path); err == nil {
-			path = cached
-		} else {
-			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
-		}
+	info, err := os.Stat(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
 	}
-	// Blobs are stored under their hash with no extension, so http.ServeFile
+	if s.cache != nil {
+		if h, ok := s.cache.peek(hash); ok {
+			defer h.Close()
+			if ct := sniffReader(h.Section()); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+			http.ServeContent(w, r, name, info.ModTime(), h.Section())
+			return
+		}
+		defer s.cache.fill(hash, path)
+	}
+	// Blobs are stored under their hash with no extension, so http.ServeContent
 	// falls back to net/http's content sniffer, whose signature table omits
 	// common formats (e.g. FLAC), yielding application/octet-stream. Sniff the
-	// magic number ourselves so the store serves a correct type; ServeFile
+	// magic number ourselves so the store serves a correct type; ServeContent
 	// honours a Content-Type we set here rather than re-detecting.
 	if ct := sniffContentType(path); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	http.ServeFile(w, r, path)
+	f, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, name, info.ModTime(), f)
 }
 
 // sniffContentType returns a MIME type detected from the file's leading bytes
@@ -201,12 +228,22 @@ func sniffContentType(path string) string {
 		return ""
 	}
 	defer f.Close()
+	return sniffReader(f)
+}
+
+// sniffReader detects the type of whatever r reads, so the same magic-number
+// match works on a store file and on a cache handle.
+func sniffReader(r io.Reader) string {
 	head := make([]byte, 262)
-	n, _ := io.ReadFull(f, head)
-	if n == 0 {
+	n, _ := io.ReadFull(r, head)
+	return sniffHead(head[:n])
+}
+
+func sniffHead(head []byte) string {
+	if len(head) == 0 {
 		return ""
 	}
-	if t, err := filetype.Get(head[:n]); err == nil && t != filetype.Unknown {
+	if t, err := filetype.Get(head); err == nil && t != filetype.Unknown {
 		return t.MIME.Value
 	}
 	return ""
@@ -254,29 +291,7 @@ func (s *server) statHandler(w http.ResponseWriter, r *http.Request, hash string
 func (s *server) namedDownloadHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	filename := r.PathValue("filename")
 	slog.Info("serving blob", "hash", hash, "filename", filename)
-	path, err := PathFromHash(st.path, hash)
-	if err != nil { // unreachable: withHash validated the hash
-		http.Error(w, "Invalid hash", http.StatusBadRequest)
-		return
-	}
-	if s.cache != nil {
-		if cached, err := s.cache.get(hash, path); err == nil {
-			path = cached
-		} else {
-			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
-		}
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		fmt.Fprint(w, "Error happened")
-		return
-	}
-	reader, err2 := os.Open(path)
-	if err2 != nil {
-		fmt.Fprint(w, "Error happened")
-		return
-	}
-	http.ServeContent(w, r, filename, info.ModTime(), reader)
+	s.serveBlob(w, r, filename, hash, st)
 }
 
 // setRetentionHandler is the explicit owner action to change a blob's expiry.

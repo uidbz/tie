@@ -343,6 +343,15 @@ func (c *Cache) Close() error {
 	return nil
 }
 
+// Trim enforces the size budget now, without admitting anything. A cache that
+// adopted a directory a previous run left behind uses this to come back inside
+// its budget at start-up rather than only when the next object arrives.
+func (c *Cache) Trim() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.evictLocked("")
+}
+
 // Stats reports the cached byte total and entry count (for logging/tests).
 func (c *Cache) Stats() (bytes int64, entries int) {
 	c.mu.Lock()
