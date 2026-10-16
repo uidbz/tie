@@ -639,13 +639,18 @@ func (ic *Collection) getReverseAssociations(level int, entryID uint64) *Associa
 	return newAssociationSet()
 }
 
-// Returns a copy of a full value
+// Returns a copy of a full value. A missing entry at any level yields nil:
+// CheckIndex deliberately samples dangling ids, and a nil-deref here would
+// crash the very report that exists to surface them.
 func (ic *Collection) getValue(level int, id uint64) []byte {
 	if level < 0 {
 		return []byte{}
 	}
 	if level == 0 {
-		return ic.getUniqueValue(0, id).Value[:]
+		if uv := ic.getUniqueValue(0, id); uv != nil {
+			return uv.Value[:]
+		}
+		return nil
 	}
 	uv := ic.getUniqueValue(level, id)
 	if uv != nil {
