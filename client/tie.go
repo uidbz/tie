@@ -64,8 +64,10 @@ type QuerySpec struct {
 	Reverse         bool
 	Expand          bool
 	Offset          int
-	Limit           int
-	SortBy          string
+	// Limit caps the number of TRIPLES returned (not rows). 0 or negative
+	// means unlimited.
+	Limit  int
+	SortBy string
 	// SortByValue orders matched keys by the value each holds under this
 	// relation (e.g. "gendb-imported-at" for chronological order). Empty = none.
 	SortByValue string
@@ -451,9 +453,16 @@ func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, err
 	request.Filter = spec.Filter
 	request.Reverse = spec.Reverse
 	request.Expand = spec.Expand
+	limit := spec.Limit
+	if limit <= 0 {
+		// 0 (and any negative) means "no limit". The server's SortOptions
+		// defaults an omitted limit to 1000, which silently truncated
+		// directory listings, version lists and tag views (issue #4).
+		limit = -1
+	}
 	request.Sort = tiedb.SortOptions{
 		Offset:             spec.Offset,
-		Limit:              spec.Limit,
+		Limit:              limit,
 		SortBy:             spec.SortBy,
 		SortByValue:        spec.SortByValue,
 		SortByValueNumeric: spec.SortByValueNumeric,

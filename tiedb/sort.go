@@ -83,6 +83,9 @@ func (ic *Collection) makeStringTriple(t Triple) StringTriple {
 
 type SortOptions struct {
 	Offset int
+	// Limit caps the number of TRIPLES (not rows). Negative means unlimited.
+	// A zero Limit gets the server default of 1000 — clients must send -1 for
+	// "no limit" (client.QueryIn maps 0 to -1; see issue #4).
 	Limit  int
 	SortBy string // Value1 to sort by
 	// SortByValue orders matched keys by the VALUE each key holds under this

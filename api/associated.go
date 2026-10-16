@@ -47,10 +47,10 @@ func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		assPtr, found = col.GetReverseAssociations(request.Key)
 	}
 	if found {
-		set, _ := col.GetTripleSet(assPtr, "", tiedb.SortOptions{})
+		set, _ := col.GetTripleSet(assPtr, "", tiedb.SortOptions{Limit: -1}) // unlimited: Associated has no limit parameter
 		set.ForEachKey(func(key string) {
 			if t, ok := col.GetAssociations(key); ok {
-				set2, _ := col.GetTripleSet(t, request.MatchValue1, tiedb.SortOptions{})
+				set2, _ := col.GetTripleSet(t, request.MatchValue1, tiedb.SortOptions{Limit: -1}) // unlimited: Associated has no limit parameter
 				set[key] = set2[key]
 			}
 		})
