@@ -28,6 +28,7 @@ import (
 // tie-type) and the parent edge are set fresh. An unchanged re-save (identical
 // bytes → identical hash) is a no-op. Returns the new content hash.
 func (tc *TieClient) WriteFile(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string) (string, error) {
+	tc = tc.In(collection)
 	return tc.WriteFileWithProgress(host, collection, parent, name, srcPath, extraTags, nil)
 }
 
@@ -35,6 +36,7 @@ func (tc *TieClient) WriteFile(host FileHost, collection string, parent DirUID, 
 // non-nil, writes each chunk of uploaded bytes to it so callers can render an
 // upload progress bar. The total byte count equals srcPath's size.
 func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string, progress io.Writer) (string, error) {
+	tc = tc.In(collection)
 	stat, err := os.Stat(srcPath)
 	if err != nil {
 		return "", err
@@ -71,7 +73,7 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 		fileType = TieFile
 	}
 
-	batch := tc.NewBatchIn(collection)
+	batch := tc.NewBatch()
 	appendTagOps(batch, TagInfo{
 		Hash:      newHash,
 		File:      name,

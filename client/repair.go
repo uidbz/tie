@@ -101,6 +101,7 @@ type repairSession struct {
 // does not re-home orphans (RepairOrphans) or touch the index (CheckIndex);
 // `tie verify --fix` composes all three.
 func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts RepairOptions) (*RepairResult, error) {
+	tie = tie.In(collection)
 	if opts.Dest == "" {
 		opts.Dest = FileURIScheme + "/restored/" + time.Now().Format("2006-01-02")
 	}
@@ -136,7 +137,7 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 		if r.ghosts[gap.Subject] {
 			continue // the ghost loop owns it
 		}
-		row, err := tie.GetIn(collection, gap.Subject)
+		row, err := tie.Get(gap.Subject)
 		if err != nil {
 			continue // raced away; the final verify will report what's left
 		}
@@ -168,7 +169,7 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 			if r.done[g] || r.liveDir[g] || r.protected[g] {
 				continue
 			}
-			row, err := tie.GetIn(collection, g)
+			row, err := tie.Get(g)
 			if err != nil {
 				r.done[g] = true // already gone
 				continue
@@ -185,7 +186,7 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 				// A child that is no live dir and not a real file is itself a
 				// ghost — enqueue so chains resolve.
 				if !r.liveDir[child] && !r.ghosts[child] {
-					if crow, err := tie.GetIn(collection, child); err == nil && !fileLike(crow) {
+					if crow, err := tie.Get(child); err == nil && !fileLike(crow) {
 						r.ghosts[child] = true
 					}
 				}

@@ -149,6 +149,7 @@ func applyArchiveOverride(sniffed, forced TieType) TieType {
 }
 
 func (tie *TieClient) ImportFile(file string, host FileHost, collection string, tags []string, directory DirUID, forcedArchive TieType) error {
+	tie = tie.In(collection)
 	fmt.Println("Importing:", file)
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
@@ -419,6 +420,7 @@ func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
 }
 
 func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, dirType string, tags []string, dest string, forcedArchive TieType) error {
+	tie = tie.In(collection)
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
@@ -486,7 +488,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 	// requests. flushThreshold bounds the in-flight batch size (memory + request
 	// size); api.Batch applies every op under a single Sync (api/batch.go).
 	const flushThreshold = 1000
-	batch := tie.NewBatchIn(collection)
+	batch := tie.NewBatch()
 	flush := func() error {
 		if len(batch.Ops) == 0 {
 			return nil
@@ -494,7 +496,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, collection string, di
 		if _, err := tie.Batch(batch); err != nil {
 			return err
 		}
-		batch = tie.NewBatchIn(collection)
+		batch = tie.NewBatch()
 		return nil
 	}
 
@@ -708,7 +710,8 @@ func parentCount(tie *TieClient, hash string) (int, error) {
 // carries) is also deleted, since the content is no longer reachable from any
 // directory. Shared content (still parented elsewhere) keeps its metadata.
 func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID) error {
-	b := tie.NewBatchIn(collection)
+	tie = tie.In(collection)
+	b := tie.NewBatch()
 	b.Delete(hash, str(TieParent), str(fromDir))
 	if _, err := tie.Batch(b); err != nil {
 		return err
@@ -727,7 +730,7 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 	if err != nil {
 		return err
 	}
-	meta := tie.NewBatchIn(collection)
+	meta := tie.NewBatch()
 	for relation, values := range row.Attributes {
 		for _, value2 := range values {
 			meta.Delete(hash, relation, value2)
@@ -746,6 +749,7 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 // is 0 the old edge is removed outright and the content is garbage-collected if
 // no directory still references it. Diagnostics go to stderr so stdout stays clean.
 func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string]bool, prevVersions int) error {
+	tie = tie.In(collection)
 	children, err := fileChildren(tie, uid)
 	if err != nil {
 		return err
@@ -765,8 +769,9 @@ func reconcileDir(tie *TieClient, collection string, uid DirUID, want map[string
 }
 
 func Tag(tie *TieClient, info TagInfo, collection string) error {
+	tie = tie.In(collection)
 	fmt.Println("tagging", info.Hash)
-	batch := tie.NewBatchIn(collection)
+	batch := tie.NewBatch()
 	appendTagOps(batch, info)
 	if _, err := tie.Batch(batch); err != nil {
 		return err
@@ -793,12 +798,13 @@ func nameFromFilename(filename string) string {
 // truncated ("map.mp3" → "ma"). It returns how many subjects were rewritten.
 // An empty collection targets the bound one.
 func (tc *TieClient) RepairNames(collection string) (int, error) {
-	rows, err := tc.allOfType(collection, str(TieFile))
+	tc = tc.In(collection)
+	rows, err := tc.allOfType(str(TieFile))
 	if err != nil {
 		return 0, err
 	}
 	fixed := 0
-	b := tc.NewBatchIn(collection)
+	b := tc.NewBatch()
 	for _, row := range rows {
 		filename := RowFirst(row, str(TieFilename))
 		if filename == "" {
@@ -818,7 +824,7 @@ func (tc *TieClient) RepairNames(collection string) (int, error) {
 			if _, err := tc.Batch(b); err != nil {
 				return fixed, err
 			}
-			b = tc.NewBatchIn(collection)
+			b = tc.NewBatch()
 		}
 	}
 	if len(b.Ops) > 0 {

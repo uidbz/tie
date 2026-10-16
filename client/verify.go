@@ -86,6 +86,7 @@ const rootPathValue = FileURIScheme + "/"
 // (unpaginated) and expands each node's forward attributes; memory is O(tree
 // size), consistent with the rest of the client.
 func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport, error) {
+	tie = tie.In(collection)
 	rep := &VerifyReport{DuplicatePaths: make(map[string][]DirUID)}
 
 	// The structural tie-type "directory" marker is written on two different
@@ -97,11 +98,11 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 	// any other content). Partition the universe on the presence of a path
 	// triple so tiedir blobs are verified as files, not mistaken for orphaned
 	// directories.
-	dirRows, err := tie.allOfType(collection, str(TieDirectory))
+	dirRows, err := tie.allOfType(str(TieDirectory))
 	if err != nil {
 		return nil, err
 	}
-	fileRows, err := tie.allOfType(collection, str(TieFile))
+	fileRows, err := tie.allOfType(str(TieFile))
 	if err != nil {
 		return nil, err
 	}
@@ -194,9 +195,10 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 
 // allOfType returns every Row carrying the structural tie-type value (e.g.
 // "directory", "file"), unpaginated, via a reverse tie-type query with
-// Expand. ErrNotFound maps to an empty set (no such items yet).
-func (tie *TieClient) allOfType(collection, typeValue string) ([]Row, error) {
-	rows, _, err := tie.QueryIn(collection, QuerySpec{
+// Expand. ErrNotFound maps to an empty set (no such items yet). It reads the
+// client's scoped collection.
+func (tie *TieClient) allOfType(typeValue string) ([]Row, error) {
+	rows, _, err := tie.Query(QuerySpec{
 		Terms:   []string{typeValue},
 		Filter:  str(TieTypeProperty),
 		Reverse: true,
@@ -333,12 +335,13 @@ const blobCheckWorkers = 16
 // hash; the work runs through a small worker pool and the result is sorted, so
 // it is the same list whatever the scheduling.
 func (tie *TieClient) checkBlobsExist(collection string, files []Row) ([]string, error) {
+	tie = tie.In(collection)
 	// The first host of the collection being verified, not of the client's
 	// bound collection: `tie verify -c other --check-blobs` has to ask the
 	// filehost that collection writes to (§8 S11). Only the first host is
 	// asked, because content-addressed blobs are identical across hosts and
 	// presence on any one is what matters for reachability.
-	host, err := tie.ResolveHostIn(collection, "")
+	host, err := tie.ResolveHost("")
 	if err != nil {
 		return nil, err
 	}
@@ -426,6 +429,7 @@ func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) 
 // are harmless (re-parenting an already-parented node just adds another parent
 // edge), but a fresh pass avoids re-homing nodes another client already fixed.
 func (tie *TieClient) RepairOrphans(collection string, rep *VerifyReport, destDir string) (int, error) {
+	tie = tie.In(collection)
 	if rep == nil || (len(rep.OrphanDirs) == 0 && len(rep.OrphanFiles) == 0) {
 		return 0, nil
 	}
@@ -440,7 +444,7 @@ func (tie *TieClient) RepairOrphans(collection string, rep *VerifyReport, destDi
 		return 0, err
 	}
 
-	batch := tie.NewBatchIn(collection)
+	batch := tie.NewBatch()
 	n := 0
 	for _, uid := range rep.OrphanDirs {
 		batch.Add(string(uid), str(TieParent), string(parentUID))
@@ -453,7 +457,7 @@ func (tie *TieClient) RepairOrphans(collection string, rep *VerifyReport, destDi
 	if _, err := tie.Batch(batch); err != nil {
 		return 0, err
 	}
-	if err := tie.SyncIn(collection); err != nil {
+	if err := tie.Sync(); err != nil {
 		return 0, err
 	}
 	return n, nil

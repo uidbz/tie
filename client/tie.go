@@ -387,6 +387,57 @@ func NewTieClient(config Config) (client *TieClient) {
 	return NewTieClientFor(config, "")
 }
 
+// sameScope reports whether two resolved collections are the same place: same
+// triplestore, credentials, namespace and collection id. The filehost list is
+// not part of it, because it does not change the transport.
+func sameScope(a, b ResolvedCollection) bool {
+	return a.TripleStoreURL == b.TripleStoreURL &&
+		a.Namespace == b.Namespace &&
+		a.Collection == b.Collection &&
+		a.Username == b.Username &&
+		a.Password == b.Password &&
+		a.Insecure == b.Insecure
+}
+
+// In returns a client scoped to the named collection: the same config, and the
+// same transport when the resolved triplestore and credentials match. It is the
+// replacement for the per-call `collection string` parameter (§3.8): a scoped
+// client cannot mix collections, because every call it makes — queries,
+// batches, sync, directory creation, host resolution — goes to one resolved
+// collection.
+//
+// The name resolves through Config.ResolveCollection, so a [Collections.x]
+// entry's triplestore, namespace, collection id, credentials and filehosts all
+// apply. That is what the parameter got wrong: it used the name verbatim as a
+// collection id inside the bound namespace, so `--collection music` wrote to a
+// collection called "music" while taking its hosts from [Collections.music].
+//
+// An empty name selects the client's own scope, and a scope that resolves to
+// exactly this client's returns this client.
+func (tc *TieClient) In(name string) *TieClient {
+	if name == "" {
+		return tc
+	}
+	active := tc.Config.ResolveCollection(name)
+	if sameScope(active, tc.active) {
+		return tc
+	}
+	sub := *tc
+	sub.active = active
+	if active.TripleStoreURL != tc.active.TripleStoreURL ||
+		active.Username != tc.active.Username ||
+		active.Password != tc.active.Password ||
+		active.Insecure != tc.active.Insecure {
+		wsc, err := ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure)
+		if err != nil {
+			sub.runErr = err
+			return &sub
+		}
+		sub.client = wsc
+	}
+	return &sub
+}
+
 // NewTieClientFor builds a client bound to the named collection (empty selects
 // the default). The transport targets that collection's resolved triplestore and
 // credentials.
@@ -694,6 +745,7 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 // fixes the divergences in memory and reports how many it fixed. The counts in
 // the report describe the state before any repair.
 func (tc *TieClient) CheckIndex(collection string, deep, repair bool) (*tiedb.IndexReport, error) {
+	tc = tc.In(collection)
 	col := tc.collectionInfo(collection)
 	request := col.NewCheckIndexRequest(deep, repair)
 

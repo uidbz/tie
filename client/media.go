@@ -311,7 +311,8 @@ func discNumberFromName(name string) int {
 // childRows returns the expanded rows of every child (files and subdirs) of a
 // directory via its reverse parent edges.
 func (tc *TieClient) childRows(collection string, uid string) ([]Row, error) {
-	rows, _, err := tc.QueryIn(collection, QuerySpec{Terms: []string{uid}, Reverse: true, Filter: str(TieParent), Expand: true, Limit: -1})
+	tc = tc.In(collection)
+	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: str(TieParent), Expand: true, Limit: -1})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -634,7 +635,8 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 }
 
 func (tc *TieClient) collectionMembersIn(collection, uid string) ([]Row, error) {
-	rows, _, err := tc.QueryIn(collection, QuerySpec{Terms: []string{uid}, Reverse: true, Filter: RelMemberOf, Expand: true, Limit: -1})
+	tc = tc.In(collection)
+	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: RelMemberOf, Expand: true, Limit: -1})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -657,14 +659,15 @@ func (tc *TieClient) EnsureAddedAt(subject string) error {
 }
 
 func (tc *TieClient) ensureAddedAtIn(collection, subject string) error {
-	row, err := tc.GetIn(collection, subject)
+	tc = tc.In(collection)
+	row, err := tc.Get(subject)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	if RowFirst(row, RelAddedAt) != "" {
 		return nil
 	}
-	b := tc.NewBatchIn(collection)
+	b := tc.NewBatch()
 	b.Set(subject, RelAddedAt, []string{addedAtFor(row, time.Now())})
 	_, err = tc.Batch(b)
 	return err
@@ -712,7 +715,7 @@ func (tc *TieClient) Backfill(opts BackfillOptions) (BackfillResult, error) {
 	archives := map[string]Row{}
 	seen := map[string]bool{}
 	for _, t := range types {
-		rows, err := tc.allOfType("", t)
+		rows, err := tc.allOfType(t)
 		if err != nil {
 			return res, err
 		}
@@ -794,7 +797,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	rows, err := tc.allOfType("", str(TieAudioFile))
+	rows, err := tc.allOfType(str(TieAudioFile))
 	if err != nil {
 		return 0, err
 	}

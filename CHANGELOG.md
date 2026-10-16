@@ -42,6 +42,15 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **`--collection X` now means X everywhere.** The client is bound to one
+  collection, and the extra `collection` argument that many methods took was
+  honoured by only some of their internal calls: `tie import --collection X`
+  wrote the file triples into X but created the directory nodes in the default
+  collection, leaving parent edges pointing at DirUIDs X has never heard of
+  (what `verify` reports as dangling parent references). `WriteFile` and
+  `RepairOrphans` mixed them the same way. The argument also named a config
+  entry loosely: `--collection music` wrote to a collection literally called
+  "music" instead of the `[Collections.music]` entry's collection.
 - **A mount rename can no longer move a directory inside itself.** `mv a a/b/x`
   over the FUSE mount or SMB succeeded and left the subtree unreachable from the
   root — the cycle `tie verify` reports. It is refused now (EINVAL on the mount),
