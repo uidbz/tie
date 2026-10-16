@@ -32,6 +32,12 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **A symlink to a directory no longer aborts a tree import.** It was
+  classified by `Lstat` as a file, hashing failed with "is a directory", and the
+  whole import stopped. Links are now followed, with the real paths of the
+  directories on the current path tracked so a link back up the tree is reported
+  as a loop instead of recursing forever. A dangling link is reported by name.
+
 - **Filenames containing TAB, LF or CR no longer corrupt tie directory
   manifests.** Such a name is legal on Linux and used to be written raw into a
   TAB/LF-delimited manifest line, so the line failed to parse and every reader

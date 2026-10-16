@@ -47,6 +47,10 @@ type Status struct {
 	LastItem      StatusItem
 	UploadedItems []StatusItem
 	ErrorMsg      string
+	// stack holds the real paths of the directories on the current recursion
+	// path, so a symlink that points back up the tree is reported instead of
+	// followed forever.
+	stack map[string]bool
 }
 
 type StatusItem struct {
@@ -235,13 +239,49 @@ func Upload(url string, file string, config PutConfig) *Status {
 }
 
 func (status *Status) upload(url string, file string, config PutConfig) {
+	// Never leave the previous item's hash behind: the caller reads LastItem to
+	// build a manifest entry, and a stale one would point a child at the wrong
+	// blob.
+	status.LastItem = StatusItem{}
+
 	fi, errStat := os.Lstat(file)
 	if errStat != nil {
 		status.ErrorMsg += "Error stat file: " + file + errStat.Error()
 		return
 	}
 
-	if fi.IsDir() {
+	// Classify a symlink by its target. Lstat reports a link to a directory as
+	// a non-directory, and hashing it then failed with "is a directory" — which
+	// aborted the whole tree import (§5.1 L15).
+	isDir := fi.IsDir()
+	if fi.Mode()&os.ModeSymlink != 0 {
+		tfi, err := os.Stat(file)
+		if err != nil {
+			status.ErrorMsg += "Error following symlink " + file + ": " + err.Error() + "\n"
+			return
+		}
+		isDir = tfi.IsDir()
+	}
+
+	if isDir {
+		// Following links means a link back up the tree would recurse forever.
+		// The real paths of the directories on the current path are the stack
+		// that a link must not re-enter.
+		if status.stack == nil {
+			status.stack = map[string]bool{}
+		}
+		real, err := filepath.EvalSymlinks(file)
+		if err != nil {
+			status.ErrorMsg += "Error resolving " + file + ": " + err.Error() + "\n"
+			return
+		}
+		if status.stack[real] {
+			status.ErrorMsg += "Skipping " + file + ": symlink loop back to " + real + "\n"
+			return
+		}
+		status.stack[real] = true
+		defer delete(status.stack, real)
+
 		entries, err := os.ReadDir(file)
 		if err != nil {
 			// Abort rather than upload a partial manifest that would look
