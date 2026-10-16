@@ -58,6 +58,12 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **Server configs with an empty password or a duplicate username are refused
+  at start-up.** `auth.BuildStore` validates `[[Users]]` for both servers: an
+  empty (or whitespace-only) password made an account authenticatable by anyone
+  who knew the name, and a duplicate username used to be silently overridden by
+  the last entry. `resolve` also never matches a blank configured password, even
+  for a Store built directly.
 - **The triplestore answers failures with real HTTP status codes.** An
   application error used to be `200 OK` with `Success:false`, an unknown request
   id was `200` with an empty body, and a request body of any size was accepted.

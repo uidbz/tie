@@ -32,6 +32,16 @@ type User struct {
 	Role string
 }
 
+// configUsers maps the config file's [[Users]] entries onto the shared
+// validating type, where duplicate names and empty passwords are refused.
+func configUsers(us []User) []auth.ConfigUser {
+	out := make([]auth.ConfigUser, 0, len(us))
+	for _, u := range us {
+		out = append(out, auth.ConfigUser{Username: u.Username, Password: u.Password, Role: u.Role})
+	}
+	return out
+}
+
 // FilehostConfig is the full tie-filehost configuration, loaded from TOML.
 // TLS is expected to be terminated by a reverse proxy in front of the filehost
 // (run Insecure on localhost); alternatively point CertFile/KeyFile at a cert
@@ -383,21 +393,16 @@ set CertFile/KeyFile to serve HTTPS directly.
 		}
 	}
 
-	users := make(map[string]auth.User, len(cfg.Users))
-	for _, u := range cfg.Users {
-		role, errRole := auth.ParseUserRole(u.Role)
-		if errRole != nil {
-			slog.Error("invalid user role in config", "user", u.Username, "err", errRole)
-			os.Exit(1)
-		}
-		users[u.Username] = auth.User{Password: u.Password, Role: role}
-	}
 	anon, errAnon := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleWrite)
 	if errAnon != nil {
 		slog.Error("invalid AnonymousAccess in config", "err", errAnon)
 		os.Exit(1)
 	}
-	authStore := auth.NewStore(users, anon)
+	authStore, errAuth := auth.BuildStore(configUsers(cfg.Users), anon)
+	if errAuth != nil {
+		slog.Error("invalid users in config", "err", errAuth)
+		os.Exit(1)
+	}
 
 	srv := &server{}
 	if err := srv.initStores(cfg); err != nil {

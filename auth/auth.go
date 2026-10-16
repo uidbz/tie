@@ -81,6 +81,41 @@ type User struct {
 	Role     Role
 }
 
+// ConfigUser is one account as it appears in a server config file, where the
+// role is still the raw string the operator wrote.
+type ConfigUser struct {
+	Username string
+	Password string
+	Role     string
+}
+
+// BuildStore validates the configured accounts and builds the Store. Both
+// checks used to be missing (§5.1 L18): a duplicate username was folded into a
+// map so the last entry silently won, and an account with an empty password
+// could be authenticated by anyone who knew the name. A server should refuse to
+// start on a broken access list rather than run with one, so both are errors
+// here.
+func BuildStore(users []ConfigUser, anon Role) (*Store, error) {
+	byName := make(map[string]User, len(users))
+	for _, u := range users {
+		if u.Username == "" {
+			return nil, fmt.Errorf("auth: a user with an empty Username")
+		}
+		if strings.TrimSpace(u.Password) == "" {
+			return nil, fmt.Errorf("auth: user %q has an empty Password", u.Username)
+		}
+		if _, dup := byName[u.Username]; dup {
+			return nil, fmt.Errorf("auth: duplicate user %q", u.Username)
+		}
+		role, err := ParseUserRole(u.Role)
+		if err != nil {
+			return nil, err
+		}
+		byName[u.Username] = User{Password: u.Password, Role: role}
+	}
+	return NewStore(byName, anon), nil
+}
+
 // Store resolves a request's role from HTTP Basic Auth credentials.
 type Store struct {
 	users map[string]User
@@ -108,6 +143,12 @@ func (s *Store) resolve(r *http.Request) (role Role, authed bool) {
 	u, ok := s.users[username] // zero User (empty password) for unknown usernames
 	// Compare either way so timing does not depend on username existence.
 	match := subtle.ConstantTimeCompare([]byte(password), []byte(u.Password)) == 1
+	// A blank configured password is never a match: it would turn "knows the
+	// username" into "is authenticated". BuildStore rejects such accounts at
+	// load; this is the belt.
+	if u.Password == "" {
+		match = false
+	}
 	if ok && match {
 		if u.Role > s.anon {
 			return u.Role, true

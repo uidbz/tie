@@ -25,6 +25,16 @@ type User struct {
 	Role string
 }
 
+// configUsers maps the config file's [[Users]] entries onto the shared
+// validating type, where duplicate names and empty passwords are refused.
+func configUsers(us []User) []auth.ConfigUser {
+	out := make([]auth.ConfigUser, 0, len(us))
+	for _, u := range us {
+		out = append(out, auth.ConfigUser{Username: u.Username, Password: u.Password, Role: u.Role})
+	}
+	return out
+}
+
 // TripleStoreConfig is the full tie-triplestore configuration, loaded from TOML.
 // It holds both the server settings and the list of accounts allowed to
 // authenticate. Access management is done by editing this file, not through the
@@ -126,21 +136,16 @@ Configuration (server settings and user accounts) is read from a TOML file.
 	defer cleanup()
 	tielog.LogVersion("tie-triplestore")
 
-	users := make(map[string]auth.User, len(cfg.Users))
-	for _, u := range cfg.Users {
-		role, err := auth.ParseUserRole(u.Role)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error in config: user %q: %v\n", u.Username, err)
-			os.Exit(1)
-		}
-		users[u.Username] = auth.User{Password: u.Password, Role: role}
-	}
 	anon, err := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleNone)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error in config:", err)
 		os.Exit(1)
 	}
-	authStore := auth.NewStore(users, anon)
+	authStore, err := auth.BuildStore(configUsers(cfg.Users), anon)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error in config:", err)
+		os.Exit(1)
+	}
 
 	reverseRelations := cfg.ReverseRelations
 	if len(reverseRelations) == 0 {
