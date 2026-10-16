@@ -43,7 +43,10 @@ type TripleStoreConfig struct {
 	LogLevel string
 	// MaxConcurrentRequests caps how many requests run at once. 0 = unbounded.
 	MaxConcurrentRequests int
-	Users                 []User
+	// LoadMemoryLimitMB is a soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while collections load from disk. 0 = runtime default.
+	LoadMemoryLimitMB int
+	Users             []User
 	// AnonymousAccess is the role granted to a request with no valid credentials:
 	// "none" (require auth for everything), "read", or "write". Empty defaults to
 	// "none", preserving the always-authenticated behavior.
@@ -159,6 +162,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		ReverseRelations:           reverseRelations,
 		CollectionReverseRelations: overrides,
 		MaxConcurrentRequests:      cfg.MaxConcurrentRequests,
+		LoadMemoryLimitMB:          cfg.LoadMemoryLimitMB,
 	}
 
 	c := api.CollectionInfo{}

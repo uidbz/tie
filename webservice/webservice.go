@@ -55,6 +55,11 @@ type WebserviceConfig struct {
 	// default. Applied at collection load time, so changes require a restart.
 	CollectionReverseRelations []CollectionReverseRelations
 
+	// LoadMemoryLimitMB is a soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while a collection is loaded from disk, bounding the peak a relaxed load
+	// pacer can otherwise reach on a small machine. 0 = runtime default.
+	LoadMemoryLimitMB int
+
 	// MaxConcurrentRequests caps how many requests execute simultaneously.
 	// Zero or negative means unbounded. tiedb is concurrency-safe, so this is a
 	// load-shedding knob, not a correctness requirement.
@@ -77,6 +82,9 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	ws.requests = requests
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
+	if config.LoadMemoryLimitMB > 0 {
+		ws.db.SetLoadMemoryLimit(int64(config.LoadMemoryLimitMB) * 1024 * 1024)
+	}
 	if len(config.CollectionReverseRelations) > 0 {
 		overrides := make(map[tiedb.CollectionKey][]string, len(config.CollectionReverseRelations))
 		for _, o := range config.CollectionReverseRelations {

@@ -137,7 +137,10 @@ type Collection struct {
 	freespaceMutex sync.Mutex
 
 	writeToDisk bool
-	finished    sync.WaitGroup
+	// loadMemoryLimit is a soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while this collection loads from disk. 0 = runtime default.
+	loadMemoryLimit int64
+	finished        sync.WaitGroup
 	// writerDone closes when the writer goroutine exits; Sync selects on it so
 	// a barrier queued against an already-stopped writer cannot hang.
 	writerDone chan struct{}

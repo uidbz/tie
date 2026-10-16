@@ -151,6 +151,12 @@ func (t *Collection) loadDB(filename string) error {
 	// fewer collections) and restore it afterwards.
 	prevGC := debug.SetGCPercent(200)
 	defer debug.SetGCPercent(prevGC)
+	// A soft heap ceiling bounds the peak the relaxed pacer is allowed to
+	// reach; without it, GOGC=200 on a small machine can OOM a load.
+	if t.loadMemoryLimit > 0 {
+		prevLimit := debug.SetMemoryLimit(t.loadMemoryLimit)
+		defer debug.SetMemoryLimit(prevLimit)
+	}
 
 	// Two passes over the file: entries first, then associations. Associations
 	// resolve their relation string against the entries trie (shouldBuildReverse),

@@ -36,6 +36,10 @@ type TieTree struct {
 	// blobPolicy is applied to every Collection this DB creates. nil keeps the
 	// trie-only behavior; see Collection.blobPolicy and [[BlobPolicy]].
 	blobPolicy *BlobPolicy
+
+	// loadMemoryLimit is the soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while bulk-loading a collection. 0 leaves the runtime default alone.
+	loadMemoryLimit int64
 }
 
 // SetBlobPolicy sets a whole-value blob policy applied to newly created
@@ -90,6 +94,12 @@ type pendingLoad struct {
 // error state — reads answer empty, every write reports Err() — instead of the
 // library calling os.Exit and taking the whole triplestore down with it. Use
 // TryGetCollection when you want that error explicitly.
+// SetLoadMemoryLimit sets a soft heap ceiling (in bytes, GOMEMLIMIT
+// semantics) that applies while a collection is loaded from disk. A bulk load
+// with a relaxed GC pacer can otherwise spike the heap on a small machine;
+// the limit bounds that peak instead of leaving it to GOGC alone. 0 disables.
+func (db *TieTree) SetLoadMemoryLimit(bytes int64) { db.loadMemoryLimit = bytes }
+
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 	col, _ := db.TryGetCollection(key)
 	return col
@@ -216,6 +226,7 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	}
 	ic.SetReverseRelations(reverse)
 	ic.SetBlobPolicy(db.blobPolicy)
+	ic.loadMemoryLimit = db.loadMemoryLimit
 
 	if db.writeToDisk {
 		slog.Info("initializing collection", "path", ic.dBFullPath)
