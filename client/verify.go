@@ -16,8 +16,9 @@ package client
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
+
+	"github.com/uidbz/tie/io/fhclient"
 	"strings"
 	"time"
 )
@@ -337,7 +338,7 @@ func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
 	}
-	hc := HTTPClientFor(host)
+	fh := fhclient.New(host.URL, HTTPClientFor(host))
 
 	var missing []string
 	for _, row := range files {
@@ -345,7 +346,7 @@ func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 		if len(hash) != 64 {
 			continue // not a content hash (shouldn't happen for a file); skip
 		}
-		ok, err := blobExists(hc, host.URL, hash)
+		ok, _, err := fh.Stat(hash)
 		if err != nil {
 			return missing, err
 		}
@@ -354,29 +355,6 @@ func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 		}
 	}
 	return missing, nil
-}
-
-// blobExists issues a HEAD request for hash against the filehost and reports
-// whether the blob is present (200) or absent (404). Any other status or a
-// transport error is surfaced as an error rather than misreported as absence.
-func blobExists(hc *http.Client, baseURL, hash string) (bool, error) {
-	req, err := http.NewRequest(http.MethodHead, baseURL+"/"+hash, nil)
-	if err != nil {
-		return false, err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		return false, fmt.Errorf("filehost stat %s: unexpected status %s", hash, resp.Status)
-	}
 }
 
 // StatBlob issues a HEAD for hash against the first configured default filehost
@@ -392,25 +370,7 @@ func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) 
 	if !ok {
 		return false, 0, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
 	}
-	hc := HTTPClientFor(host)
-
-	req, err := http.NewRequest(http.MethodHead, host.URL+"/"+hash, nil)
-	if err != nil {
-		return false, 0, err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return false, 0, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, resp.ContentLength, nil
-	case http.StatusNotFound:
-		return false, 0, nil
-	default:
-		return false, 0, fmt.Errorf("filehost stat %s: unexpected status %s", hash, resp.Status)
-	}
+	return fhclient.New(host.URL, HTTPClientFor(host)).Stat(hash)
 }
 
 // RepairOrphans re-homes every orphan in rep under a timestamped restored/

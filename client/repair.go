@@ -34,7 +34,6 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +41,7 @@ import (
 
 	"github.com/h2non/filetype"
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/fhclient"
 )
 
 // RepairOptions configures RepairTree.
@@ -92,8 +92,7 @@ type repairSession struct {
 	handled   map[string]bool   // child\x00parent edges already re-parented
 	destUID   string
 
-	blobHC  *http.Client
-	blobURL string
+	fh *fhclient.Client
 }
 
 // RepairTree fixes the dangling-reference, ghost-node and file-metadata
@@ -432,73 +431,44 @@ func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
 	return ops, nil
 }
 
-// blobClient returns the shared filehost HTTP client + base URL, built once
-// from the collection's first resolved host. One client for the whole run:
-// per-subject clients exhaust fds on large collections via TIME_WAIT pileup.
-func (r *repairSession) blobClient() (*http.Client, string, error) {
-	if r.blobHC != nil {
-		return r.blobHC, r.blobURL, nil
+// blobFH returns the shared filehost client, built once from the collection's
+// first resolved host. One client for the whole run: per-subject clients
+// exhaust fds on large collections via TIME_WAIT pileup.
+func (r *repairSession) blobFH() (*fhclient.Client, error) {
+	if r.fh != nil {
+		return r.fh, nil
 	}
 	hosts := r.tie.ResolveHosts(r.collection, nil)
 	if len(hosts) == 0 {
-		return nil, "", fmt.Errorf("no filehosts configured")
+		return nil, fmt.Errorf("no filehosts configured")
 	}
 	host, ok := r.tie.Config.FileHosts[hosts[0]]
 	if !ok {
-		return nil, "", fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
+		return nil, fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
 	}
-	r.blobHC = HTTPClientFor(host)
-	r.blobURL = strings.TrimRight(host.URL, "/")
-	return r.blobHC, r.blobURL, nil
+	r.fh = fhclient.New(host.URL, HTTPClientFor(host))
+	return r.fh, nil
 }
 
 // statBlob is StatBlob over the shared client: existence + size from a HEAD.
 func (r *repairSession) statBlob(hash string) (bool, int64, error) {
-	hc, base, err := r.blobClient()
+	fh, err := r.blobFH()
 	if err != nil {
 		return false, 0, err
 	}
-	req, err := http.NewRequest(http.MethodHead, base+"/"+hash, nil)
-	if err != nil {
-		return false, 0, err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return false, 0, err
-	}
-	resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, resp.ContentLength, nil
-	case http.StatusNotFound:
-		return false, 0, nil
-	default:
-		return false, 0, fmt.Errorf("filehost stat %s: %s", short(hash), resp.Status)
-	}
+	return fh.Stat(hash)
 }
 
 // blobHead fetches the first bytes of a blob for sniffing via an HTTP Range
-// request (the filehost serves blobs with http.ServeFile, which honors Range;
-// if it didn't, we simply read the prefix and close).
+// request (the filehost serves blobs with http.ServeContent, which honors
+// Range; if it doesn't, the whole body comes back and is simply discarded).
 func (r *repairSession) blobHead(hash string) ([]byte, error) {
-	hc, base, err := r.blobClient()
+	fh, err := r.blobFH()
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, base+"/"+hash, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Range", "bytes=0-511")
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return nil, fmt.Errorf("filehost GET %s: %s", short(hash), resp.Status)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 512))
+	data, _, err := fh.GetRange(hash, 512)
+	return data, err
 }
 
 // extFor maps a sniffed media type to a filename extension. Unknown types get

@@ -3,18 +3,15 @@ package putlib
 
 import (
 	"bufio"
-	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/h2non/filetype"
 
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/metadata"
 )
 
@@ -47,6 +44,9 @@ type Status struct {
 	LastItem      StatusItem
 	UploadedItems []StatusItem
 	ErrorMsg      string
+	// fh is the filehost client for this upload run: one client, so a whole
+	// tree import shares its connections.
+	fh *fhclient.Client
 	// stack holds the real paths of the directories on the current recursion
 	// path, so a symlink that points back up the tree is reported instead of
 	// followed forever.
@@ -76,85 +76,83 @@ func (pc *PutConfig) AddressOf(input io.Reader) (string, error) { // function to
 	return metadata.HashReader(input)
 }
 
-func (pc *PutConfig) UploadFile(url string, path string) StatusItem {
+// UploadFile uploads the file at path under the content address hash.
+func (pc *PutConfig) UploadFile(fh *fhclient.Client, hash, path string) StatusItem {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
-		return StatusItem{ErrorMsg: err.Error()}
+		return StatusItem{ErrorMsg: err.Error(), Filename: path}
 	}
 	defer f.Close()
 
 	fi, err := os.Stat(path)
 	if err != nil {
-		return StatusItem{ErrorMsg: err.Error()}
+		return StatusItem{ErrorMsg: err.Error(), Filename: path}
 	}
 
-	return pc.UploadMultipart(url, f, int(fi.Size()), path)
+	return pc.UploadMultipart(fh, hash, f, int(fi.Size()), path)
 }
 
-// progressSink wraps a progress writer to discard its errors. Upload progress
-// is cosmetic, and the total written can legitimately exceed the bar's max: a
-// directory upload streams one tiedir manifest per directory on top of the file
-// bytes the max was sized from, which makes the bar return "current number
-// exceeds max". io.TeeReader would propagate that error into the request body
-// read and tear down the in-flight stream, so swallow it.
-type progressSink struct{ w io.Writer }
+// UploadMultipart uploads a reader under the content address hash. The head
+// bytes are sampled here, before the body is consumed, because they are what
+// classifies the entry in the parent manifest and what the media type is
+// derived from; the transfer, the headers and the status handling are
+// fhclient's.
+func (pc *PutConfig) UploadMultipart(fh *fhclient.Client, hash string, f io.Reader, length int, path string) StatusItem {
+	bufferedFileReader := bufio.NewReader(f)
+	b, _ := bufferedFileReader.Peek(metadata.MagicNumber) // returns available bytes even for short files
+	head := append([]byte(nil), b...)
+	contentType := "application/octet-stream"
+	if t, err := filetype.Get(b); err == nil {
+		contentType = t.MIME.Value
+	}
 
-func (s progressSink) Write(p []byte) (int, error) {
-	_, _ = s.w.Write(p)
-	return len(p), nil
+	answer, err := fh.Put(hash, bufferedFileReader, int64(length), fhclient.PutOptions{
+		MediaType:  contentType,
+		Retention:  pc.Retention,
+		OwnerToken: pc.OwnerToken,
+		Store:      pc.Store,
+		Progress:   pc.Progress,
+	})
+	if err != nil {
+		return StatusItem{
+			ErrorMsg:  err.Error(),
+			Filename:  path,
+			MediaType: contentType,
+			Size:      length,
+			Head:      head,
+		}
+	}
+	return StatusItem{
+		Hash:      answer,
+		Filename:  path,
+		MediaType: contentType,
+		Size:      length,
+		Head:      head,
+	}
 }
 
-// exists asks the filehost whether it already holds this content address
-// (HEAD /{hash}). putlib asks before streaming a body: the server would answer
-// an upload of existing content without reading it, but the client still pays
-// to read the file and send every byte — re-importing a library used to move
-// the whole library across the wire for nothing (§5.2 item 2).
+// alreadyStored asks the filehost whether it holds this content address at the
+// expected size (HEAD /{hash}) before streaming a body: the server answers an
+// upload of existing content without reading it, but the client still pays to
+// read the file and send every byte — re-importing a library used to move the
+// whole library across the wire for nothing (§5.2 item 2).
 //
 // The answer must also report the same length we are about to send: a 200 from
 // something that is not a tie filehost (a proxy, a stub) must never be taken as
 // "stored", or the manifest would reference a blob that does not exist. Any
 // other answer — 404, a 403 from a read-restricted token, a transport error —
 // means "upload it", so this can only ever save work.
-func (pc *PutConfig) exists(uploadURL, hash string, size int64) bool {
-	req, err := http.NewRequest(http.MethodHead, blobURL(uploadURL, hash), nil)
-	if err != nil {
-		return false
-	}
-	httpClient := pc.Client
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer func() {
-		if resp.Body != nil {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-		}
-	}()
-	return resp.StatusCode == http.StatusOK && resp.ContentLength == size
-}
-
-// blobURL turns the upload endpoint back into the read endpoint, where HEAD
-// answers whether the store holds the content.
-func blobURL(uploadURL, hash string) string {
-	return strings.TrimSuffix(uploadURL, "upload/") + hash
+func (status *Status) alreadyStored(hash string, size int64) bool {
+	ok, got, err := status.fh.Stat(hash)
+	return err == nil && ok && got == size
 }
 
 // existingItem describes a blob the filehost already has, so the caller can
 // report it (and write its manifest entry) without reading the whole file. The
 // head bytes still have to be sampled: they are what classifies an entry as a
 // directory and let the media type be recomputed downstream.
-func (pc *PutConfig) existingItem(hash, path string, head []byte, mediaType string, size int) StatusItem {
-	return StatusItem{
-		Hash:      hash,
-		Filename:  path,
-		MediaType: mediaType,
-		Size:      size,
-		Head:      head,
-	}
+func existingItem(hash, path, mediaType string, size int, head []byte) StatusItem {
+	return StatusItem{Hash: hash, Filename: path, MediaType: mediaType, Size: size, Head: head}
 }
 
 // headOf returns the first metadata.MagicNumber bytes of s, the same prefix
@@ -186,91 +184,6 @@ func fileHead(path string) (head []byte, size int, mediaType string) {
 	return head, size, mediaType
 }
 
-func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path string) StatusItem {
-	var (
-		writeErr error // Store the first write error in writeErr.
-		errOnce  sync.Once
-	)
-	check := func(err error) {
-		if err != nil {
-			errOnce.Do(func() { writeErr = err })
-		}
-	}
-
-	bufferedFileReader := bufio.NewReader(f)
-
-	var reqBody io.Reader = bufferedFileReader
-	if pc.Progress != nil {
-		reqBody = io.TeeReader(bufferedFileReader, progressSink{pc.Progress})
-	}
-	req, err := http.NewRequest(http.MethodPut, url, reqBody)
-	check(err)
-
-	contentType := "application/octet-stream"
-	b, _ := bufferedFileReader.Peek(metadata.MagicNumber) // returns available bytes even for short files
-	head := append([]byte(nil), b...)
-	if t, err := filetype.Get(b); err == nil {
-		contentType = t.MIME.Value
-	}
-	req.Header.Add("Content-Type", contentType)
-	req.Header.Add("Content-Length", strconv.Itoa(length))
-	if pc.Retention != "" {
-		req.Header.Add("Tie-Retention", pc.Retention)
-	}
-	if pc.OwnerToken != "" {
-		req.Header.Add("Tie-Owner", pc.OwnerToken)
-	}
-	if pc.Store != "" {
-		req.Header.Add("Tie-Store", pc.Store)
-	}
-
-	httpClient := pc.Client
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	resp, err := httpClient.Do(req)
-	defer func() {
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-	}()
-
-	check(err)
-
-	body := make([]byte, 0)
-	if resp == nil {
-		check(errors.New("Empty response received"))
-	} else {
-		body, err = io.ReadAll(resp.Body)
-		check(err)
-		// A non-2xx body is an error message (401/403 from auth, 400 for a bad
-		// store/retention, 5xx), not a hash. Surface it instead of letting the
-		// caller's checksum compare turn it into a misleading "checksum failed".
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			msg := strings.TrimSpace(string(body))
-			if msg == "" {
-				msg = http.StatusText(resp.StatusCode)
-			}
-			check(fmt.Errorf("filehost returned %d: %s", resp.StatusCode, msg))
-			body = nil
-		}
-	}
-
-	var errorMsg string
-	if writeErr != nil {
-		errorMsg = writeErr.Error()
-	}
-
-	return StatusItem{
-		Hash:      string(body),
-		ErrorMsg:  errorMsg,
-		Filename:  path,
-		MediaType: contentType,
-		Size:      length,
-		Head:      head,
-	}
-}
-
 func (status *Status) validateURL(url string) string {
 	if len(url) < 5 {
 		status.ErrorMsg = "Url to short"
@@ -292,6 +205,8 @@ func Upload(url string, file string, config PutConfig) *Status {
 	if status.ErrorMsg != "" {
 		return status
 	}
+	status.fh = fhclient.New(strings.TrimSuffix(url, "upload/"), config.Client)
+	status.fh.Store = config.Store
 
 	// Change workdir temporarily to input dir, to get relative paths in dir enumeration
 	if config.PathToWorkdir {
@@ -315,12 +230,12 @@ func Upload(url string, file string, config PutConfig) *Status {
 		}
 	}
 
-	status.upload(url, file, config)
+	status.upload(file, config)
 
 	return status
 }
 
-func (status *Status) upload(url string, file string, config PutConfig) {
+func (status *Status) upload(file string, config PutConfig) {
 	// Never leave the previous item's hash behind: the caller reads LastItem to
 	// build a manifest entry, and a stale one would point a child at the wrong
 	// blob.
@@ -384,7 +299,7 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 				return
 			}
 			abs := filepath.Join(file, name)
-			status.upload(url, abs, config)
+			status.upload(abs, config)
 			if status.ErrorMsg != "" {
 				return
 			}
@@ -404,11 +319,11 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 			status.ErrorMsg += "Error hashing directory " + file + ": " + err.Error() + "\n"
 			return
 		}
-		if config.exists(url, localhash, int64(len(hashes))) {
-			validate(localhash, config.existingItem(localhash, file, headOf(hashes), "inode/directory", len(hashes)), status)
+		if status.alreadyStored(localhash, int64(len(hashes))) {
+			validate(localhash, existingItem(localhash, file, "inode/directory", len(hashes), headOf(hashes)), status)
 			return
 		}
-		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), len(hashes), file)
+		uploadStatus := config.UploadMultipart(status.fh, localhash, strings.NewReader(hashes), len(hashes), file)
 		uploadStatus.MediaType = "inode/directory"
 		validate(localhash, uploadStatus, status)
 	} else {
@@ -418,11 +333,11 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 			return
 		}
 		head, headSize, mediaType := fileHead(file)
-		if config.exists(url, localhash, int64(headSize)) {
-			validate(localhash, config.existingItem(localhash, file, head, mediaType, headSize), status)
+		if status.alreadyStored(localhash, int64(headSize)) {
+			validate(localhash, existingItem(localhash, file, mediaType, headSize, head), status)
 			return
 		}
-		uploadStatus := config.UploadFile(url+localhash, file)
+		uploadStatus := config.UploadFile(status.fh, localhash, file)
 		validate(localhash, uploadStatus, status)
 	}
 }

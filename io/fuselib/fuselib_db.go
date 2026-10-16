@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/io/tiefs"
 )
 
@@ -45,7 +46,7 @@ func NewTieDBFuse(tie *client.TieClient, host client.FileHost, cacheSizeGB int, 
 	store := tiesfs.NewStore(host, cacheSizeGB, verify)
 	return &TieDBFuse{
 		tree:     tiesfs.NewTreeWithStore(store, tie),
-		fuseTree: &TieFuse{store: store, config: config{filehost: host.URL, client: client.HTTPClientFor(host), verify: verify}},
+		fuseTree: &TieFuse{store: store, config: config{fh: fhclient.New(host.URL, client.HTTPClientFor(host)), verify: verify}},
 	}
 }
 

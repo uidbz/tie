@@ -69,6 +69,15 @@ to follow semantic versioning.
   returns an error instead of `nil` for a bad URL, and a non-2xx answer becomes a
   `*StatusError` (`errors.Is` works with `ErrUnauthorized`/`ErrForbidden`) instead
   of a JSON syntax error.
+- **One filehost HTTP client: `io/fhclient`.** Three places implemented
+  "HEAD a blob" and two implemented a ranged GET, each deciding on its own what
+  a status code means (verify treated a 403 as "missing", repair printed the
+  short hash, the media rescan accepted 206 while getlib rejected anything but
+  200). `fhclient.Client` now owns `Stat`, `Get`, `GetContent`, `GetRange`, `Put`
+  and `Version`, validates the content address before it reaches a URL, and
+  `io/putlib`, `io/getlib`, the tiefs cache producer and the FUSE content read
+  are built on it. `putlib.UploadFile`/`UploadMultipart` take the filehost client
+  and the content address instead of a full upload URL.
 - **Server configs with an empty password or a duplicate username are refused
   at start-up.** `auth.BuildStore` validates `[[Users]]` for both servers: an
   empty (or whitespace-only) password made an account authenticatable by anyone

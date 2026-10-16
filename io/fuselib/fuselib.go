@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"net/http"
 	"syscall"
 	"time"
 
@@ -16,6 +14,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/uidbz/tie/client"
 	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/io/tiefs"
 	"github.com/uidbz/tie/metadata"
 )
@@ -40,14 +39,14 @@ func (state *TieFuse) Close() error {
 func NewTieFuse(host client.FileHost, cacheSizeGB int, verify bool) *TieFuse {
 	return &TieFuse{
 		store:  tiesfs.NewStore(host, cacheSizeGB, verify),
-		config: config{filehost: host.URL, client: client.HTTPClientFor(host), verify: verify},
+		config: config{fh: fhclient.New(host.URL, client.HTTPClientFor(host)), verify: verify},
 	}
 }
 
 type config struct {
-	filehost string
-	client   *http.Client
-	verify   bool
+	// fh is the filehost client shared by every content read of the mount.
+	fh     *fhclient.Client
+	verify bool
 }
 
 func (state *TieFuse) inodeID(hash string) uint64 { return state.store.InodeID(hash) }
@@ -240,20 +239,16 @@ func (n *node) inodeKey() string {
 const dirHeader = metadata.DirHeader
 
 func (state *TieFuse) listContent(sourceHash string) (*node, error) {
-	if !metadata.IsHexHash(sourceHash) {
-		return nil, fmt.Errorf("fuselib: invalid content hash %q", sourceHash)
-	}
-	resp, err := state.config.client.Get(state.config.filehost + "/" + sourceHash)
+	// fhclient validates the content address and the status, so a crafted
+	// hash never reaches a URL and a non-200 is an error rather than an empty
+	// directory.
+	rc, err := state.config.fh.Get(sourceHash)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer rc.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(rc)
 	if err != nil {
 		return nil, err
 	}

@@ -74,7 +74,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"path"
 	"regexp"
 	"slices"
@@ -85,6 +84,7 @@ import (
 	"time"
 
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/metadata"
 )
 
@@ -808,8 +808,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	if workers <= 0 {
 		workers = 8
 	}
-	hc := HTTPClientFor(host)
-	base := strings.TrimRight(host.URL, "/") + "/"
+	fh := fhclient.New(host.URL, HTTPClientFor(host))
 	type result struct {
 		hash string
 		ops  func(b *api.Batch)
@@ -823,7 +822,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 		go func() {
 			defer wg.Done()
 			for r := range jobs {
-				m, err := fetchAudioMeta(hc, base+r.Key)
+				m, err := fetchAudioMeta(fh, r.Key)
 				res := result{hash: r.Key, err: err}
 				if err == nil {
 					row := r
@@ -898,35 +897,22 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	return updated, firstErr
 }
 
-// fetchAudioMeta reads a blob's audio tags, trying a ranged head fetch
-// before the whole blob.
-func fetchAudioMeta(hc *http.Client, url string) (metadata.Media, error) {
-	get := func(ranged bool) ([]byte, bool, error) {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			return nil, false, err
-		}
-		if ranged {
-			req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", rescanHeadBytes-1))
-		}
-		resp, err := hc.Do(req)
-		if err != nil {
-			return nil, false, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-			return nil, false, fmt.Errorf("GET %s: %s", url, resp.Status)
-		}
-		data, err := io.ReadAll(resp.Body)
-		return data, resp.StatusCode == http.StatusPartialContent, err
-	}
-	data, partial, err := get(true)
+// fetchAudioMeta reads a blob's audio tags, trying a ranged head fetch before
+// the whole blob. A server that ignores Range hands back the whole body, so no
+// second request is needed.
+func fetchAudioMeta(fh *fhclient.Client, hash string) (metadata.Media, error) {
+	data, partial, err := fh.GetRange(hash, rescanHeadBytes)
 	if err != nil {
 		return metadata.Media{}, err
 	}
 	m := ExtractMediaMetadataFrom(bytes.NewReader(data))
 	if partial && m.Title == "" && m.Album == "" && m.Artist == "" {
-		data, _, err = get(false)
+		body, err := fh.Get(hash)
+		if err != nil {
+			return metadata.Media{}, err
+		}
+		defer body.Close()
+		data, err = io.ReadAll(body)
 		if err != nil {
 			return metadata.Media{}, err
 		}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/uidbz/tie/internal/diskcache"
 	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/metadata"
 )
 
@@ -27,9 +28,10 @@ import (
 // internal/diskcache — the same engine the filehost read cache uses. This type
 // only supplies the producers: an HTTP fetch, or extracting one archive member.
 type Cache struct {
-	filehost string
-	client   *http.Client
-	verify   bool // hash downloaded bytes and check against their content address
+	// fh is the filehost client: one per Cache, so its connections are pooled
+	// across every blob the mount touches.
+	fh     *fhclient.Client
+	verify bool // hash downloaded bytes and check against their content address
 
 	dc *diskcache.Cache
 	// newErr records a failure to create the cache directory; every read then
@@ -42,7 +44,7 @@ type Cache struct {
 // downloaded bytes are hashed and checked against their content address (off
 // for a trusted filehost, on when the filehost is untrusted).
 func NewCache(filehostURL string, client *http.Client, maxBytes int64, verify bool) *Cache {
-	c := &Cache{filehost: filehostURL, client: client, verify: verify}
+	c := &Cache{fh: fhclient.New(filehostURL, client), verify: verify}
 	dir, err := os.MkdirTemp("", "tie-cache-")
 	if err != nil {
 		c.newErr = fmt.Errorf("tiesfs: creating cache directory: %w", err)
@@ -96,14 +98,11 @@ func (c *Cache) get(key string, produce func(io.Writer) error) (*diskcache.Handl
 // verification is on. Memory use is bounded by the copy buffer, not the blob
 // size, so blobs larger than RAM (or the cache budget) serve fine.
 func (c *Cache) fetch(hash string, w io.Writer) error {
-	resp, err := c.client.Get(c.filehost + "/" + hash)
+	body, err := c.fh.Get(hash)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("tiesfs: bad status %s", resp.Status)
-	}
+	defer body.Close()
 
 	var dst io.Writer = w
 	var h stdhash.Hash
@@ -114,7 +113,7 @@ func (c *Cache) fetch(hash string, w io.Writer) error {
 		}
 		dst = io.MultiWriter(w, h)
 	}
-	if _, err := io.Copy(dst, resp.Body); err != nil {
+	if _, err := io.Copy(dst, body); err != nil {
 		return err
 	}
 	if c.verify {
