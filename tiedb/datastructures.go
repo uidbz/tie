@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -21,6 +22,10 @@ const (
 
 	FILE_ADD    = 0
 	FILE_DELETE = 1
+	// FILE_BARRIER is not a record: it carries a Done channel that the writer
+	// closes after fsyncing, once every write queued before it has been
+	// applied. See Collection.Sync.
+	FILE_BARRIER = 2
 
 	// These values get written to the db files
 	TYPE_DELETE      = 10
@@ -132,10 +137,14 @@ type Collection struct {
 	freespace      []int64
 	freespaceMutex sync.Mutex
 
-	writeToDisk    bool
-	finished       sync.WaitGroup
-	finishedAdding sync.WaitGroup
-	db_size        int64
+	writeToDisk bool
+	finished    sync.WaitGroup
+	// writerDone closes when the writer goroutine exits; Sync selects on it so
+	// a barrier queued against an already-stopped writer cannot hang.
+	writerDone chan struct{}
+	// closed is set by closeDB; Sync returns immediately once set.
+	closed  atomic.Bool
+	db_size int64
 }
 
 type UniqueValue struct {
@@ -298,6 +307,9 @@ type FileMod struct {
 	EntryID     uint64
 	UniqueValue *UniqueValue
 	HashValue   [32]byte
+	// Done closes once the writer has applied this mod. Only FILE_BARRIER sets
+	// it.
+	Done chan struct{}
 }
 
 type ReadRequest struct {

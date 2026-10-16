@@ -55,11 +55,31 @@ func (ic *Collection) reverseAssociationsTree(level int) (*lockedTree[uint64, *A
 	return nil, false
 }
 
+// Sync is an explicit durability request: it blocks until every write queued
+// before this call has been applied to the collection file and the file has
+// been fsynced. It does NOT wait for other callers' writes — the old
+// WaitGroup-based Sync did, which both starved under a steady import from
+// another client and misused the WaitGroup (Add with a positive delta
+// concurrent with Wait can panic).
+//
+// Callers do not need Sync for correctness: the in-memory index is updated
+// synchronously and readSlot drains the queue, so reads are already
+// read-your-writes. Sync only bounds what a crash can lose.
 func (ic *Collection) Sync() {
-	ic.finishedAdding.Wait()
+	if !ic.writeToDisk || ic.closed.Load() {
+		return
+	}
+	ch := make(chan struct{})
+	ic.dBWriteQueue <- FileMod{Mode: FILE_BARRIER, Done: ch}
+	select {
+	case <-ch:
+	case <-ic.writerDone:
+		// The writer shut down; it drained and synced on the way out.
+	}
 }
 
 func (ic *Collection) closeDB() {
+	ic.closed.Store(true)
 	// Signal the writer to drain any queued writes, sync, and close the fd, then
 	// wait for it to exit (it calls finished.Done() on return). Do NOT close
 	// dBWriteQueue: nothing ranges over it, and a closed channel would make the

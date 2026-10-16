@@ -70,7 +70,6 @@ func (ic *Collection) addLocked(key string, value1 string, value2 string) {
 		// The old order (index, then enqueue) let a RECLAIMED slot be read as
 		// its old tombstone: ReadAt succeeded with stale bytes, decoding
 		// failed, and the triple silently vanished from that query.
-		ic.finishedAdding.Add(1)
 		ic.dBWriteQueue <- FileMod{
 			EntryType: TYPE_ASSOCIATION,
 			Level:     keyLevel,

@@ -712,9 +712,6 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 	if _, err := tie.Batch(b); err != nil {
 		return err
 	}
-	if err := tie.Sync(); err != nil {
-		return err
-	}
 	n, err := parentCount(tie, hash)
 	if err != nil {
 		return err
@@ -738,7 +735,7 @@ func detachChild(tie *TieClient, collection string, hash string, fromDir DirUID)
 	if _, err := tie.Batch(meta); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // reconcileDir makes dir's file children match what this import placed there
@@ -1197,7 +1194,7 @@ func RenameFile(tie *TieClient, hash string, oldParent, newParent DirUID, newNam
 	if _, err := tie.Batch(batch); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // RenameDir renames and/or moves a directory in the path tree. A directory's
@@ -1237,7 +1234,7 @@ func RenameDir(tie *TieClient, uid DirUID, oldPath, newPath string, oldParent, n
 	if _, err := tie.Batch(batch); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // collectDescendantDirs walks the path tree under root (breadth-first via
@@ -1294,9 +1291,6 @@ func DeleteDir(tie *TieClient, uid DirUID, parent DirUID) error {
 	if _, err := tie.Batch(batch); err != nil {
 		return err
 	}
-	if err := tie.Sync(); err != nil {
-		return err
-	}
 
 	n, err := parentCount(tie, string(uid))
 	if err != nil {
@@ -1321,7 +1315,7 @@ func DeleteDir(tie *TieClient, uid DirUID, parent DirUID) error {
 	if _, err := tie.Batch(meta); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // GetTags returns the tags currently attached to a content hash, sorted. It
@@ -1386,7 +1380,7 @@ func SetTags(tie *TieClient, hash string, newTags []string) error {
 	if _, err := tie.Batch(batch); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // TaggedFile is one entry in a tag-derived virtual directory: its content hash
@@ -1473,7 +1467,7 @@ func (tie *TieClient) RegisterTag(tag string) error {
 	if _, err := tie.Add(str(TieTags), str(TieAll), tag); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // DeleteTag removes tag from every item that carries it and from the
@@ -1505,9 +1499,6 @@ func (tie *TieClient) DeleteTag(tag string) (int, error) {
 	reg := tie.NewBatch()
 	reg.Delete(str(TieTags), str(TieAll), tag)
 	if _, err := tie.Batch(reg); err != nil {
-		return 0, err
-	}
-	if err := tie.Sync(); err != nil {
 		return 0, err
 	}
 	return len(subjects), nil
@@ -1551,9 +1542,6 @@ func (tie *TieClient) RenameTag(oldTag, newTag string) (int, error) {
 	reg.Delete(str(TieTags), str(TieAll), oldTag)
 	reg.Add(str(TieTags), str(TieAll), newTag)
 	if _, err := tie.Batch(reg); err != nil {
-		return 0, err
-	}
-	if err := tie.Sync(); err != nil {
 		return 0, err
 	}
 	return len(subjects), nil
@@ -1980,7 +1968,7 @@ func SetDirTypes(tie *TieClient, uid DirUID, newLabels []string) error {
 	if _, err := tie.Batch(batch); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // ListDirTypes returns the dir-type classification labels known to the store: the

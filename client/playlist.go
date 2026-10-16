@@ -162,7 +162,7 @@ func (tc *TieClient) CreatePlaylist(name string, hashes []string, tags []string)
 	if _, err := tc.Batch(b); err != nil {
 		return "", fmt.Errorf("create playlist: %w", err)
 	}
-	return uid, tc.Sync()
+	return uid, nil
 }
 
 // ReadPlaylist fetches one playlist.
@@ -247,7 +247,7 @@ func (tc *TieClient) SetPlaylistTracks(uid string, hashes []string) error {
 	if _, err := tc.Batch(b); err != nil {
 		return fmt.Errorf("set playlist tracks: %w", err)
 	}
-	return tc.Sync()
+	return nil
 }
 
 // RenamePlaylist changes a playlist's name.
@@ -292,7 +292,7 @@ func (tc *TieClient) DeletePlaylist(uid string) error {
 	if _, err := tc.Batch(b); err != nil {
 		return fmt.Errorf("delete playlist: %w", err)
 	}
-	return tc.Sync()
+	return nil
 }
 
 // MigrateLegacyPlaylists converts every legacy playlist (an audio-dir with
@@ -354,5 +354,5 @@ func (tc *TieClient) migratePlaylists(legacy []Playlist) (int, error) {
 	if _, err := tc.Batch(b); err != nil {
 		return 0, fmt.Errorf("migrate playlists: %w", err)
 	}
-	return len(legacy), tc.Sync()
+	return len(legacy), nil
 }

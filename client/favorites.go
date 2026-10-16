@@ -37,7 +37,7 @@ func (tie *TieClient) RegisterFavorite(tag string) error {
 	if _, err := tie.Add(str(TieTags), str(TieFavorite), tag); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // UnregisterFavorite removes tag from the ("tags","favorite",<tag>) registry.
@@ -51,5 +51,5 @@ func (tie *TieClient) UnregisterFavorite(tag string) error {
 	if _, err := tie.Delete(str(TieTags), str(TieFavorite), tag); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }

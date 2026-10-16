@@ -269,6 +269,19 @@ func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
 	var err error
 
 	switch file_mod.Mode {
+	case FILE_BARRIER:
+		// The queue is FIFO, so everything queued before the barrier has
+		// already been applied: this is the durability point. fsync, then
+		// release the caller. No record is written, so return before the
+		// short-write check.
+		if file_mod.Done != nil {
+			if err := db.Sync(); err != nil {
+				slog.Error("barrier DB sync error", "err", err)
+			}
+			close(file_mod.Done)
+		}
+		return
+
 	case FILE_DELETE:
 		pos := file_mod.Position
 		if pos == -1 {
@@ -294,7 +307,6 @@ func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
 		switch file_mod.EntryType {
 		case TYPE_ASSOCIATION:
 			n, err = db.WriteAt(file_mod.Triple.toBytes(), pos)
-			ic.finishedAdding.Done()
 		case TYPE_ENTRY:
 			n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)
 		case TYPE_HASH:
@@ -378,7 +390,11 @@ func (ic *Collection) dBWriter() {
 
 	// finished lets closeDB block until the fd is synced and closed.
 	ic.finished.Add(1)
+	// writerDone lets a Sync whose barrier never gets served (the writer is
+	// already gone) return instead of hanging.
+	ic.writerDone = make(chan struct{})
 	go func() {
+		defer close(ic.writerDone)
 		defer ic.finished.Done()
 		syncTicker := time.NewTicker(syncInterval)
 		defer syncTicker.Stop()

@@ -401,12 +401,15 @@ func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
 	return reply, replyError(reply.ReplyStatus)
 }
 
-// Wait until all changes has been committed to the collection
+// Sync asks the server to make every write it has already accepted durable
+// (fsync to the collection file). It is not needed for correctness: writes are
+// visible to reads as soon as the write request returns. Use it only to bound
+// what a server crash can lose.
 func (tc *TieClient) Sync() error {
 	return tc.SyncIn("")
 }
 
-// SyncIn waits until all changes have been committed to a specific collection.
+// SyncIn asks the server to make writes to a specific collection durable.
 // An empty collection falls back to the configured default.
 func (tc *TieClient) SyncIn(collection string) error {
 	request := tc.collectionInfo(collection).NewSyncRequest()

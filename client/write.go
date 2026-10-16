@@ -114,9 +114,6 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 	if _, err := tc.Batch(batch); err != nil {
 		return "", err
 	}
-	if err := tc.Sync(); err != nil {
-		return "", err
-	}
 
 	if !hasOld {
 		return newHash, nil
