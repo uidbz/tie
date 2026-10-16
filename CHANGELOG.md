@@ -32,6 +32,12 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **`tie verify --fix` refuses to repair when the index check reported
+  problems in the same run.** The tree scan it repairs against is seeded by
+  reverse queries, so with an inconsistent index it can contain phantoms or
+  miss children — and the repairs are destructive. Fix the index first
+  (`tie verify --index --repair`). A `--fix --dry-run` still prints its plan,
+  since printing changes nothing.
 - **Re-importing a library no longer re-sends it.** `putlib` now asks
   `HEAD /{hash}` before streaming a body and skips the upload when the filehost
   already holds that content address (the answer must also report the same

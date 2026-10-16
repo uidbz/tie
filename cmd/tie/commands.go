@@ -479,6 +479,17 @@ func cmdVerify() *cli.Command {
 				// Partial report (blob check failed after structural checks).
 				return errors.New("Verify Error: " + err.Error())
 			}
+			// Guard-rail: the tree scan is seeded by reverse queries, and
+			// repair's heuristics depend on it being complete. With the index
+			// still inconsistent, a destructive repair could act on phantoms
+			// or miss children, so refuse it here (§9).
+			if repairBlockedByIndex(indexProblems, repair, fix, dryRun) {
+				return cli.Exit(fmt.Sprintf(
+					"verify: refusing to repair: the index check reported %d problem(s). "+
+						"Fix the index first (`tie verify --index --repair`): repairing on an "+
+						"inconsistent index can act on phantoms or miss children.", indexProblems), 1)
+			}
+
 			changed := false
 			if repair {
 				n, rerr := tie.RepairOrphans(collection, rep, ctx.String("dest"))
@@ -553,6 +564,20 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// repairBlockedByIndex decides whether `tie verify` may run a destructive
+// repair step. The tree scan is seeded by reverse queries and repair's
+// heuristics (ghost detection, orphan re-homing) depend on that scan being
+// complete, so with the index still inconsistent a repair could act on
+// phantoms or miss children (§9). A --fix --dry-run is not blocked: printing a
+// plan changes nothing, and seeing the plan is how the operator decides what to
+// fix first.
+func repairBlockedByIndex(indexProblems int, repair, fix, dryRun bool) bool {
+	if indexProblems <= 0 {
+		return false
+	}
+	return repair || (fix && !dryRun)
 }
 
 // printIndexReport writes the server-side index cross-check to stderr: one
