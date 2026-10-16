@@ -18,15 +18,6 @@ const (
 		"0000000000000000c800000000000000"
 )
 
-func mustHex(t *testing.T, s string) []byte {
-	t.Helper()
-	b, err := hex.DecodeString(s)
-	if err != nil {
-		t.Fatalf("bad golden constant: %v", err)
-	}
-	return b
-}
-
 func TestRecordEncodersGolden(t *testing.T) {
 	uv := &UniqueValue{ParentId: 7}
 	copy(uv.Value[:], []byte("hello world"))

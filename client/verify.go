@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -321,9 +323,15 @@ func detectCycles(dirByUID map[string]Row) [][]DirUID {
 	return cycles
 }
 
+// blobCheckWorkers bounds how many blob HEADs the check keeps in flight. One at
+// a time, a 1M-file check costs 1M round trips — hours; 16 concurrent HEADs
+// bring it to minutes without hammering the filehost (§5.2 item 7).
+const blobCheckWorkers = 16
+
 // checkBlobsExist stats every file's content hash on each configured default
 // filehost and returns the hashes absent from all of them. One HEAD request per
-// hash per host; concurrency is kept modest to avoid hammering the server.
+// hash; the work runs through a small worker pool and the result is sorted, so
+// it is the same list whatever the scheduling.
 func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 	hosts := tie.active.FileHosts
 	if len(hosts) == 0 {
@@ -338,19 +346,57 @@ func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 	}
 	fh := FileHostClient(host)
 
-	var missing []string
+	var (
+		wg       sync.WaitGroup
+		jobs     = make(chan string, blobCheckWorkers*2)
+		results  = make([][]string, blobCheckWorkers)
+		firstErr error
+		errOnce  sync.Once
+		// stop is what the workers poll: firstErr itself is only safe to read
+		// after wg.Wait.
+		stop atomic.Bool
+	)
+	for w := 0; w < blobCheckWorkers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for hash := range jobs {
+				// After the first error the workers keep draining (so the
+				// feeder never blocks) but do no more work.
+				if stop.Load() {
+					continue
+				}
+				ok, _, err := fh.Stat(hash)
+				if err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						stop.Store(true)
+					})
+					continue
+				}
+				if !ok {
+					results[w] = append(results[w], hash)
+				}
+			}
+		}(w)
+	}
 	for _, row := range files {
 		hash := row.Key
 		if len(hash) != 64 {
 			continue // not a content hash (shouldn't happen for a file); skip
 		}
-		ok, _, err := fh.Stat(hash)
-		if err != nil {
-			return missing, err
-		}
-		if !ok {
-			missing = append(missing, hash)
-		}
+		jobs <- hash
+	}
+	close(jobs)
+	wg.Wait()
+
+	var missing []string
+	for _, r := range results {
+		missing = append(missing, r...)
+	}
+	sort.Strings(missing)
+	if firstErr != nil {
+		return missing, firstErr
 	}
 	return missing, nil
 }

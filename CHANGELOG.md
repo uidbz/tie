@@ -30,6 +30,16 @@ to follow semantic versioning.
   and an end-to-end SMB integration test using
   `github.com/hirochachacha/go-smb2` as a test-only client.
 
+### Performance
+
+- **`tie verify --check-blobs` runs 16 HEAD requests at a time.** It used to
+  ask for one blob per round trip, so a library with a million files cost a
+  million sequential requests — hours. With a small worker pool the same check
+  takes minutes (measured: 400 HEADs at a 5 ms round trip, 2.07 s sequential
+  vs 139 ms pooled). The filehost transports also keep 32 idle connections per
+  host instead of the stdlib's 2, so the concurrent workers stop paying a fresh
+  TCP handshake per request.
+
 ### Fixed
 
 - **Mount inode numbers are derived from the key, not remembered.** The

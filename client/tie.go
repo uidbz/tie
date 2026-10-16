@@ -322,22 +322,29 @@ var httpClientCache sync.Map
 // credentials. A plain, credential-free secure host reuses http.DefaultClient;
 // anything needing a custom TLS config or Basic Auth gets a shared client per
 // profile, so its connections are pooled across calls.
+// idleConnsPerHost is how many keep-alive connections one filehost profile
+// holds on to. The stdlib default (2) is too small for the concurrent paths tie
+// runs — the blob check keeps 16 HEADs in flight — and every worker past the
+// second pays a fresh TCP handshake for every request.
+const idleConnsPerHost = 32
+
 func HTTPClientFor(host FileHost) *http.Client {
-	if !host.Insecure && host.Username == "" {
-		return http.DefaultClient
-	}
 	key := transportKey(host)
 	if cached, ok := httpClientCache.Load(key); ok {
 		return cached.(*http.Client)
 	}
-	var base http.RoundTripper = http.DefaultTransport
+	// Cloned from DefaultTransport so the environment's proxy settings still
+	// apply; only the idle-connection budget and the TLS flag change.
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.MaxIdleConnsPerHost = idleConnsPerHost
 	if host.Insecure {
-		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		base.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+	var rt http.RoundTripper = base
 	if host.Username != "" {
-		base = &basicAuthTransport{base: base, username: host.Username, pass: host.Password}
+		rt = &basicAuthTransport{base: rt, username: host.Username, pass: host.Password}
 	}
-	c := &http.Client{Transport: base}
+	c := &http.Client{Transport: rt}
 	actual, _ := httpClientCache.LoadOrStore(key, c)
 	return actual.(*http.Client)
 }
