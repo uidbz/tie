@@ -8,26 +8,52 @@ import (
 	"strconv"
 )
 
+// relationValues reads the values key holds under relation, forward only and
+// restricted to that relation's id (§5.2 item 6). Sort's value-based ordering
+// used to call Get per key, which runs a full Sort — resolve, decode, sort,
+// build a TripleSet of nested maps — to answer one lookup, and does it once per
+// key being ordered. Here the association set is filtered by relation id and
+// only the matching records are resolved.
+func (ic *Collection) relationValues(key, relation string) ([]string, bool) {
+	tree, found := ic.GetAssociations(key)
+	if !found {
+		return nil, false
+	}
+	relationID, _, known := ic.getEntryFromString(relation)
+	if !known {
+		return nil, false
+	}
+	var out []string
+	tree.ForEach(func(ua UniqueAssociation, pos int64) {
+		if ua.Relation != relationID {
+			return
+		}
+		t, ok := ic.resolveEntry(ua, pos)
+		if !ok || t.Value1 != relationID {
+			return
+		}
+		out = append(out, ic.getValueString(t.Value2Level, t.Value2))
+	})
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
 // firstValueOf returns the smallest value the key holds under relation, or ""
 // if it holds none. Used by Sort's value-based ordering (SortByValue); picking
 // the smallest keeps the ordering deterministic for multi-valued relations.
 func (ic *Collection) firstValueOf(key, relation string) string {
-	data, found := ic.Get(key, relation)
+	values, found := ic.relationValues(key, relation)
 	if !found {
 		return ""
 	}
-	values, ok := data[key][relation]
-	if !ok {
-		return ""
-	}
 	best := ""
-	first := true
-	values.ForEach(func(v string) {
-		if first || v < best {
+	for i, v := range values {
+		if i == 0 || v < best {
 			best = v
-			first = false
 		}
-	})
+	}
 	return best
 }
 
@@ -37,26 +63,22 @@ func (ic *Collection) firstValueOf(key, relation string) string {
 // so a multi-valued relation orders by the same value a reader would call its
 // smallest.
 func (ic *Collection) firstNumberOf(key, relation string) (float64, bool) {
-	data, found := ic.Get(key, relation)
+	values, found := ic.relationValues(key, relation)
 	if !found {
-		return 0, false
-	}
-	values, ok := data[key][relation]
-	if !ok {
 		return 0, false
 	}
 	best := 0.0
 	any := false
-	values.ForEach(func(v string) {
+	for _, v := range values {
 		n, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			return
+			continue
 		}
 		if !any || n < best {
 			best = n
 			any = true
 		}
-	})
+	}
 	return best, any
 }
 

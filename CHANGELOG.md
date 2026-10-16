@@ -32,6 +32,13 @@ to follow semantic versioning.
 
 ### Performance
 
+- **Ordering by a relation's value reads that relation, once.** Sorting keys by
+  one of their relations (`--sort-by-value`, the album and playlist views) asked
+  each key for its value through `Get`, which runs a whole Sort — resolve,
+  decode, order, build nested maps — to answer one lookup, once per key. The
+  value lookup now walks the key's forward associations filtered by relation id
+  and resolves only the matches. Ordering 2000 children by `year`: 4.0 ms /
+  3.85 MB / 49 647 allocations, now 2.6 ms / 2.12 MB / 29 646.
 - **Reading one relation of a busy node reads only that relation.** `Sort`
   resolved every association's record from disk and then dropped the ones whose
   relation string differed from the filter. The relation id is already in the

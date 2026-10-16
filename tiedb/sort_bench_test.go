@@ -95,3 +95,43 @@ func BenchmarkGetFilteredFanIn(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkSortByValue orders a directory's children by one of their relations
+// — what `tie ls --sort-by-value year` and the album views do. Ordering used to
+// answer each key's value with a full Get (a Sort, a decode and nested maps) per
+// key (§5.2 item 6).
+func BenchmarkSortByValue(b *testing.B) {
+	db := NewDB(true)
+	defer db.Close()
+	col := db.GetCollection(CollectionKey{b.TempDir(), "byvalue"})
+
+	const keys = 2000
+	for i := 0; i < keys; i++ {
+		k := "key" + strconv.Itoa(i)
+		for _, pair := range [][2]string{
+			{"parent", "dir"},
+			{"year", strconv.Itoa(1900 + i%100)},
+			{"filename", k + ".flac"},
+			{"tie-type", "audio-file"},
+		} {
+			if err := col.Add(k, pair[0], pair[1]); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	col.Sync()
+
+	dir, found := col.GetReverseAssociations("dir")
+	if !found {
+		b.Fatal("no reverse associations for dir")
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, sorted, total := col.GetPage(dir, "", SortOptions{SortByValue: "year", Limit: -1})
+		if len(sorted) != total || total != keys {
+			b.Fatalf("sorted %d of %d, want %d", len(sorted), total, keys)
+		}
+	}
+}

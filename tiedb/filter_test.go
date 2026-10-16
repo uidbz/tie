@@ -48,6 +48,52 @@ func TestRelationFilterIsExact(t *testing.T) {
 	}
 }
 
+// TestRelationValuesIsForwardOnly pins what the SortByValue lookup may read:
+// the key's own values under one relation, nothing else. A value that only
+// points back at the key (a child's parent edge) is not one of the key's
+// values, and a relation the key does not carry is not found.
+func TestRelationValuesIsForwardOnly(t *testing.T) {
+	db := NewDB(false)
+	col := db.GetCollection(CollectionKey{"mem", "rel-values"})
+
+	if err := col.Add("dir", "tie-type", "directory"); err != nil {
+		t.Fatal(err)
+	}
+	for _, child := range []string{"a", "b", "c"} {
+		if err := col.Add(child, "parent", "dir"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, v := range []string{"2001", "1999", "2000"} {
+		if err := col.Add("dir", "year", v); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	values, found := col.relationValues("dir", "year")
+	if !found {
+		t.Fatal("dir carries no year values")
+	}
+	if len(values) != 3 {
+		t.Errorf("year values = %v, want 3", values)
+	}
+	// The children's parent edges are not dir's own values.
+	if values, found := col.relationValues("dir", "parent"); found {
+		t.Errorf("dir has parent values %v, want none", values)
+	}
+	if _, found := col.relationValues("dir", "nope"); found {
+		t.Error("a relation dir does not carry was found")
+	}
+	// The numeric minimum, not the lexicographic one, and not a value that
+	// happens to parse.
+	if n, ok := col.firstNumberOf("dir", "year"); !ok || n != 1999 {
+		t.Errorf("firstNumberOf(dir, year) = %v, %v, want 1999", n, ok)
+	}
+	if v := col.firstValueOf("dir", "year"); v != "1999" {
+		t.Errorf("firstValueOf(dir, year) = %q, want 1999", v)
+	}
+}
+
 // TestRelationFilterOnReverseSet covers the other direction: the reverse
 // association set of a value, filtered to one relation, must answer with the
 // subjects that reference it through that relation only.
