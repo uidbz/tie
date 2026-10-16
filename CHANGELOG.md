@@ -58,6 +58,15 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **The triplestore answers failures with real HTTP status codes.** An
+  application error used to be `200 OK` with `Success:false`, an unknown request
+  id was `200` with an empty body, and a request body of any size was accepted.
+  Now: application errors are 4xx/5xx (400 bad name or bad JSON, 404 unknown
+  request or absent collection, 500 internal) with the same JSON `ReplyStatus`
+  body, an oversized body is 413 (`MaxRequestBytesMB` in the config, default
+  256 MiB), and `ErrorToJsonString`'s fallback is valid JSON. The Go client is
+  unaffected (it decodes the body regardless of status); scripts that ignored
+  `Success` and trusted the status will now see failures.
 - `go.mod` now requires Go 1.27.1 (pulled in by the smb libraries' toolchain
   requirement).
 

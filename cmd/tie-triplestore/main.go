@@ -46,6 +46,11 @@ type TripleStoreConfig struct {
 	// LoadMemoryLimitMB is a soft heap ceiling (GOMEMLIMIT semantics) applied
 	// while collections load from disk. 0 = runtime default.
 	LoadMemoryLimitMB int
+	// MaxRequestBytesMB caps a single request body in megabytes. A body is read
+	// whole before it is parsed, so an uncapped request can exhaust memory; a
+	// Batch (restore, repair) legitimately carries a lot, so the built-in
+	// default is generous. 0 selects it.
+	MaxRequestBytesMB int
 	Users             []User
 	// AnonymousAccess is the role granted to a request with no valid credentials:
 	// "none" (require auth for everything), "read", or "write". Empty defaults to
@@ -163,6 +168,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		CollectionReverseRelations: overrides,
 		MaxConcurrentRequests:      cfg.MaxConcurrentRequests,
 		LoadMemoryLimitMB:          cfg.LoadMemoryLimitMB,
+		MaxRequestBytes:            int64(cfg.MaxRequestBytesMB) * 1024 * 1024,
 	}
 
 	c := api.CollectionInfo{}

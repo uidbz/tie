@@ -42,6 +42,12 @@ type WebserviceConfig struct {
 	// the server's config file; it is read-only at runtime.
 	Auth *auth.Store
 
+	// MaxRequestBytes caps the body of a single request. Restore batches are
+	// legitimately large, so the default is generous; the point is that the
+	// limit exists at all, because the body is read whole before it is parsed.
+	// Zero selects defaultMaxRequestBytes.
+	MaxRequestBytes int64
+
 	// ReverseRelations restricts which relations (value1) collections index in
 	// reverse. Empty/nil indexes every relation (the original behavior). Set it
 	// to just the relations queried in reverse to cut association memory roughly
@@ -179,6 +185,46 @@ func accessFor(reqName string) auth.Access {
 // channel buffers per name — just by querying random names.
 var ErrCollectionNotFound = errors.New("collection not found")
 
+// ErrInvalidName marks a request-supplied namespace or collection id that the
+// name pattern rejects. It reaches the HTTP layer as 400 rather than 500, so a
+// client bug or an attack is distinguishable from a server fault in logs and
+// monitoring.
+var ErrInvalidName = errors.New("invalid namespace/collection name")
+
+// defaultMaxRequestBytes caps a request body when the config does not. A body
+// is held whole in memory before it is parsed, so the cap has to exist; it is
+// generous because a Batch (restore, repair) legitimately carries many ops.
+const defaultMaxRequestBytes = 256 << 20
+
+func (ws *Webservice) maxRequestBytes() int64 {
+	if ws.Config.MaxRequestBytes > 0 {
+		return ws.Config.MaxRequestBytes
+	}
+	return defaultMaxRequestBytes
+}
+
+// statusForError maps an application error to an HTTP status. Application
+// errors used to be answered as 200 with Success:false, which leaves curl,
+// proxies and monitoring blind to them (§4.15).
+func statusForError(err error) int {
+	switch {
+	case errors.Is(err, ErrCollectionNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrInvalidName):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// answerError writes an application error with a real status code and the JSON
+// ReplyStatus body the client decodes, so the message still reaches it.
+func answerError(w http.ResponseWriter, status int, prepend string, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	fmt.Fprint(w, ErrorToJsonString(prepend, err))
+}
+
 // collectionNamePattern bounds namespace and collection ids to name-safe
 // characters. Both arrive straight from the request and are used to build
 // filesystem paths (DbPath join + "<collection>.tie"); without this,
@@ -197,7 +243,7 @@ func (ws *Webservice) DbPath(namespace string) string {
 // request-supplied collection name.
 func (ws *Webservice) collectionKey(namespace, collection string) (tiedb.CollectionKey, error) {
 	if !validCollectionName(namespace) || !validCollectionName(collection) {
-		return tiedb.CollectionKey{}, fmt.Errorf("invalid namespace/collection name %q/%q", namespace, collection)
+		return tiedb.CollectionKey{}, fmt.Errorf("%w %q/%q", ErrInvalidName, namespace, collection)
 	}
 	return tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}, nil
 }
@@ -243,7 +289,10 @@ func (ws *Webservice) DropCollection(namespace, collection string) error {
 }
 
 func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
-	raw_data, _ := io.ReadAll(r.Body)
+	// The body is read whole before it is parsed, so it must be capped: one
+	// oversized request used to be enough to exhaust memory (§4.15).
+	r.Body = http.MaxBytesReader(w, r.Body, ws.maxRequestBytes())
+	raw_data, errRead := io.ReadAll(r.Body)
 	r.Body.Close()
 	reqName := r.PathValue("request")
 	slog.Info("request", "from", r.RemoteAddr, "request", reqName)
@@ -257,6 +306,12 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username, _, _ := r.BasicAuth()
+
+	if errRead != nil {
+		slog.Warn("reading request body", "from", r.RemoteAddr, "request", reqName, "err", errRead)
+		answerError(w, http.StatusRequestEntityTooLarge, "Request body too large:", errRead)
+		return
+	}
 
 	for _, x := range ws.requests {
 		if reqName == x.GetId() {
@@ -272,7 +327,10 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// An unknown request id used to answer 200 with an empty body, which the
+	// client then failed to JSON-decode.
 	slog.Warn("unrecognized request", "from", r.RemoteAddr, "request", reqName)
+	answerError(w, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqName))
 }
 
 func ErrorToJsonString(prepend string, err error) string {
@@ -283,7 +341,14 @@ func ErrorToJsonString(prepend string, err error) string {
 	json_reply, err := json.Marshal(msg)
 
 	if err != nil {
-		return "[\"Success\": false, \"Message\": \"Internal error: " + err.Error() + "\"]"
+		// Marshal of ReplyStatus cannot realistically fail; if it does, the
+		// fallback still has to be JSON the client can decode (the old one was
+		// `["Success": false, ...]`, which is not JSON at all).
+		fallback, _ := json.Marshal(ReplyStatus{
+			Success: false,
+			Message: "Internal error: " + err.Error(),
+		})
+		return string(fallback)
 	}
 
 	return string(json_reply)
@@ -293,8 +358,7 @@ func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterf
 	errRequest := json.Unmarshal(rawData, request)
 	if errRequest != nil {
 		slog.Error("unmarshalling request", "err", errRequest)
-		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
-		fmt.Fprint(w, msg)
+		answerError(w, http.StatusBadRequest, "Error unmarshalling request:", errRequest)
 		return
 	}
 
@@ -319,15 +383,15 @@ func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterf
 
 	reply, errReply := request.Reply(env)
 	if errReply != nil {
-		msg := ErrorToJsonString("Error:", errReply)
-		fmt.Fprint(w, msg)
-	} else {
-		json_reply, errMarshal := json.Marshal(reply.ReplyStructPtr)
-		if errMarshal != nil {
-			msg := ErrorToJsonString("Internal error:", errMarshal)
-			fmt.Fprint(w, msg)
-		} else {
-			fmt.Fprint(w, string(json_reply))
-		}
+		answerError(w, statusForError(errReply), "Error:", errReply)
+		return
 	}
+	json_reply, errMarshal := json.Marshal(reply.ReplyStructPtr)
+	if errMarshal != nil {
+		// The reply never reached the wire, so a 500 with a decodable body is
+		// honest; the old code answered 200 with the error string.
+		answerError(w, http.StatusInternalServerError, "Internal error:", errMarshal)
+		return
+	}
+	fmt.Fprint(w, string(json_reply))
 }

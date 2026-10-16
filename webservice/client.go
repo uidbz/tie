@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -81,6 +82,12 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 		replyStructPtr := request.GetReplyStructPtr()
 		errUnmarshal := json.Unmarshal(respBody, replyStructPtr)
 		if errUnmarshal != nil {
+			// A non-2xx answer whose body is not a reply (a proxy's HTML error
+			// page, a plain-text 413) must be reported as the status it is,
+			// not as a JSON syntax error.
+			if resp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("webservice returned %s: %s", resp.Status, snippet(respBody))
+			}
 			return nil, errUnmarshal
 		}
 
@@ -99,6 +106,19 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 // consume, which reads it incrementally (e.g. NDJSON). The body is never fully
 // buffered in memory. Auth and non-200 failures are reported before consume is
 // called; a failure mid-stream surfaces as a read error inside consume.
+// snippet is a short, printable excerpt of a response body for error messages.
+func snippet(b []byte) string {
+	const max = 200
+	s := strings.TrimSpace(string(b))
+	if len(s) > max {
+		return s[:max] + "..."
+	}
+	if s == "" {
+		return "(empty body)"
+	}
+	return s
+}
+
 func (c *Client) RunStream(request RequestInterface, consume func(io.Reader) error) error {
 	body, err := json.Marshal(request)
 	if err != nil {
