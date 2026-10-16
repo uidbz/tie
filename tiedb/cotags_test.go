@@ -64,6 +64,27 @@ func TestCoTagsUsesTheSameAlgebraAsQueryTags(t *testing.T) {
 	}
 }
 
+// TestCoTagsCountsASubjectOnce: the seed can reach one subject through several
+// relations (tagged x, and kind x). The subject is one match, and its tags are
+// reported once.
+func TestCoTagsCountsASubjectOnce(t *testing.T) {
+	db := NewDB(false)
+	col := db.GetCollection(CollectionKey{"mem", "cotags-once"})
+	for _, tr := range [][3]string{
+		{"s1", "tag", "x"}, {"s1", "kind", "x"}, {"s1", "tag", "w"},
+		{"s2", "tag", "x"}, {"s2", "tag", "w"},
+	} {
+		if err := col.Add(tr[0], tr[1], tr[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tags := coTagsSorted(col, TagQuery{Include: []string{"x"}, Reverse: true}, "tag")
+	if len(tags) != 2 || tags[0] != "w" || tags[1] != "x" {
+		t.Errorf("CoTags(x) = %v, want [w x] with no duplicates", tags)
+	}
+}
+
 // TestCoTagsReturnConventions: the seed absent and the unmet AND term are
 // different answers, and callers rely on them.
 func TestCoTagsReturnConventions(t *testing.T) {

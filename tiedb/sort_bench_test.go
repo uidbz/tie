@@ -135,3 +135,43 @@ func BenchmarkSortByValue(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkCoTags is the faceted-refinement query the tag UI runs: given the
+// current tag filter, which further tags exist on the matching set? It used to
+// resolve the matched set twice — once to enumerate keys, once per key for the
+// tag values — decoding every triple both times (§5.2 item 8).
+func BenchmarkCoTags(b *testing.B) {
+	db := NewDB(true)
+	defer db.Close()
+	col := db.GetCollection(CollectionKey{b.TempDir(), "cotags"})
+
+	const files = 2000
+	const pool = 40
+	const perFile = 8
+	for i := 0; i < files; i++ {
+		f := "file" + strconv.Itoa(i)
+		if err := col.Add(f, "tie-type", "audio-file"); err != nil {
+			b.Fatal(err)
+		}
+		if err := col.Add(f, "parent", "dir"); err != nil {
+			b.Fatal(err)
+		}
+		for t := 0; t < perFile; t++ {
+			tag := "tag" + strconv.Itoa((i*perFile+t)%pool)
+			if err := col.Add(f, "tag", tag); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	col.Sync()
+
+	q := TagQuery{Include: []string{"tag0"}, Reverse: true}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		tags, ok := col.CoTags(q, "tag")
+		if !ok || len(tags) == 0 {
+			b.Fatalf("CoTags = %v, %v", tags, ok)
+		}
+	}
+}

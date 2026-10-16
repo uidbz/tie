@@ -32,6 +32,15 @@ to follow semantic versioning.
 
 ### Performance
 
+- **The tag facet list stops reading the collection twice.** `CoTags` — "given
+  the tags I've already filtered by, which further tags exist?" — resolved the
+  matched set once to enumerate its keys (decoding all three strings of every
+  triple, sorting them, building maps) and then resolved every matched key again
+  to read its tags. It now resolves each association once, only to learn the
+  subject it names, never decodes a key at all, filters tag edges by relation id
+  before the record read, and deduplicates tags by value id so a tag carried by
+  a thousand files is decoded once. 2000 files × 8 tags from a pool of 40:
+  1.7 ms / 986 kB / 26 173 allocations, now 0.75 ms / 377 kB / 3 002.
 - **Ordering by a relation's value reads that relation, once.** Sorting keys by
   one of their relations (`--sort-by-value`, the album and playlist views) asked
   each key for its value through `Get`, which runs a whole Sort — resolve,
