@@ -70,12 +70,11 @@ type Collection struct {
 	dBPath            string
 	dBName            string
 	dBFullPath        string
-	totalEntries      uint64
+	totalEntries      atomic.Uint64
 	totalAssociations uint64
 
-	secureLevel       sync.RWMutex
-	totalEntriesMutex sync.Mutex
-	changeMutex       sync.Mutex
+	secureLevel sync.RWMutex
+	changeMutex sync.Mutex
 
 	levels     []entryLevel
 	levelCount int

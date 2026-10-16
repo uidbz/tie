@@ -5,7 +5,6 @@ package tiedb
 
 import (
 	"bytes"
-	"sync/atomic"
 )
 
 // insertHash stores raw under a fresh ID (or returns the existing ID when the
@@ -33,11 +32,7 @@ func (ic *Collection) insertHash(raw [32]byte) uint64 {
 // loadHash reinserts a hash entry read from disk, keeping totalEntries in step
 // with the highest seen ID (mirrors the TYPE_ENTRY load path).
 func (ic *Collection) loadHash(entryID uint64, raw [32]byte) {
-	ic.totalEntriesMutex.Lock()
-	if entryID > ic.totalEntries {
-		ic.totalEntries = entryID
-	}
-	ic.totalEntriesMutex.Unlock()
+	ic.bumpTotalEntries(entryID)
 	ic.hashEntries.Put(entryID, raw)
 	ic.hashValues.Put(raw, entryID)
 }
@@ -120,6 +115,12 @@ func (ic *Collection) insertLocked(value string) (entryID uint64, level int) {
 	var lastParentID uint64
 	bytes := []byte(value)
 	checkExistance := true
+	// Values are NUL-padded up to the fixed SIZE_VALUE frame. Note the format
+	// quirk: when len(value) is an exact multiple of SIZE_VALUE the padding is
+	// a FULL extra block, so such a value costs one extra trie level and record
+	// (and a value that itself ends in a NUL is indistinguishable from padding
+	// — see getValueString). This is on-disk format; changing it needs a
+	// migration and a CHANGELOG entry, so it stays documented rather than fixed.
 	align := make([]byte, SIZE_VALUE-len(bytes)%SIZE_VALUE)
 	bytes = append(bytes, align...)
 
@@ -179,11 +180,23 @@ func (ic *Collection) getEntryFromString(value string) (entryID uint64, level in
 }
 
 func (ic *Collection) GetTotalEntries() uint64 {
-	return ic.totalEntries
+	return ic.totalEntries.Load()
 }
 
 func (ic *Collection) nextID() uint64 {
-	return atomic.AddUint64(&ic.totalEntries, 1)
+	return ic.totalEntries.Add(1)
+}
+
+// bumpTotalEntries raises the id counter to at least id. The load pass runs
+// concurrently over records in arbitrary order, so it CAS-maxes instead of
+// taking a mutex: one counter, one synchronization scheme.
+func (ic *Collection) bumpTotalEntries(id uint64) {
+	for {
+		cur := ic.totalEntries.Load()
+		if id <= cur || ic.totalEntries.CompareAndSwap(cur, id) {
+			return
+		}
+	}
 }
 
 func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]byte) (entryID uint64) {
@@ -251,7 +264,11 @@ func (ic *Collection) getValueString(level int, entryID uint64) string {
 	}
 
 	value := ic.getValue(level, entryID)
-	value = bytes.Trim(value, "\x00")
+	// TrimRight only: values are NUL-padded to the fixed frame, so the
+	// padding sits at the end. Trimming both ends (the old bytes.Trim) ate
+	// leading NULs and a legitimate trailing NUL, so values were not
+	// binary-safe. A value must not END in a NUL — that byte is padding.
+	value = bytes.TrimRight(value, "\x00")
 
 	return string(value)
 }

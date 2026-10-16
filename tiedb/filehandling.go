@@ -99,11 +99,7 @@ func (ic *Collection) loadEntries(rawDataToLoad chan RawDataEntry, wg *sync.Wait
 		switch int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) {
 		case TYPE_ENTRY:
 			level, entryID, uv := ic.bufToEntry(entry.Data)
-			ic.totalEntriesMutex.Lock()
-			if entryID > ic.totalEntries {
-				ic.totalEntries = entryID
-			}
-			ic.totalEntriesMutex.Unlock()
+			ic.bumpTotalEntries(entryID)
 			ic.insertEntry(level, entryID, uv)
 
 		case TYPE_HASH:
@@ -272,10 +268,7 @@ func (t *Collection) initDBSize() error {
 }
 
 // applyFileMod persists one queued modification to the open db handle. It runs
-// only on the writer goroutine, which owns the fd, so it takes no lock. A
-// FILE_DELETE with Position -1 (the tree placeholder for a triple whose FILE_ADD
-// has not yet been processed) has no on-disk record to tombstone, so it is
-// skipped.
+// only on the writer goroutine, which owns the fd, so it takes no lock.
 //
 // An I/O error (ENOSPC, a dying device) is RETURNED, not panicked: the writer
 // records it as the collection's sticky error, keeps serving reads, and every
@@ -302,10 +295,9 @@ func (ic *Collection) applyFileMod(db dbFile, file_mod FileMod) error {
 		return nil
 
 	case FILE_DELETE:
+		// Every association in the index carries a real slot offset (slots are
+		// reserved before the index insert), so there is no placeholder case.
 		pos := file_mod.Position
-		if pos == -1 {
-			return nil
-		}
 		b := make([]byte, ENTRY_SIZE)
 		binary.LittleEndian.PutUint16(b, TYPE_DELETE)
 		n, err = db.WriteAt(b, pos)
