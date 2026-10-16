@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -12,14 +13,13 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-var tie *client.TieClient
-
 func main() {
 	// Load config before building the command tree so `import` can generate a
 	// subcommand per configured dir-type. The global flags aren't parsed yet at
 	// this point, so peek them out of os.Args directly.
 	configName, collection := parseGlobalFlags(os.Args)
 	config, created, err := client.LoadOrCreateConfig(configName)
+	a := &app{}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error opening config file:", err)
 	} else {
@@ -27,7 +27,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "No config found; created a default at %s\n", config.Path())
 			fmt.Fprintln(os.Stderr, "Set Username and Password there if the triplestore requires authentication.")
 		}
-		tie = client.NewTieClientFor(config, collection)
+		a.config = config
+		a.tie = client.NewTieClientFor(config, collection)
 	}
 
 	cmd := &cli.Command{
@@ -43,32 +44,41 @@ func main() {
 		// help; cli registers it hidden by default. Its own description documents
 		// the setup one-liner, e.g. `source <(tie completion bash)`.
 		ConfigureShellCompletionCommand: func(c *cli.Command) { c.Hidden = false },
+		// One guard for every command: a config that failed to load is reported
+		// once, with the exit code that says so, instead of 31 copies of the same
+		// check spread through the command tree.
+		Before: a.before,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
 			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection)"},
 		},
 		Commands: []*cli.Command{
-			cmdAdd(),
-			cmdDel(),
-			cmdGet(),
-			cmdConf(),
-			cmdVersion(),
-			cmdTag(),
-			cmdVersions(),
-			cmdImport(config),
-			cmdMount(),
-			cmdUpload(),
-			cmdDownload(),
-			cmdDump(),
-			cmdRestore(),
-			cmdVerify(),
-			cmdStat(),
-			cmdMedia(),
-			cmdHistory(),
-			cmdPlaylist(),
+			cmdAdd(a),
+			cmdDel(a),
+			cmdGet(a),
+			cmdConf(a),
+			cmdVersion(a),
+			cmdTag(a),
+			cmdVersions(a),
+			cmdImport(a),
+			cmdMount(a),
+			cmdUpload(a),
+			cmdDownload(a),
+			cmdDump(a),
+			cmdRestore(a),
+			cmdVerify(a),
+			cmdStat(a),
+			cmdMedia(a),
+			cmdHistory(a),
+			cmdPlaylist(a),
 		},
 	}
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		var ee exitError
+		if errors.As(err, &ee) {
+			fmt.Fprintln(os.Stderr, "tie:", ee.msg)
+			os.Exit(ee.code)
+		}
 		fmt.Fprintln(os.Stderr, "tie:", err)
 		os.Exit(1)
 	}

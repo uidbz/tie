@@ -164,6 +164,11 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie` exits 2 when the config failed to load.** The check that 31 commands
+  carried themselves (`Error: Config not loaded`, exit 1) is now one `Before`
+  hook on the command tree, and it reports `config not loaded` with exit 2 —
+  the code for "the environment is wrong" rather than "the operation failed".
+  `tie version` and `tie conf` still run without a config.
 - **A paginated query that asks for no ordering answers in entry order.**
   Every page of a query used to resolve (a record read per match) and string-sort
   *all* the matches: paging a 20 000-match tag query by 1 000 read 20 000 records

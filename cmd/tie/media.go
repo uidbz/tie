@@ -17,9 +17,9 @@ import (
 
 // resolveSubject maps a CLI argument to a subject: a virtual path (leading
 // "/" or "tie:") resolves to its DirUID, anything else is taken verbatim.
-func resolveSubject(arg string) (string, error) {
+func resolveSubject(a *app, arg string) (string, error) {
 	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, client.FileURIScheme) {
-		uid, err := tie.DirUIDFromPath(arg)
+		uid, err := a.tie.DirUIDFromPath(arg)
 		if err != nil {
 			return "", err
 		}
@@ -51,7 +51,7 @@ func parseSince(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("--since %q: want a duration (72h), days (30d) or a date (2026-01-31)", s)
 }
 
-func cmdMedia() *cli.Command {
+func cmdMedia(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "media",
 		Usage: "Media collection model: index, backfill, rescan, restat",
@@ -62,18 +62,15 @@ func cmdMedia() *cli.Command {
 				ArgsUsage: "<path|uid>...",
 				Flags:     []cli.Flag{&cli.BoolFlag{Name: "dry-run", Usage: "Report what would change"}},
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
 					if c.Args().Len() == 0 {
 						return errors.New("need at least one collection path or uid")
 					}
-					for _, a := range c.Args().Slice() {
-						uid, err := resolveSubject(a)
+					for _, arg := range c.Args().Slice() {
+						uid, err := resolveSubject(a, arg)
 						if err != nil {
 							return err
 						}
-						r, err := tie.IndexCollection(client.DirUID(uid), client.IndexOptions{DryRun: c.Bool("dry-run")})
+						r, err := a.tie.IndexCollection(client.DirUID(uid), client.IndexOptions{DryRun: c.Bool("dry-run")})
 						if err != nil {
 							return err
 						}
@@ -93,12 +90,9 @@ func cmdMedia() *cli.Command {
 					&cli.BoolFlag{Name: "names", Value: true, Usage: "Also recompute name triples from filename (fixes pre-0.6 TrimRight corruption)"},
 				},
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
 					dry := c.Bool("dry-run")
 					if c.Bool("rescan") {
-						n, err := tie.RescanAudio(client.RescanOptions{DryRun: dry, Progress: func(done, total int, hash string, err error) {
+						n, err := a.tie.RescanAudio(client.RescanOptions{DryRun: dry, Progress: func(done, total int, hash string, err error) {
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "rescan %s: %v\n", hash, err)
 							}
@@ -112,14 +106,14 @@ func cmdMedia() *cli.Command {
 						}
 					}
 					if c.Bool("playlists") && !dry {
-						n, err := tie.MigrateLegacyPlaylists()
+						n, err := a.tie.MigrateLegacyPlaylists()
 						if err != nil {
 							return err
 						}
 						fmt.Printf("migrated playlists: %d\n", n)
 					}
 					if c.Bool("names") {
-						n, err := tie.RepairNames()
+						n, err := a.tie.RepairNames()
 						if err != nil {
 							return err
 						}
@@ -129,7 +123,7 @@ func cmdMedia() *cli.Command {
 					if t := c.StringSlice("type"); len(t) > 0 {
 						types = t
 					}
-					res, err := tie.Backfill(client.BackfillOptions{DryRun: dry, Types: types, Progress: func(done, total int, r client.IndexResult, err error) {
+					res, err := a.tie.Backfill(client.BackfillOptions{DryRun: dry, Types: types, Progress: func(done, total int, r client.IndexResult, err error) {
 						if err != nil {
 							fmt.Fprintln(os.Stderr, err)
 						} else if r.Ops > 0 {
@@ -147,10 +141,7 @@ func cmdMedia() *cli.Command {
 				Name:  "restat",
 				Usage: "Rebuild play-count / last-played statistics from the play events",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					n, err := tie.RecomputeStats()
+					n, err := a.tie.RecomputeStats()
 					if err != nil {
 						return err
 					}
@@ -162,17 +153,14 @@ func cmdMedia() *cli.Command {
 				Name:  "schema",
 				Usage: "Declare the media value types (year, duration, added-at, …)",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					return tie.EnsureMediaSchema()
+					return a.tie.EnsureMediaSchema()
 				},
 			},
 		},
 	}
 }
 
-func cmdHistory() *cli.Command {
+func cmdHistory(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "history",
 		Usage: "List recorded plays, newest first",
@@ -182,9 +170,6 @@ func cmdHistory() *cli.Command {
 			&cli.BoolFlag{Name: "skips", Usage: "Include skipped plays"},
 		},
 		Action: func(_ context.Context, c *cli.Command) error {
-			if tie == nil {
-				return errors.New("Error: Config not loaded")
-			}
 			since, err := parseSince(c.String("since"))
 			if err != nil {
 				return err
@@ -196,7 +181,7 @@ func cmdHistory() *cli.Command {
 					q.Limit *= 2 // headroom for filtered-out skips
 				}
 			}
-			events, err := tie.RecentPlays(q)
+			events, err := a.tie.RecentPlays(q)
 			if err != nil {
 				return err
 			}
@@ -208,11 +193,11 @@ func cmdHistory() *cli.Command {
 				keys = append(keys, e.Subject)
 			}
 			names := map[string]string{}
-			if rows, err := tie.Expand(keys); err == nil {
+			if rows, err := a.tie.Expand(keys); err == nil {
 				for _, r := range rows {
 					n := client.RowFirst(r, "title")
-					if a := client.RowFirst(r, "artist"); a != "" && n != "" {
-						n = a + " — " + n
+					if artist := client.RowFirst(r, "artist"); artist != "" && n != "" {
+						n = artist + " — " + n
 					}
 					if n == "" {
 						n = client.RowFirst(r, "filename")
@@ -229,7 +214,7 @@ func cmdHistory() *cli.Command {
 	}
 }
 
-func cmdPlaylist() *cli.Command {
+func cmdPlaylist(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "playlist",
 		Usage: "Manage playlists: list, show, create, delete, migrate",
@@ -238,10 +223,7 @@ func cmdPlaylist() *cli.Command {
 				Name:  "list",
 				Usage: "List playlists",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					ps, err := tie.ListPlaylists()
+					ps, err := a.tie.ListPlaylists()
 					if err != nil {
 						return err
 					}
@@ -261,10 +243,7 @@ func cmdPlaylist() *cli.Command {
 				Usage:     "Print a playlist's track hashes in order",
 				ArgsUsage: "<uid>",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					p, err := tie.ReadPlaylist(c.Args().First())
+					p, err := a.tie.ReadPlaylist(c.Args().First())
 					if err != nil {
 						return err
 					}
@@ -279,13 +258,10 @@ func cmdPlaylist() *cli.Command {
 				Usage:     "Create a playlist from track hashes",
 				ArgsUsage: "<name> <hash>...",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
 					if c.Args().Len() < 1 {
 						return errors.New("need a name")
 					}
-					uid, err := tie.CreatePlaylist(c.Args().First(), c.Args().Tail(), nil)
+					uid, err := a.tie.CreatePlaylist(c.Args().First(), c.Args().Tail(), nil)
 					if err != nil {
 						return err
 					}
@@ -298,20 +274,14 @@ func cmdPlaylist() *cli.Command {
 				Usage:     "Delete a playlist (tracks are untouched)",
 				ArgsUsage: "<uid>",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					return tie.DeletePlaylist(c.Args().First())
+					return a.tie.DeletePlaylist(c.Args().First())
 				},
 			},
 			{
 				Name:  "migrate",
 				Usage: "Convert legacy (audio-dir) playlists to the playlist type",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					n, err := tie.MigrateLegacyPlaylists()
+					n, err := a.tie.MigrateLegacyPlaylists()
 					if err != nil {
 						return err
 					}

@@ -1,0 +1,245 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/uidbz/conf"
+	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/metadata"
+	"github.com/uidbz/tie/version"
+	"github.com/urfave/cli/v3"
+	"golang.org/x/term"
+)
+
+// cmdVersion prints the client build and, when a config is loaded, the build
+// each configured server is running — the quick way to confirm a deploy landed
+// on a remote triplestore/filehost. Servers that cannot be reached are
+// reported inline rather than failing the command.
+func cmdVersion(a *app) *cli.Command {
+	return &cli.Command{
+		Name:  "version",
+		Usage: "Show the client version and the versions of the configured triplestore and filehosts",
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			fmt.Printf("tie (client)      %s\n", describeBuild(version.Get()))
+			if a.tie == nil {
+				return nil
+			}
+			if v, err := a.tie.ServerVersion(); err != nil {
+				fmt.Printf("tie-triplestore   unavailable (%s): %v\n", a.tie.Config.TripleStoreURL, err)
+			} else {
+				fmt.Printf("tie-triplestore   %s  %s\n", describeBuild(v), a.tie.Config.TripleStoreURL)
+			}
+			names := make([]string, 0, len(a.tie.Config.FileHosts))
+			for name := range a.tie.Config.FileHosts {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			seen := map[string]bool{}
+			for _, name := range names {
+				host := a.tie.Config.FileHosts[name]
+				if seen[host.URL] {
+					continue
+				}
+				seen[host.URL] = true
+				if v, err := client.FileHostVersion(host); err != nil {
+					fmt.Printf("tie-filehost      unavailable (%s): %v\n", host.URL, err)
+				} else {
+					fmt.Printf("tie-filehost      %s  %s\n", describeBuild(v), host.URL)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// describeBuild renders a build as "version (commit, go)" with the commit
+// shown only when it adds information the version string lacks.
+func describeBuild(v version.Info) string {
+	s := v.Version
+	var extra []string
+	if v.Commit != "" && !strings.Contains(v.Version, v.Commit[:min(7, len(v.Commit))]) {
+		extra = append(extra, v.Commit[:min(12, len(v.Commit))])
+	}
+	if v.Dirty && !strings.HasSuffix(v.Version, "-dirty") && !strings.HasSuffix(v.Version, "+dirty") {
+		extra = append(extra, "dirty")
+	}
+	if v.GoVersion != "" {
+		extra = append(extra, v.GoVersion)
+	}
+	if len(extra) > 0 {
+		s += " (" + strings.Join(extra, ", ") + ")"
+	}
+	return s
+}
+
+func cmdConf(a *app) *cli.Command {
+	return &cli.Command{
+		Name:    "conf",
+		Aliases: []string{"c"},
+		Usage:   "conf",
+		Commands: []*cli.Command{
+			{
+				Name:  "create",
+				Usage: "Create new default config file: conf create [name]",
+				Action: func(_ context.Context, cCtx *cli.Command) error {
+					var name string
+					if cCtx.Args().Len() == 0 {
+						name = "config"
+					} else {
+						name = cCtx.Args().First()
+					}
+					err := client.SaveConfig(name, client.DefaultConfig())
+					if err != nil {
+						return err
+					}
+					path, err := conf.PathUserConfigDir("tie", client.ConfigFileName(name))
+					fmt.Println("Config created here:", path)
+
+					return err
+				},
+			},
+		},
+	}
+}
+
+// cmdTag groups tag-management subcommands. Tags attach to a content hash, so
+// del/rename act on the tag everywhere that content appears in the current
+// collection, and everywhere in the tag-query views.
+
+// cmdStat prints a human-readable summary of a single item, addressed by either
+// a VFS path or a 64-hex key (content hash or DirUID). The aggregation lives in
+// the client (StatInfo/Stat/StatPath) so the GUI (tie-fm) shares it; this command
+// only formats.
+func cmdStat(a *app) *cli.Command {
+	return &cli.Command{
+		Name:  "stat",
+		Usage: "Show info about a file or directory: stat [path-or-hash]",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "check", Usage: "HEAD the filehost to confirm the blob exists and report its on-disk size"},
+			&cli.BoolFlag{Name: "json", Usage: "Emit the raw StatInfo as JSON"},
+		},
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			if ctx.Args().Len() < 1 {
+				return errors.New("Need 1 arg: path or hash")
+			}
+			arg := ctx.Args().First()
+			opts := client.StatOptions{Recursive: true, Versions: true, CheckBlob: ctx.Bool("check")}
+
+			var (
+				info client.StatInfo
+				err  error
+			)
+			if metadata.IsHexHash(arg) {
+				info, err = a.tie.Stat(arg, opts)
+			} else {
+				info, err = a.tie.StatPath(arg, opts)
+			}
+			if err != nil {
+				if errors.Is(err, client.ErrNotFound) {
+					fmt.Fprintln(os.Stderr, "no metadata in store for "+arg)
+					return nil
+				}
+				return errors.New("Stat Error: " + err.Error())
+			}
+
+			if ctx.Bool("json") {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(info)
+			}
+			printStat(info)
+			return nil
+		},
+	}
+}
+
+// printStat renders a StatInfo as aligned LABEL/VALUE rows on a TTY, or plain
+// tab-separated lines when stdout is piped (mirrors printRows).
+func printStat(info client.StatInfo) {
+	type kv struct{ k, v string }
+	var rows []kv
+	add := func(k, v string) {
+		if v != "" {
+			rows = append(rows, kv{k, v})
+		}
+	}
+
+	typ := string(info.Kind)
+	if info.TieType != client.TieDirectory && info.TieType.String() != "" {
+		typ = string(info.Kind) + " (" + info.TieType.String() + ")"
+	}
+	add("Key", info.Key)
+	add("Type", typ)
+	add("Filename", info.Filename)
+	add("Name", info.Name)
+	add("Media type", info.MediaType)
+	if info.Size > 0 || info.Kind == client.StatFile || info.Kind == client.StatArchive {
+		add("Size", fmt.Sprintf("%s (%d bytes)", humanizeBytes(info.Size), info.Size))
+	}
+	if len(info.Tags) > 0 {
+		add("Tags", strings.Join(info.Tags, ", "))
+	}
+	if !info.TagDate.IsZero() {
+		add("Tagged", info.TagDate.Format(time.RFC3339))
+	}
+	for _, k := range []string{"title", "artist", "album", "year", "track"} {
+		if v, ok := info.Meta[k]; ok {
+			add(strings.ToUpper(k[:1])+k[1:], v)
+		}
+	}
+	if len(info.Paths) > 0 {
+		add("Path", strings.Join(info.Paths, ", "))
+	}
+	if info.Kind == client.StatDirectory {
+		add("Children", fmt.Sprintf("%d dirs, %d files, %d archives", info.SubDirCount, info.FileCount, info.ArchiveCount))
+	}
+	if info.TotalSize > 0 {
+		add("Total size", fmt.Sprintf("%s (%d bytes)", humanizeBytes(info.TotalSize), info.TotalSize))
+	}
+	if info.BlobChecked {
+		if info.BlobExists {
+			add("Blob", fmt.Sprintf("present (%s on disk)", humanizeBytes(info.BlobSize)))
+		} else {
+			add("Blob", "MISSING from filehost")
+		}
+	}
+	if len(info.Versions) > 0 {
+		add("Versions", strconv.Itoa(len(info.Versions)))
+	}
+
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		for _, r := range rows {
+			fmt.Println(r.k + "\t" + r.v)
+		}
+		return
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
+	for _, r := range rows {
+		fmt.Fprintln(tw, r.k+"\t"+r.v)
+	}
+	tw.Flush()
+}
+
+// humanizeBytes formats a byte count with a binary (KiB/MiB/…) unit, e.g.
+// "1.4 MiB". Values under 1 KiB are shown as plain bytes.
+func humanizeBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
