@@ -4,6 +4,7 @@ package tiedb
 // Update, SetValues) and the association lookups they share.
 
 import (
+	"errors"
 	"log/slog"
 	"sync/atomic"
 )
@@ -17,10 +18,13 @@ func (ic *Collection) shouldBuildReverse(a *Triple) bool {
 	return ic.reverseRelations[ic.getValueString(a.Value1Level, a.Value1)]
 }
 
-func (ic *Collection) Add(key string, value1 string, value2 string) {
+// Add stores one triple. A nil return means the triple is in the index and its
+// write is queued; a non-nil return means the collection has gone read-only
+// because of a sticky I/O failure (see Err).
+func (ic *Collection) Add(key string, value1 string, value2 string) error {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
-	ic.addLocked(key, value1, value2)
+	return ic.addLocked(key, value1, value2)
 }
 
 // addLocked is Add's body; the caller must hold changeMutex. The *Locked
@@ -28,7 +32,10 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 // mutations as one critical section: a concurrent reader never sees the
 // relation momentarily empty, and two concurrent Sets cannot interleave into
 // the union of both value sets.
-func (ic *Collection) addLocked(key string, value1 string, value2 string) {
+func (ic *Collection) addLocked(key string, value1 string, value2 string) error {
+	if err := ic.Err(); err != nil {
+		return err
+	}
 	keyID, keyLevel := ic.insertLocked(key)
 	value1ID, value1Level := ic.insertLocked(value1)
 	value2ID, value2Level := ic.insertLocked(value2)
@@ -51,7 +58,7 @@ func (ic *Collection) addLocked(key string, value1 string, value2 string) {
 	// lock Delete holds, so an Add can no longer interleave with a Delete of the
 	// same triple between the check and the insert either.
 	if ic.uniqueAssociationExists(keyLevel, keyID, value1ID, value2ID) {
-		return
+		return nil
 	}
 
 	// Reserve the final storage position now and insert at it, so a duplicate
@@ -70,17 +77,20 @@ func (ic *Collection) addLocked(key string, value1 string, value2 string) {
 		// The old order (index, then enqueue) let a RECLAIMED slot be read as
 		// its old tombstone: ReadAt succeeded with stale bytes, decoding
 		// failed, and the triple silently vanished from that query.
-		ic.queueWrite(FileMod{
+		if !ic.queueWrite(FileMod{
 			EntryType: TYPE_ASSOCIATION,
 			Level:     keyLevel,
 			Mode:      FILE_ADD,
 			Position:  pos,
 			Triple:    &ass,
-		})
+		}) {
+			return ic.Err()
+		}
 	} else {
 		pos = ic.arenaStore(&ass)
 	}
 	ic.insertAssociation(keyLevel, &ass, pos)
+	return nil
 }
 
 func (ic *Collection) GetAssociations(value string) (*AssociationSet, bool) {
@@ -355,6 +365,7 @@ func (ic *Collection) queueWrite(m FileMod) bool {
 	case ic.dBWriteQueue <- m:
 		return true
 	case <-ic.writerDone:
+		ic.setIOErr(errors.New("collection writer is no longer running"))
 		slog.Error("dropping write: collection writer is gone", "path", ic.dBFullPath, "mode", m.Mode)
 		return false
 	}

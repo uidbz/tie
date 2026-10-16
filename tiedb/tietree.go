@@ -1,6 +1,7 @@
 package tiedb
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"sync"
@@ -77,15 +78,27 @@ func NewDB(writeToDisk bool) *TieTree {
 type pendingLoad struct {
 	ready chan struct{}
 	col   *Collection
+	err   error
 }
 
 // GetCollection returns the collection for key, loading (and in disk mode,
 // creating) it on first use. The load runs outside colMutex; only the map
 // bookkeeping takes it, so loading a large collection no longer stalls
 // requests to every other collection.
+//
+// A collection that cannot be loaded is NOT fatal: it comes back in sticky
+// error state — reads answer empty, every write reports Err() — instead of the
+// library calling os.Exit and taking the whole triplestore down with it. Use
+// TryGetCollection when you want that error explicitly.
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {
+	col, _ := db.TryGetCollection(key)
+	return col
+}
+
+// TryGetCollection is GetCollection with the load failure surfaced.
+func (db *TieTree) TryGetCollection(key CollectionKey) (*Collection, error) {
 	if col, found := db.collections.Get(key); found {
-		return col
+		return col, col.Err()
 	}
 	return db.loadCollection(key)
 }
@@ -104,33 +117,34 @@ func (db *TieTree) LookupCollection(key CollectionKey) (*Collection, bool) {
 	if _, err := os.Stat(key.Database + "/" + key.Collection + ".tie"); err != nil {
 		return nil, false
 	}
-	return db.loadCollection(key), true
+	col, _ := db.loadCollection(key)
+	return col, true
 }
 
-func (db *TieTree) loadCollection(key CollectionKey) *Collection {
+func (db *TieTree) loadCollection(key CollectionKey) (*Collection, error) {
 	db.colMutex.Lock()
 	if col, found := db.collections.Get(key); found {
 		db.colMutex.Unlock()
-		return col
+		return col, col.Err()
 	}
 	if p, ok := db.pending[key]; ok {
 		db.colMutex.Unlock()
 		<-p.ready
-		return p.col
+		return p.col, p.err
 	}
 	p := &pendingLoad{ready: make(chan struct{})}
 	db.pending[key] = p
 	db.colMutex.Unlock()
 
-	col := db.initialize(key.Database, key.Collection, false) // heavy load, no mutex held
-	p.col = col
+	col, err := db.initialize(key.Database, key.Collection, false) // heavy load, no mutex held
+	p.col, p.err = col, err
 
 	db.colMutex.Lock()
 	db.collections.Put(key, col)
 	delete(db.pending, key)
 	db.colMutex.Unlock()
 	close(p.ready)
-	return col
+	return col, err
 }
 
 // Close flushes and closes every live collection's disk writer, blocking until
@@ -183,8 +197,14 @@ func (db *TieTree) DropCollection(key CollectionKey) error {
 	return nil
 }
 
-func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) *Collection {
-	ic := Collection{}
+// initialize builds one collection index, loading the record file in disk mode.
+// A failure is returned (and recorded on the collection as Err) rather than
+// exiting: a library must not call os.Exit in the middle of a request, and one
+// unreadable collection must not take the other collections down. The returned
+// collection is usable in degraded form — reads answer empty, writes report
+// the error.
+func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) (*Collection, error) {
+	ic := &Collection{}
 
 	ic.writeToDisk = db.writeToDisk
 	ic.dBPath = path
@@ -200,23 +220,28 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	if db.writeToDisk {
 		slog.Info("initializing collection", "path", ic.dBFullPath)
 		if err := os.MkdirAll(path, 0777); err != nil {
-			slog.Error("creating DB directory; exiting", "path", path, "err", err)
-			os.Exit(1)
+			err = fmt.Errorf("creating DB directory %s: %w", path, err)
+			ic.setIOErr(err)
+			slog.Error("creating DB directory", "path", path, "err", err)
+			return ic, err
 		}
 		ic.cache = newTripleCache(defaultTripleCacheSize)
 		if clearExistingDB {
 			if err := os.Remove(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
-				slog.Error("clearing DB; exiting", "path", ic.dBFullPath, "err", err)
-				os.Exit(1)
+				err = fmt.Errorf("clearing DB %s: %w", ic.dBFullPath, err)
+				ic.setIOErr(err)
+				slog.Error("clearing DB", "path", ic.dBFullPath, "err", err)
+				return ic, err
 			}
 		}
-		err := ic.loadDB(ic.dBFullPath)
-		if err != nil && !os.IsNotExist(err) {
-			slog.Error("loading DB; exiting", "err", err)
-			os.Exit(1)
+		if err := ic.loadDB(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
+			err = fmt.Errorf("loading DB %s: %w", ic.dBFullPath, err)
+			ic.setIOErr(err)
+			slog.Error("loading DB", "path", ic.dBFullPath, "err", err)
+			return ic, err
 		}
-		ic.dBWriter()
+		ic.dBWriter() // records its own open/sizing failures as Err
 	}
 
-	return &ic
+	return ic, nil
 }

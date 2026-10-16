@@ -80,6 +80,28 @@ func (ic *Collection) Sync() {
 	}
 }
 
+// Err reports the sticky I/O failure that put this collection read-only, or
+// nil while it is healthy. A failed write (ENOSPC, a dying device) does not
+// kill the process and does not corrupt the other collections: the writer
+// records the error, keeps serving reads, and every later write reports it.
+func (ic *Collection) Err() error {
+	ic.ioErrMutex.Lock()
+	defer ic.ioErrMutex.Unlock()
+	return ic.ioErr
+}
+
+// setIOErr records the first I/O failure.
+func (ic *Collection) setIOErr(err error) {
+	if err == nil {
+		return
+	}
+	ic.ioErrMutex.Lock()
+	defer ic.ioErrMutex.Unlock()
+	if ic.ioErr == nil {
+		ic.ioErr = err
+	}
+}
+
 func (ic *Collection) closeDB() {
 	ic.closed.Store(true)
 	// Signal the writer to drain any queued writes, sync, and close the fd, then
@@ -89,4 +111,19 @@ func (ic *Collection) closeDB() {
 	// the shutdown signal into the "Wrong EntryType" panic.
 	ic.dBCloseWriter <- true
 	ic.finished.Wait()
+}
+
+// setFile/getFile give the writer goroutine (and tests injecting I/O faults)
+// race-free access to the collection's record handle. The holder wrapper keeps
+// atomic.Value's concrete type constant across swaps.
+type fileHolder struct{ f dbFile }
+
+func (ic *Collection) setFile(f dbFile) { ic.file.Store(fileHolder{f}) }
+
+func (ic *Collection) getFile() dbFile {
+	v := ic.file.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(fileHolder).f
 }

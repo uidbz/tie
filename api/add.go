@@ -39,7 +39,11 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		return ws.Reply{}, err
 	}
 
-	col.Add(request.Key, request.Value1, request.Value2)
+	if err := col.Add(request.Key, request.Value1, request.Value2); err != nil {
+		reply.Success = false
+		reply.Message = err.Error()
+		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, err
+	}
 
 	reply.Success = true
 	reply.OrigKey = request.Key

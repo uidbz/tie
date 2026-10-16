@@ -93,12 +93,15 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	return ws
 }
 
-func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
+// ListenAndServe serves the API until the process is asked to stop. It returns
+// an error rather than exiting: whether a failure kills the process is main's
+// call (cmd/tie-triplestore), not a library's. On SIGINT/SIGTERM it drains
+// in-flight handlers, closes the DB, and returns nil.
+func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) error {
 	routes(ws.mux)
 
 	if !ws.Config.Insecure && (ws.Config.CertFile == "" || ws.Config.KeyFile == "") {
-		slog.Error("set CertFile and KeyFile in the config file, or set Insecure = true; exiting")
-		return
+		return errors.New("set CertFile and KeyFile in the config file, or set Insecure = true")
 	}
 
 	srv := &http.Server{Addr: ws.Config.ListenOn, Handler: ws.mux}
@@ -116,22 +119,20 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 			slog.Error("HTTP shutdown error", "err", err)
 		}
 		ws.Close()
-		os.Exit(0)
 	}()
 
 	if ws.Config.Insecure {
 		slog.Info("listening", "addr", "http://"+ws.Config.ListenOn)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
+			return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
 		}
-	} else {
-		slog.Info("listening", "addr", "https://"+ws.Config.ListenOn)
-		if err := srv.ListenAndServeTLS(ws.Config.CertFile, ws.Config.KeyFile); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
-		}
+		return nil
 	}
+	slog.Info("listening", "addr", "https://"+ws.Config.ListenOn)
+	if err := srv.ListenAndServeTLS(ws.Config.CertFile, ws.Config.KeyFile); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
+	}
+	return nil
 }
 
 // Close flushes and closes every collection's disk writer. Call it on shutdown
@@ -208,11 +209,18 @@ func (ws *Webservice) GetCollection(namespace, collection string, writable bool)
 		return nil, err
 	}
 	if writable {
-		return ws.db.GetCollection(key), nil
+		col, err := ws.db.TryGetCollection(key)
+		if err != nil {
+			return nil, err
+		}
+		return col, nil
 	}
 	col, ok := ws.db.LookupCollection(key)
 	if !ok {
 		return nil, ErrCollectionNotFound
+	}
+	if err := col.Err(); err != nil {
+		return nil, err
 	}
 	return col, nil
 }

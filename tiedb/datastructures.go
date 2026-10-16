@@ -143,8 +143,17 @@ type Collection struct {
 	// a barrier queued against an already-stopped writer cannot hang.
 	writerDone chan struct{}
 	// closed is set by closeDB; Sync returns immediately once set.
-	closed  atomic.Bool
-	db_size int64
+	closed atomic.Bool
+	// file holds the open record file (a dbFile) owned by the writer
+	// goroutine. It is an atomic.Value so tests can swap in a fault-injecting
+	// handle without racing the writer.
+	file atomic.Value
+	// ioErr is the sticky write failure that put this collection read-only
+	// (ENOSPC, a dying device). Reads keep working; writes report it. Guarded
+	// by ioErrMutex; the first error is the one reported.
+	ioErrMutex sync.Mutex
+	ioErr      error
+	db_size    int64
 }
 
 type UniqueValue struct {

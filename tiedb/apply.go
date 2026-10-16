@@ -50,6 +50,10 @@ func (ic *Collection) Apply(ops []Op) (applied int, err error) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
 
+	if err := ic.Err(); err != nil {
+		return 0, err
+	}
+
 	for i, op := range ops {
 		switch op.Kind {
 		case OpAdd, OpDelete, OpSet, OpAddIfAbsent, OpUpdateAdd:
@@ -66,21 +70,24 @@ func (ic *Collection) Apply(ops []Op) (applied int, err error) {
 	for i, op := range ops {
 		switch op.Kind {
 		case OpAdd:
-			ic.addLocked(op.Key, op.Relation, op.first())
+			if err := ic.addLocked(op.Key, op.Relation, op.first()); err != nil {
+				return i, err
+			}
 		case OpDelete:
 			ic.deleteLocked(op.Key, op.Relation, op.first())
 		case OpSet:
 			ic.setValuesLocked(op.Key, op.Relation, op.Values)
-		case OpUpdate:
+		case OpUpdate, OpUpdateAdd:
 			ic.deleteLocked(op.Key, op.Relation, op.first())
-			ic.addLocked(op.Key, op.Relation, op.NewValue)
-		case OpUpdateAdd:
-			ic.deleteLocked(op.Key, op.Relation, op.first())
-			ic.addLocked(op.Key, op.Relation, op.NewValue)
+			if err := ic.addLocked(op.Key, op.Relation, op.NewValue); err != nil {
+				return i, err
+			}
 		case OpAddIfAbsent:
 			if !ic.relationHasValuesLocked(op.Key, op.Relation) {
 				for _, v := range op.Values {
-					ic.addLocked(op.Key, op.Relation, v)
+					if err := ic.addLocked(op.Key, op.Relation, v); err != nil {
+						return i, err
+					}
 				}
 			}
 		default:

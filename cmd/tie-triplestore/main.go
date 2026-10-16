@@ -187,5 +187,8 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	}
 
-	ws.ListenAndServe(routes)
+	if err := ws.ListenAndServe(routes); err != nil {
+		slog.Error("triplestore stopped", "err", err)
+		os.Exit(1)
+	}
 }
