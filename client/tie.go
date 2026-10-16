@@ -1,9 +1,12 @@
 package client
 
 import (
+	"bufio"
 	"crypto/tls"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -725,21 +728,86 @@ func (tc *TieClient) DropCollection() error {
 	return replyError(reply.ReplyStatus)
 }
 
-// Restore adds every (key, value1, value2) triple into the current collection
-// via a single batch. It is additive and idempotent: re-adding an existing
-// triple is a no-op, so restoring a dump merges rather than replaces.
+// restoreBatchOps is how many triples go into one Batch request when restoring.
+// A dump used to be parsed into one slice and sent as one request: a 2M-triple
+// backup was hundreds of MB of JSON on both sides, held one semaphore slot for
+// the whole transfer, and lost everything if the single request failed (§4.18).
+const restoreBatchOps = 5000
+
+// Restore adds the given triples into the current collection in chunks of
+// restoreBatchOps. It is additive and idempotent: re-adding an existing triple
+// is a no-op, so restoring a dump merges rather than replaces.
 func (tc *TieClient) Restore(triples [][3]string) error {
-	if len(triples) == 0 {
-		return nil
-	}
-	b := tc.NewBatch()
-	for _, t := range triples {
-		b.Add(t[0], t[1], t[2])
-	}
-	if _, err := tc.Batch(b); err != nil {
-		return err
+	for len(triples) > 0 {
+		n := len(triples)
+		if n > restoreBatchOps {
+			n = restoreBatchOps
+		}
+		b := tc.NewBatch()
+		for _, t := range triples[:n] {
+			b.Add(t[0], t[1], t[2])
+		}
+		if _, err := tc.Batch(b); err != nil {
+			return err
+		}
+		triples = triples[n:]
 	}
 	return nil
+}
+
+// RestoreStream reads a TSV dump (key<TAB>value1<TAB>value2) and applies it to
+// the collection in chunks, so neither the file's contents nor the request body
+// is ever held whole in memory. Each chunk is followed by a Sync, so an
+// interrupted restore keeps the triples it already applied instead of starting
+// over. It returns the number of triples read; a malformed record aborts with
+// its line number. progress, when non-nil, is called after each chunk with the
+// running total.
+func (tc *TieClient) RestoreStream(src io.Reader, progress func(done int)) (int, error) {
+	r := csv.NewReader(bufio.NewReader(src))
+	r.Comma = '\t'
+	r.FieldsPerRecord = 3
+
+	done := 0
+	line := 0
+	b := tc.NewBatch()
+	flush := func() error {
+		if len(b.Ops) == 0 {
+			return nil
+		}
+		if _, err := tc.Batch(b); err != nil {
+			return err
+		}
+		if err := tc.Sync(); err != nil {
+			return err
+		}
+		b = tc.NewBatch()
+		if progress != nil {
+			progress(done)
+		}
+		return nil
+	}
+
+	for {
+		line++
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return done, fmt.Errorf("malformed line %d: %w", line, err)
+		}
+		b.Add(rec[0], rec[1], rec[2])
+		done++
+		if len(b.Ops) >= restoreBatchOps {
+			if err := flush(); err != nil {
+				return done, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return done, err
+	}
+	return done, nil
 }
 
 // Check if the key exists

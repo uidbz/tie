@@ -8,6 +8,17 @@ to follow semantic versioning.
 
 ### Added
 
+- **`tie restore` streams the dump instead of loading it whole.** A TSV backup
+  used to be parsed into one slice and sent as one `Batch` request: a 2M-triple
+  dump was hundreds of MB on both ends, held one request slot for the whole
+  transfer, and if it failed nothing had been applied. It now reads the file
+  incrementally and sends 5 000 ops per batch, syncing after each, so an
+  interrupted restore keeps what it already applied and re-running it merges
+  (adding a triple twice is a no-op). Progress counts on stderr, updating in
+  place on a terminal. `--drop` still refuses to touch the collection until the
+  whole input parses: a file is validated in a first pass, stdin is spooled to a
+  temp file first. New `client.RestoreStream` does the work; `client.Restore`
+  keeps its signature and is now chunked too.
 - **`tie-smb`: the tie filesystem over SMB2/3.** A standalone server
   (`cmd/tie-smb`) exports the same live tag-derived tree as `tie mount --db`
   (`query/`, `files/`, `tags/`) as a single SMB share, pure Go via

@@ -351,49 +351,96 @@ func cmdRestore() *cli.Command {
 			if tie == nil {
 				return errors.New("Error: Config not loaded")
 			}
+			drop := ctx.Bool("drop")
 			var src io.Reader = os.Stdin
+			var seekable io.Seeker
 			if path := ctx.Args().Get(0); path != "" {
 				f, err := os.Open(path)
 				if err != nil {
 					return errors.New("Error opening file: " + err.Error())
 				}
 				defer f.Close()
-				src = f
-			}
-			var triples [][3]string
-			r := csv.NewReader(bufio.NewReader(src))
-			r.Comma = '\t'
-			r.FieldsPerRecord = 3
-			line := 0
-			for {
-				line++
-				rec, err := r.Read()
-				if err == io.EOF {
-					break
-				}
+				src, seekable = f, f
+			} else if drop {
+				// --drop from stdin has to be spooled: the restore streams, so
+				// a malformed line would otherwise surface after the
+				// collection was dropped.
+				f, err := os.CreateTemp("", "tie-restore-")
 				if err != nil {
-					return fmt.Errorf("Malformed line %d: %v", line, err)
+					return errors.New("Error spooling input: " + err.Error())
 				}
-				triples = append(triples, [3]string{rec[0], rec[1], rec[2]})
+				defer os.Remove(f.Name())
+				defer f.Close()
+				if _, err := io.Copy(f, os.Stdin); err != nil {
+					return errors.New("Error reading input: " + err.Error())
+				}
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					return errors.New("Error reading input: " + err.Error())
+				}
+				src, seekable = f, f
 			}
-			// The whole file is parsed first, so a malformed input aborts before
-			// anything is dropped. The drop+restore that follows is not atomic,
-			// though: if the restore fails mid-batch the collection is left empty.
-			// Acceptable for a backup-recovery tool; re-run restore to retry.
-			if ctx.Bool("drop") {
+
+			if drop {
+				// Nothing is destroyed until the whole input parses. The file
+				// is read twice rather than held in memory (§4.18).
+				n, err := validateTSV(src)
+				if err != nil {
+					return fmt.Errorf("Input rejected before dropping anything: %w (checked %d lines)", err, n)
+				}
+				if seekable == nil {
+					return errors.New("Error: --drop needs a seekable input")
+				}
+				if _, err := seekable.Seek(0, io.SeekStart); err != nil {
+					return errors.New("Error reading input: " + err.Error())
+				}
 				if err := tie.DropCollection(); err != nil {
 					return errors.New("Drop Error: " + err.Error())
 				}
 			}
-			if err := tie.Restore(triples); err != nil {
-				return errors.New("Restore Error: " + err.Error())
+
+			// Chunks of 5 000 ops, each followed by a Sync: a 2M-triple dump is
+			// neither a memory problem nor one request, and an interrupted
+			// restore keeps what it already applied.
+			tty := term.IsTerminal(int(os.Stderr.Fd()))
+			total, err := tie.RestoreStream(src, func(n int) {
+				if tty {
+					fmt.Fprintf(os.Stderr, "\rRestored %d triples", n)
+				}
+			})
+			if err != nil {
+				if tty {
+					fmt.Fprint(os.Stderr, "\r")
+				}
+				return fmt.Errorf("Restore Error after %d triples: %w", total, err)
 			}
 			if err := tie.Sync(); err != nil {
 				return errors.New("Sync Error: " + err.Error())
 			}
-			fmt.Fprintf(os.Stderr, "Restored %d triples\n", len(triples))
+			if tty {
+				fmt.Fprintf(os.Stderr, "\rRestored %d triples\n", total)
+			} else {
+				fmt.Fprintf(os.Stderr, "Restored %d triples\n", total)
+			}
 			return nil
 		},
+	}
+}
+
+// validateTSV parses a TSV dump without keeping it, and reports how many lines
+// it checked. It is the pre-flight pass that lets --drop refuse a malformed
+// input instead of destroying the collection first.
+func validateTSV(src io.Reader) (int, error) {
+	r := csv.NewReader(bufio.NewReader(src))
+	r.Comma = '\t'
+	r.FieldsPerRecord = 3
+	lines := 0
+	for {
+		lines++
+		if _, err := r.Read(); err == io.EOF {
+			return lines - 1, nil
+		} else if err != nil {
+			return lines, fmt.Errorf("malformed line %d: %w", lines, err)
+		}
 	}
 }
 
