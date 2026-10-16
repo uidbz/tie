@@ -1100,10 +1100,12 @@ func (ic *Collection) SetValues(key string, value1 string, values []string) {
 // association subtree through the same Sort path used by Get, so the emitted
 // triples match query results exactly. Intended for full-collection export.
 func (ic *Collection) ForEachTriple(do func(StringTriple)) {
-	emit := func(level int, tree *lockedTree[uint64, *AssociationSet]) {
-		tree.ForEach(func(entryID uint64, _ *AssociationSet) {
-			subtree := ic.getAssociations(level, entryID)
-			triples, _ := ic.Sort(subtree, "", SortOptions{Limit: -1})
+	// Use the set ForEach already hands us — re-fetching it via
+	// getAssociations was a recursive RLock on the same shard and deadlocked
+	// the collection against any concurrent Add of a new subject.
+	emit := func(tree *lockedTree[uint64, *AssociationSet]) {
+		tree.ForEach(func(_ uint64, set *AssociationSet) {
+			triples, _ := ic.Sort(set, "", SortOptions{Limit: -1})
 			for _, t := range triples {
 				do(t)
 			}
@@ -1118,11 +1120,11 @@ func (ic *Collection) ForEachTriple(do func(StringTriple)) {
 		if !ok {
 			continue
 		}
-		emit(level, lvl.associations)
+		emit(lvl.associations)
 	}
 	// Triples keyed by a hash live outside the per-level trees.
 	if ic.hashAssociations != nil {
-		emit(HASH_LEVEL, ic.hashAssociations)
+		emit(ic.hashAssociations)
 	}
 }
 
