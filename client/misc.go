@@ -19,12 +19,20 @@ func DefaultConfig() Config {
 	return conf
 }
 
+// Testing URLs are package vars so the test environment (testenv_test.go)
+// can point them at in-process servers; outside `go test` they keep the
+// test-env defaults.
+var (
+	testingTripleStoreURL = "http://localhost:2161"
+	testingFileHostURL    = "http://localhost:2162"
+)
+
 func TestingConfig() Config {
 	config := defaultConfig
 	config.Namespace = "testing"
 	config.Collection = "testing"
-	config.TripleStoreURL = "http://localhost:2161"
-	config.FileHosts = map[string]FileHost{"default": {URL: "http://localhost:2162"}}
+	config.TripleStoreURL = testingTripleStoreURL
+	config.FileHosts = map[string]FileHost{"default": {URL: testingFileHostURL}}
 	return config
 }
 

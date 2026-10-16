@@ -26,10 +26,8 @@ func verifyTestConfig() Config {
 	c.Collection = "verifytesting"
 	if ws := os.Getenv("TIE_TEST_WEBSERVICE"); ws != "" {
 		c.TripleStoreURL = ws
-	} else {
-		c.TripleStoreURL = "http://localhost:2161"
 	}
-	fh := "http://localhost:2162"
+	fh := testingFileHostURL
 	if h := os.Getenv("TIE_TEST_FILEHOST"); h != "" {
 		fh = h
 	}
