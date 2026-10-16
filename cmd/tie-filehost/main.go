@@ -143,7 +143,7 @@ func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request, h string)
 	}
 	token := r.Header.Get("Tie-Owner")
 
-	hashHex, existed, err := putBlob(st, r.Body, h)
+	hashHex, existed, isDir, err := putBlob(st, r.Body, h)
 	switch {
 	case errors.Is(err, errChecksumMismatch):
 		slog.Warn("checksum mismatch; nothing stored", "expected", h)
@@ -157,6 +157,11 @@ func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request, h string)
 
 	if err := st.retention.recordUpload(hashHex, expiresAt, token, now.Unix(), existed); err != nil {
 		slog.Error("recording retention", "err", err)
+	}
+	// Index directory manifests as they land, so the reaper's mark phase walks
+	// this set instead of opening every blob in the store (§5.2 item 9).
+	if isDir {
+		st.dirs.add(hashHex)
 	}
 	slog.Info("stored blob", "hash", hashHex, "store", st.name)
 	fmt.Fprint(w, hashHex)

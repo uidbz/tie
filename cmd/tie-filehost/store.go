@@ -26,6 +26,9 @@ type blobStore struct {
 	path             string
 	defaultRetention time.Duration // 0 = infinite
 	retention        *retentionIndex
+	// dirs records which blobs in this store are tie-directory manifests, so
+	// the reaper's mark phase walks those instead of opening every blob.
+	dirs *dirIndex
 }
 
 // server is the filehost: its physical stores and the read cache. Handlers are
@@ -76,7 +79,19 @@ func (s *server) initStores(cfg FilehostConfig) error {
 		if err != nil {
 			return fmt.Errorf("blob store %q: loading retention index: %w", sp.Name, err)
 		}
-		st := &blobStore{name: sp.Name, path: path, defaultRetention: d, retention: ri}
+		di, present, err := loadDirIndex(path)
+		if err != nil {
+			return fmt.Errorf("blob store %q: loading dir index: %w", sp.Name, err)
+		}
+		if !present {
+			// Store predates the dir index: pay the full scan once here rather
+			// than on every reaper pass.
+			di.bootstrap(path)
+		} else {
+			// Pick up any manifest whose index line was lost to a crash.
+			di.repair(path)
+		}
+		st := &blobStore{name: sp.Name, path: path, defaultRetention: d, retention: ri, dirs: di}
 		s.stores = append(s.stores, st)
 		if sp.Name == "default" {
 			s.def = st

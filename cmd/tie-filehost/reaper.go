@@ -47,17 +47,28 @@ func (srv *server) reapOnce(now int64) (deleted, kept int) {
 		return 0, 0
 	}
 
+	// Repair first: a manifest placed in the store out-of-band (a restore, an
+	// older filehost, a crash that lost the appended line) must still protect
+	// its children. This is a stat per blob and an open only for the handful
+	// newer than the index file — the cheap form of the scan this used to do
+	// every pass.
+	for _, st := range srv.stores {
+		st.dirs.repair(st.path)
+	}
+
 	// Mark phase: protect every blob reachable from a live directory in any
-	// store. Live roots include permanent directories absent from the index, so
-	// we enumerate all blobs on disk rather than only indexed ones. dirChildren
-	// resolves children via findBlob, so protection follows cross-store
-	// references and shields a live directory's whole sub-tree transitively.
+	// store. Only directory manifests have children, and every upload records
+	// whether it is one (dirIndex), so the walk reads that set instead of
+	// opening every blob in the store — the cost the review measured at one
+	// open per blob per pass. dirChildren resolves children via findBlob, so
+	// protection follows cross-store references and shields a live directory's
+	// whole sub-tree transitively.
 	protected := map[string]bool{}
 	visited := map[string]bool{}
 	for _, st := range srv.stores {
-		for _, h := range listBlobs(st.path) {
+		for _, h := range st.dirs.all() {
 			if _, isExpired := expired[h]; isExpired {
-				continue // an expired blob is not a live root
+				continue // an expired directory is not a live root
 			}
 			srv.markReferences(h, protected, visited)
 		}
@@ -81,8 +92,12 @@ func (srv *server) reapOnce(now int64) (deleted, kept int) {
 		}
 		toDelete[s] = append(toDelete[s], h)
 	}
-	for s, hashes := range toDelete {
-		deleted += sweepStore(s, hashes, now)
+	for st, hashes := range toDelete {
+		deleted += sweepStore(st, hashes, now)
+		// Forget reaped manifests so the index tracks the live set.
+		for _, h := range hashes {
+			st.dirs.remove(h)
+		}
 	}
 	return deleted, kept
 }
