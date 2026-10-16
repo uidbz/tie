@@ -361,6 +361,11 @@ func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
 func (ic *Collection) SetValues(key string, value1 string, values []string) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	ic.setValuesLocked(key, value1, values)
+}
+
+// setValuesLocked is SetValues' body; the caller must hold changeMutex.
+func (ic *Collection) setValuesLocked(key string, value1 string, values []string) {
 	if existing, found := ic.Get(key, value1); found {
 		if set, ok := existing[key][value1]; ok {
 			set.ForEach(func(value2 string) {
