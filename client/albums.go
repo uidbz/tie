@@ -6,6 +6,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -924,122 +925,65 @@ func (tie *TieClient) importAlbum(g AlbumGroup, opts AlbumImportOptions) error {
 
 // importAlbumFiles imports an explicit file list (a merged, split or
 // tag-clustered group, or a disc-converted dir group) under the group's
-// destination, mirroring ImportDir's batched tagging: member placement
+// destination. It is a plan builder for executeImport (§7.9): member placement
 // follows the group's SubPaths when planned (disc-aware cd<N> routing), else
-// subdirectories below SourceDir are preserved; directory nodes get
-// name/album aggregates, and the root is stamped with the dir-type.
+// subdirectories below SourceDir are preserved.
 //
-// Unlike ImportDir it is purely additive — no reconciliation — because the
-// file list is a subset view: versioning away children this group did not
-// place would destroy files belonging to other albums sharing the directory.
+// Unlike ImportDir the plan is purely additive — no reconciliation — because the
+// file list is a subset view: versioning away children this group did not place
+// would destroy files belonging to other albums sharing the directory.
 func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) error {
-	rootUID, err := tie.MkTieDirAll(FileURIScheme + g.Dest)
-	if err != nil {
-		return err
-	}
-	const flushThreshold = 1000
-	batch := tie.NewBatch()
-	flush := func() error {
-		if len(batch.Ops) == 0 {
-			return nil
-		}
-		if _, err := tie.Batch(batch); err != nil {
-			return err
-		}
-		batch = tie.NewBatch()
-		return nil
+	p := importPlan{
+		Root:          FileURIScheme + g.Dest,
+		Tags:          opts.Tags,
+		ForcedArchive: opts.ForcedArchive,
+		DirType:       opts.DirType,
+		StampDirType:  true,
 	}
 
-	dirUIDs := map[string]DirUID{".": rootUID}
-	dirAlbums := map[string]*albumMeta{".": {}}
-	parentFor := func(rel string) (DirUID, error) {
-		d := filepath.Dir(rel)
-		// Ensure d and every missing ancestor below the root exist as tagged
-		// directory nodes — a file at "CD1/disc 2/x.flac" must not leave the
-		// intermediate "CD1" node anonymous.
-		var chain []string
-		for cur := d; cur != "." && cur != ""; cur = filepath.Dir(cur) {
-			if _, ok := dirUIDs[cur]; !ok {
-				chain = append(chain, cur)
-			}
-		}
-		for i := len(chain) - 1; i >= 0; i-- {
-			cur := chain[i]
-			uid, err := tie.MkTieDirAll(FileURIScheme + g.Dest + "/" + filepath.ToSlash(cur))
-			if err != nil {
-				return "", err
-			}
-			dirUIDs[cur] = uid
-			dirAlbums[cur] = &albumMeta{}
-			appendTagDirOps(batch, uid, filepath.Base(cur), 0, opts.Tags)
-		}
-		return dirUIDs[d], nil
-	}
-
-	var total int
 	all := make([]string, 0, len(g.Files)+len(g.Sidecars))
 	all = append(all, g.Files...)
 	all = append(all, g.Sidecars...)
+
+	dirs := map[string]bool{".": true}
+	total := 0
 	for _, f := range all {
 		rel, ok := g.SubPaths[f]
 		if !ok {
 			var err error
-			rel, err = filepath.Rel(g.SourceDir, f)
-			if err != nil {
+			if rel, err = filepath.Rel(g.SourceDir, f); err != nil {
 				return err
 			}
 		}
-		parent, err := parentFor(rel)
-		if err != nil {
-			return err
-		}
+		rel = filepath.ToSlash(rel)
 		status := putlib.Upload(opts.Host.URL, f, putlib.PutConfig{Client: HTTPClientFor(opts.Host), Store: opts.Host.Store})
 		if status.ErrorMsg != "" {
 			return fmt.Errorf("upload %s: %s", f, status.ErrorMsg)
 		}
 		x := status.LastItem
-		fileType, err := GetTieTypeFromPath(f)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s: cannot classify (%v); tagging as %s\n", f, err, TieUnknownFile)
-			fileType = TieUnknownFile
-		}
-		fileType = applyArchiveOverride(fileType, opts.ForcedArchive)
-		meta := ExtractMediaMetadata(f)
-		info := TagInfo{
+		p.Items = append(p.Items, planItem{
+			Src:       f,
+			Rel:       rel,
 			Hash:      x.Hash,
-			File:      f,
 			Size:      x.Size,
 			MediaType: x.MediaType,
-			Directory: parent,
-			TieType:   fileType,
-			Tags:      opts.Tags,
-			Metadata:  meta,
-		}
-		appendTagOps(batch, info)
-		dirAlbums[filepath.Dir(rel)].add(meta)
+			Metadata:  ExtractMediaMetadata(f),
+		})
 		total += x.Size
-		if len(batch.Ops) >= flushThreshold {
-			if err := flush(); err != nil {
-				return err
-			}
+		for cur := path.Dir(rel); cur != "." && cur != ""; cur = path.Dir(cur) {
+			dirs[cur] = true
 		}
 	}
-	for rel, uid := range dirUIDs {
+
+	// Every directory the items sit in, so each node gets a name and the album
+	// aggregates of the files below it — a file at "CD1/disc 2/x.flac" must not
+	// leave the intermediate "CD1" node anonymous.
+	p.Dirs = append(p.Dirs, planDir{Rel: ".", Name: path.Base(g.Dest), Size: total})
+	for rel := range dirs {
 		if rel == "." {
-			appendTagDirOps(batch, uid, filepath.Base(g.Dest), total, opts.Tags)
+			continue
 		}
-		dirAlbums[rel].writeOps(batch, uid)
+		p.Dirs = append(p.Dirs, planDir{Rel: rel, Name: path.Base(rel)})
 	}
-	if err := flush(); err != nil {
-		return err
-	}
-	if err := tie.SetDirType(rootUID, opts.DirType); err != nil {
-		return err
-	}
-	if IsCollectionLabel(opts.DirType) {
-		if _, err := tie.IndexCollection(rootUID, IndexOptions{Collection: opts.Collection}); err != nil {
-			return fmt.Errorf("index collection: %w", err)
-		}
-	}
-	return nil
+	return tie.executeImport(p)
 }

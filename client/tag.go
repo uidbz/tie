@@ -148,10 +148,15 @@ func applyArchiveOverride(sniffed, forced TieType) TieType {
 	return sniffed
 }
 
-// ImportFile uploads one file and links it into `directory` (or the import root
-// when empty) in the client's scoped collection.
+// ImportFile uploads one file and links it into `directory` (nowhere, when
+// directory is empty) in the client's scoped collection. Unlike a tree import
+// it places one item under an existing node, so it neither reconciles the
+// directory — the item is a subset view — nor stamps a dir-type.
 func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, directory DirUID, forcedArchive TieType) error {
 	fmt.Println("Importing:", file)
+	// Classification is strict here, unlike in a tree import: nothing has been
+	// uploaded yet, so an unclassifiable file is refused rather than tagged
+	// unknown and left stranded on the filehost.
 	fileType, err := GetTieTypeFromPath(file)
 	if err != nil {
 		return fmt.Errorf("import %s: classify: %w", file, err)
@@ -162,27 +167,27 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 		return fmt.Errorf("import %s: %w", file, err)
 	}
 	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
-
-	if status.ErrorMsg == "" {
-		info := TagInfo{
-			Hash:      status.LastItem.Hash,
-			File:      file,
-			Size:      int(stat.Size()),
-			MediaType: status.LastItem.MediaType,
-			Directory: directory,
-			TieType:   fileType,
-			Tags:      tags,
-			IsDir:     stat.IsDir(),
-			Metadata:  ExtractMediaMetadata(file),
-		}
-		if err := Tag(tie, info); err != nil {
-			return err
-		}
-		// added-at is the stable "date added" (media.go): written once, never
-		// replaced by a re-import the way tag-date is.
-		return tie.EnsureAddedAt(info.Hash)
+	if status.ErrorMsg != "" {
+		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}
-	return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.LastItem.ErrorMsg)
+
+	return tie.executeImport(importPlan{
+		RootUID: directory,
+		Items: []planItem{{
+			Src:        file,
+			Rel:        filepath.Base(file),
+			Hash:       status.LastItem.Hash,
+			Size:       int(stat.Size()),
+			MediaType:  status.LastItem.MediaType,
+			Metadata:   ExtractMediaMetadata(file),
+			TieType:    fileType,
+			Classified: true,
+			IsDir:      stat.IsDir(),
+		}},
+		Tags:    tags,
+		AddedAt: true,
+		Verbose: true,
+	})
 }
 
 // sanitizePathSegment makes a metadata value safe to embed in a single virtual
@@ -422,21 +427,19 @@ func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
 
 // ImportDir uploads a directory tree and writes its tree triples into the
 // client's scoped collection: one collection for the directory nodes, the file
-// rows and the tags, so parent edges cannot point outside it (§3.8).
+// rows and the tags, so parent edges cannot point outside it (§3.8). It is a
+// plan builder for executeImport (§7.9): upload the tree, describe what came
+// back, and let the engine do the tagging.
 func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags []string, dest string, forcedArchive TieType) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 	if status.ErrorMsg != "" {
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}
 
-	// Extract embedded metadata from each local file once, keyed by local path,
-	// so it feeds both the root-path template (aggregated) and per-file tagging.
-	fileMeta := make(map[string]metadata.Media)
+	// Embedded metadata is read before the plan exists, because the root path
+	// can be a template over it ("tie:/%album/%artist").
+	fileMeta := make(map[string]metadata.Media, len(status.UploadedItems))
 	allMeta := make([]metadata.Media, 0, len(status.UploadedItems))
-	// dirAlbums aggregates album-level metadata per directory, keyed by the
-	// directory's path relative to the import root (the same key dirUID uses),
-	// so each imported dir node can carry its album title/artist/year.
-	dirAlbums := make(map[string]*albumMeta)
 	for _, x := range status.UploadedItems {
 		if x.MediaType == "inode/directory" {
 			continue
@@ -444,175 +447,49 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags 
 		m := ExtractMediaMetadata(x.Filename)
 		fileMeta[x.Filename] = m
 		allMeta = append(allMeta, m)
-		if rel, err := filepath.Rel(dir, x.Filename); err == nil {
-			key := filepath.Dir(rel)
-			dm := dirAlbums[key]
-			if dm == nil {
-				dm = &albumMeta{}
-				dirAlbums[key] = dm
-			}
-			dm.add(m)
-		}
 	}
 
 	rootPath, err := tie.importRootPath(dir, dest, dirType, allMeta)
 	if err != nil {
 		return fmt.Errorf("import %s: root path: %w", dir, err)
 	}
-	dirCache := make(map[string]DirUID)
-	// want records, per directory DirUID, the set of content hashes this import
-	// placed there. It is the source of truth for reconciliation: any existing file
-	// child of a touched directory whose hash is not in this set is superseded
-	// (content changed → new hash) or orphaned (removed/renamed on disk). Keying on
-	// the hash (not the filename) is correct even when one hash has several names or
-	// parents, since identical bytes collapse to a single content address.
-	want := make(map[DirUID]map[string]bool)
-	// dirUID resolves (creating on demand, with ancestors) the virtual DirUID for
-	// a directory given by its path relative to the import root ("." = the root).
-	dirUID := func(relDir string) (DirUID, error) {
-		if uid, ok := dirCache[relDir]; ok {
-			return uid, nil
-		}
-		vpath := rootPath
-		if relDir != "." {
-			vpath += "/" + filepath.ToSlash(relDir)
-		}
-		uid, err := tie.MkTieDirAll(vpath)
-		if err != nil {
-			return "", err
-		}
-		dirCache[relDir] = uid
-		return uid, nil
-	}
 
-	// Tagging is the dominant request count on a large import: one Batch per file
-	// would be thousands of tiny sequential POSTs. Accumulate the per-item tag ops
-	// into one batch and flush in chunks, collapsing them into a handful of
-	// requests. flushThreshold bounds the in-flight batch size (memory + request
-	// size); api.Batch applies every op under a single Sync (api/batch.go).
-	const flushThreshold = 1000
-	batch := tie.NewBatch()
-	flush := func() error {
-		if len(batch.Ops) == 0 {
-			return nil
-		}
-		if _, err := tie.Batch(batch); err != nil {
-			return err
-		}
-		batch = tie.NewBatch()
-		return nil
+	p := importPlan{
+		Root:          rootPath,
+		Tags:          tags,
+		ForcedArchive: forcedArchive,
+		DirType:       dirType,
+		StampDirType:  true,
+		// A whole-tree import owns every child of every directory it walked, so
+		// anything the tree no longer contains is superseded.
+		Reconcile: true,
+		Verbose:   true,
 	}
-
 	for _, x := range status.UploadedItems {
 		rel, err := filepath.Rel(dir, x.Filename)
 		if err != nil {
 			return fmt.Errorf("import %s: %w", x.Filename, err)
 		}
+		rel = filepath.ToSlash(rel)
 		if x.MediaType == "inode/directory" {
-			// Ensure the directory (and its ancestors) exist as DirUID entities,
-			// so even childless directories are browsable.
-			uid, err := dirUID(rel)
-			if err != nil {
-				return fmt.Errorf("import %s: create dir: %w", rel, err)
-			}
-			// A directory's tags, name, and size live on its DirUID (the stable
-			// path-tree node), NOT on the immutable tiedir snapshot blob. This is
-			// the single canonical identity for a directory in tag/type queries,
-			// matching the .tags/.type control files, which also write the DirUID.
-			// Every directory in the tree (and every file below) carries the given
-			// tags, so "query/<tag> type:directory" and "query/<tag> type:file"
-			// filter the same tagged set down to dirs or files respectively.
-			// Use filepath.Base to get just the directory name, not the full path.
-			dirname := filepath.Base(rel)
+			name := path.Base(rel)
 			if rel == "." {
-				// Root directory of the import; use the last segment of the virtual
-				// path for the name.
-				dirname = filepath.Base(strings.TrimPrefix(rootPath, FileURIScheme))
+				// The import root takes its name from the virtual path.
+				name = path.Base(strings.TrimPrefix(rootPath, FileURIScheme))
 			}
-			appendTagDirOps(batch, uid, dirname, x.Size, tags)
-			// Give the dir node a clean album title/artist/year aggregated from
-			// its audio children, so browsers need not scrape them off tracks.
-			if dm := dirAlbums[rel]; dm != nil {
-				dm.writeOps(batch, uid)
-			}
-			// Link the DirUID to its immutable tiedir snapshot blob so the
-			// content-addressed snapshot remains reachable from the live node.
-			batch.Add(string(uid), str(TieTiedirHash), x.Hash)
-			if len(batch.Ops) >= flushThreshold {
-				if err := flush(); err != nil {
-					return fmt.Errorf("import %s: tag batch: %w", rel, err)
-				}
-			}
+			p.Dirs = append(p.Dirs, planDir{Rel: rel, Name: name, Size: x.Size, TiedirHash: x.Hash})
 			continue
 		}
-		parent, err := dirUID(filepath.Dir(rel))
-		if err != nil {
-			return fmt.Errorf("import %s: parent dir: %w", rel, err)
-		}
-		// The blob is already on the filehost by now, so a classification
-		// failure must not abort the import — that would strand this and every
-		// later file as an untagged upload. Warn and tag it as unknown-file.
-		fileType, err := GetTieTypeFromPath(x.Filename)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s: cannot classify (%v); tagging as %s\n", x.Filename, err, TieUnknownFile)
-			fileType = TieUnknownFile
-		}
-		fileType = applyArchiveOverride(fileType, forcedArchive)
-		info := TagInfo{
+		p.Items = append(p.Items, planItem{
+			Src:       x.Filename,
+			Rel:       rel,
 			Hash:      x.Hash,
-			File:      x.Filename,
 			Size:      x.Size,
 			MediaType: x.MediaType,
-			Directory: parent,
-			TieType:   fileType,
-			Tags:      tags,
 			Metadata:  fileMeta[x.Filename],
-		}
-		fmt.Println("tagging", info.Hash)
-		appendTagOps(batch, info)
-		if len(batch.Ops) >= flushThreshold {
-			if err := flush(); err != nil {
-				return fmt.Errorf("import %s: tag batch: %w", rel, err)
-			}
-		}
-		if want[parent] == nil {
-			want[parent] = make(map[string]bool)
-		}
-		want[parent][x.Hash] = true
+		})
 	}
-
-	// Persist all buffered tag ops before reconciliation: reconcileDir queries the
-	// committed children of each touched directory, so nothing may stay buffered.
-	if err := flush(); err != nil {
-		return fmt.Errorf("import %s: final tag batch: %w", dir, err)
-	}
-
-	rootUID, err := dirUID(".")
-	if err != nil {
-		return fmt.Errorf("import %s: root dir: %w", dir, err)
-	}
-
-	// Reconcile every directory this import touched: move superseded/orphaned file
-	// children into per-file "_prev" history dirs (or delete them when history is
-	// disabled), honoring the configured retention count. A directory that had no
-	// files (only subdirs) is still reconciled with an empty want set so a file
-	// deleted down to zero is handled.
-	for relDir := range dirCache {
-		uid := dirCache[relDir]
-		if err := reconcileDir(tie, uid, want[uid], tie.Config.PrevVersions); err != nil {
-			return fmt.Errorf("import %s: reconcile %s: %w", dir, relDir, err)
-		}
-	}
-
-	if err := tie.SetDirType(rootUID, dirType); err != nil {
-		return fmt.Errorf("import %s: set dir type: %w", dir, err)
-	}
-	if IsCollectionLabel(dirType) {
-		if _, err := tie.IndexCollection(rootUID, IndexOptions{}); err != nil {
-			return fmt.Errorf("import %s: index collection: %w", dir, err)
-		}
-	}
-	return nil
+	return tie.executeImport(p)
 }
 
 // childEntry is one file child of a directory during reconciliation: its content
