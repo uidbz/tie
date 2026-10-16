@@ -19,6 +19,7 @@ import (
 	"hash/fnv"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/uidbz/tie/client"
@@ -31,9 +32,9 @@ type Store struct {
 	cache    *Cache
 	host     client.FileHost // filehost that receives uploads from the write path
 	writeDir string          // temp dir staging in-flight writes (no hash until commit)
+	spoolDir string          // where bytes whose commit failed are kept
 	uid      uint32          // owner uid for all files
 	gid      uint32          // owner gid for all files
-
 }
 
 // NewStore builds a store reading blobs from host. cacheSizeGB is the on-disk
@@ -44,9 +45,28 @@ func NewStore(host client.FileHost, cacheSizeGB int, verify bool) *Store {
 		cache:    NewCache(host.URL, client.HTTPClientFor(host), int64(cacheSizeGB)*1024*1024*1024, verify),
 		host:     host,
 		writeDir: writeDir,
+		spoolDir: defaultSpoolDir(),
 		uid:      uint32(os.Getuid()),
 		gid:      uint32(os.Getgid()),
 	}
+}
+
+// defaultSpoolDir is where a write whose commit failed is left for the user to
+// find (§4.9): $TIE_SPOOL_DIR, else $XDG_STATE_HOME/tie/unsaved, else
+// ~/.local/state/tie/unsaved, else the temp dir.
+func defaultSpoolDir() string {
+	if dir := os.Getenv("TIE_SPOOL_DIR"); dir != "" {
+		return dir
+	}
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Join(os.TempDir(), "tie-unsaved")
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(base, "tie", "unsaved")
 }
 
 // Close releases the on-disk blob cache and the write-staging dir. Call once

@@ -3,8 +3,12 @@ package tiesfs
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/uidbz/tie/client"
 )
@@ -194,8 +198,99 @@ func (h *WriteHandle) Close() error {
 	if h.tmp != nil {
 		err = h.commitLocked()
 		h.tmp.Close()
-		os.Remove(h.tmpPath)
+		if err != nil && h.dirty {
+			// The staging file is the only copy of what the user wrote. Most
+			// applications ignore close()/release() errors, so deleting it
+			// here would throw away their data without a sound (§4.9): keep it
+			// in the spool and put the path in the error.
+			dest := h.parentPath + "/" + h.name
+			if spool, serr := h.tree.spoolFailed(h.parentPath, h.name, h.tmpPath); serr == nil {
+				// Logged as well as returned: a FUSE release() or an SMB close
+				// error is usually ignored by the application, and this is the
+				// only notice the user gets that their file is somewhere else.
+				slog.Error("tiesfs: write could not be committed; the bytes are kept in the spool",
+					"file", dest, "spool", spool, "err", err)
+				err = fmt.Errorf("%w (bytes kept in %s)", err, spool)
+			} else {
+				slog.Error("tiesfs: write could not be committed and the bytes could not be kept",
+					"file", dest, "err", err, "spool", serr)
+				err = fmt.Errorf("%w (and the staged bytes could not be kept: %v)", err, serr)
+			}
+		} else {
+			os.Remove(h.tmpPath)
+		}
 		h.tmp = nil
 	}
 	return err
+}
+
+// spoolFailed moves a staging file whose commit failed into the spool
+// directory and returns where it landed. A rename is one syscall when the
+// spool shares the staging filesystem; otherwise the bytes are copied, which
+// is slow and still better than losing them.
+func (s *Store) spoolFailed(parentSlash, name, tmpPath string) (string, error) {
+	if err := os.MkdirAll(s.spoolDir, 0o700); err != nil {
+		return "", err
+	}
+	base := sanitizeForDisk(name)
+	// The name alone does not say where the file belonged, and two writes of
+	// the same name must not collide.
+	dst := filepath.Join(s.spoolDir, fmt.Sprintf("%s%s-%d", spoolPathPrefix(parentSlash), base, time.Now().UnixNano()))
+
+	if err := os.Rename(tmpPath, dst); err == nil {
+		return dst, nil
+	}
+	src, err := os.Open(tmpPath)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		out.Close()
+		return "", err
+	}
+	if err := out.Close(); err != nil {
+		return "", err
+	}
+	os.Remove(tmpPath)
+	return dst, nil
+}
+
+// spoolPathPrefix turns the intended directory into part of the spool file
+// name: "/music/live" becomes "music_live_", so a spool of a whole failed
+// album keeps its shape.
+func spoolPathPrefix(parentSlash string) string {
+	p := sanitizeForDisk(strings.Trim(strings.ReplaceAll(parentSlash, "/", "_"), "_"))
+	if p == "" {
+		return ""
+	}
+	return p + "_"
+}
+
+// sanitizeForDisk makes a tie name safe to use as a file name: tie names can
+// contain '/' (a query path) or control bytes that a shell or a file manager
+// would choke on.
+func sanitizeForDisk(name string) string {
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r == '/' || r == os.PathSeparator || r == 0:
+			return '_'
+		case r < 0x20 || r == 0x7f:
+			return '_'
+		}
+		return r
+	}, name)
+	name = strings.Trim(name, ". ")
+	if name == "" {
+		return "untitled"
+	}
+	const max = 100
+	if len(name) > max {
+		name = name[:max]
+	}
+	return name
 }

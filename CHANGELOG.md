@@ -42,6 +42,13 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **A mount write that cannot be committed keeps its bytes.** `Close()` on a
+  staged FUSE/SMB write committed and then always deleted the staging file, so
+  if the filehost or triplestore was unreachable the user's just-written file
+  was gone — silently, because most applications ignore the error from
+  `close()`/`release()`. The bytes are now moved to a spool
+  (`$TIE_SPOOL_DIR`, else `$XDG_STATE_HOME/tie/unsaved`) named after the
+  intended path, logged, and named in the error.
 - **One path from a collection to its filehost.** `ResolveHost(name)` and
   `ResolveHosts(collection, explicit)` answered the same question separately,
   and every caller hand-rolled the `[FileHosts]` lookup afterwards. The
