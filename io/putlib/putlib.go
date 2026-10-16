@@ -165,23 +165,36 @@ func headOf(s string) []byte {
 }
 
 // fileHead samples a file's leading bytes and size without reading it whole.
-func fileHead(path string) (head []byte, size int, mediaType string) {
-	fi, err := os.Stat(path)
-	if err == nil {
-		size = int(fi.Size())
-	}
+// hashAndHead hashes a file and captures its leading bytes from one open. The
+// uploader used to open the file to hash it, then again to read the head for
+// media-type detection, then a third time to stream it (§5.2 item 3) — three
+// opens and three round trips to the disk before the content address was even
+// known. The head is read first and the handle rewound for the hash, so the
+// bytes are traversed twice but the file is opened once.
+func (pc *PutConfig) hashAndHead(path string) (hash string, head []byte, size int, mediaType string, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, size, ""
+		return "", nil, 0, "", err
 	}
 	defer f.Close()
-	buf := make([]byte, metadata.MagicNumber)
-	n, _ := io.ReadFull(f, buf)
-	head = buf[:n]
-	if t, err := filetype.Get(head); err == nil {
-		mediaType = t.MIME.Value
+
+	if fi, err := f.Stat(); err == nil {
+		size = int(fi.Size())
 	}
-	return head, size, mediaType
+
+	buf := make([]byte, metadata.MagicNumber)
+	if n, _ := io.ReadFull(f, buf); n > 0 {
+		head = buf[:n]
+		if t, err := filetype.Get(head); err == nil {
+			mediaType = t.MIME.Value
+		}
+	}
+
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return "", head, size, mediaType, err
+	}
+	hash, err = pc.AddressOf(f)
+	return hash, head, size, mediaType, err
 }
 
 func (status *Status) validateURL(url string) string {
@@ -327,12 +340,11 @@ func (status *Status) upload(file string, config PutConfig) {
 		uploadStatus.MediaType = "inode/directory"
 		validate(localhash, uploadStatus, status)
 	} else {
-		localhash, err := config.AddressOfFile(file)
+		localhash, head, headSize, mediaType, err := config.hashAndHead(file)
 		if err != nil {
 			status.ErrorMsg += "Error hashing file " + file + ": " + err.Error() + "\n"
 			return
 		}
-		head, headSize, mediaType := fileHead(file)
 		if status.alreadyStored(localhash, int64(headSize)) {
 			validate(localhash, existingItem(localhash, file, mediaType, headSize, head), status)
 			return

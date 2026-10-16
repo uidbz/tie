@@ -9,7 +9,6 @@ import (
 	"github.com/h2non/filetype"
 	"github.com/uidbz/tie/io/archivelib"
 	"github.com/uidbz/tie/metadata"
-	"github.com/uidbz/tie/metadata/tag"
 )
 
 // GetTieType classifies a file by sniffing its leading bytes. An empty or
@@ -48,20 +47,7 @@ func GetTieTypeFromPath(path string) (TieType, error) {
 	}
 	defer file.Close()
 
-	t, err := GetTieType(file)
-	if err != nil {
-		return TieUnknownFile, err
-	}
-	// An archive refines to a media-specific *-archive by peeking at its
-	// members: the fd is a seekable ReaderAt, so we can open it as a zip
-	// without buffering. A failure to open leaves it as the generic
-	// archive-file (e.g. a non-zip archive we don't expand yet).
-	if t == TieArchiveFile {
-		if members, err := archivelib.List(file); err == nil {
-			return ArchiveTieType(archivelib.ModalKind(members)), nil
-		}
-	}
-	return t, nil
+	return classifyAt(file)
 }
 
 // ArchiveTieType maps an archivelib member-kind to the archive tie-type stored
@@ -101,33 +87,10 @@ func ExtractMediaMetadata(path string) metadata.Media {
 // content yields an empty Media.
 func ExtractMediaMetadataFrom(f io.ReadSeeker) metadata.Media {
 	tieType, err := GetTieType(f)
-	if err != nil || tieType != TieAudioFile {
-		return metadata.Media{}
-	}
-
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return metadata.Media{}
-	}
-	m, err := tag.ReadFrom(f)
 	if err != nil {
 		return metadata.Media{}
 	}
-	track, trackTotal := m.Track()
-	disc, discTotal := m.Disc()
-	return metadata.Media{
-		Title:       m.Title(),
-		Artist:      m.Artist(),
-		AlbumArtist: m.AlbumArtist(),
-		Album:       m.Album(),
-		Year:        m.Year(),
-		Track:       track,
-		Disc:        disc,
-		DiscTotal:   discTotal,
-		TrackTotal:  trackTotal,
-		Genre:       strings.TrimSpace(m.Genre()),
-		Composer:    strings.TrimSpace(m.Composer()),
-		Duration:    m.Duration().Seconds(),
-	}
+	return mediaTags(f, tieType)
 }
 
 // SplitGenres splits a raw GENRE tag into its individual genres. Multi-value

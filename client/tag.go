@@ -156,8 +156,9 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 	fmt.Println("Importing:", file)
 	// Classification is strict here, unlike in a tree import: nothing has been
 	// uploaded yet, so an unclassifiable file is refused rather than tagged
-	// unknown and left stranded on the filehost.
-	fileType, err := GetTieTypeFromPath(file)
+	// unknown and left stranded on the filehost. One open answers the type and
+	// the embedded tags (§5.2 item 3).
+	fileType, media, err := ingest(file)
 	if err != nil {
 		return fmt.Errorf("import %s: classify: %w", file, err)
 	}
@@ -174,15 +175,14 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 	return tie.executeImport(importPlan{
 		RootUID: directory,
 		Items: []planItem{{
-			Src:        file,
-			Rel:        filepath.Base(file),
-			Hash:       status.LastItem.Hash,
-			Size:       int(stat.Size()),
-			MediaType:  status.LastItem.MediaType,
-			Metadata:   ExtractMediaMetadata(file),
-			TieType:    fileType,
-			Classified: true,
-			IsDir:      stat.IsDir(),
+			Src:       file,
+			Rel:       filepath.Base(file),
+			Hash:      status.LastItem.Hash,
+			Size:      int(stat.Size()),
+			MediaType: status.LastItem.MediaType,
+			Metadata:  media,
+			TieType:   fileType,
+			IsDir:     stat.IsDir(),
 		}},
 		Tags:    tags,
 		AddedAt: true,
@@ -436,17 +436,22 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags 
 		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
 	}
 
-	// Embedded metadata is read before the plan exists, because the root path
-	// can be a template over it ("tie:/%album/%artist").
-	fileMeta := make(map[string]metadata.Media, len(status.UploadedItems))
+	// Each file is opened once here — classify and read its embedded tags
+	// together (§5.2 item 3). The results feed both the root-path template
+	// ("tie:/%album/%artist") and the per-file tagging below.
+	type ingested struct {
+		tieType TieType
+		media   metadata.Media
+	}
+	ing := make(map[string]ingested, len(status.UploadedItems))
 	allMeta := make([]metadata.Media, 0, len(status.UploadedItems))
 	for _, x := range status.UploadedItems {
 		if x.MediaType == "inode/directory" {
 			continue
 		}
-		m := ExtractMediaMetadata(x.Filename)
-		fileMeta[x.Filename] = m
-		allMeta = append(allMeta, m)
+		tieType, media := ingestFor(x.Filename)
+		ing[x.Filename] = ingested{applyArchiveOverride(tieType, forcedArchive), media}
+		allMeta = append(allMeta, media)
 	}
 
 	rootPath, err := tie.importRootPath(dir, dest, dirType, allMeta)
@@ -455,11 +460,10 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags 
 	}
 
 	p := importPlan{
-		Root:          rootPath,
-		Tags:          tags,
-		ForcedArchive: forcedArchive,
-		DirType:       dirType,
-		StampDirType:  true,
+		Root:         rootPath,
+		Tags:         tags,
+		DirType:      dirType,
+		StampDirType: true,
 		// A whole-tree import owns every child of every directory it walked, so
 		// anything the tree no longer contains is superseded.
 		Reconcile: true,
@@ -480,13 +484,15 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags 
 			p.Dirs = append(p.Dirs, planDir{Rel: rel, Name: name, Size: x.Size, TiedirHash: x.Hash})
 			continue
 		}
+		item := ing[x.Filename]
 		p.Items = append(p.Items, planItem{
 			Src:       x.Filename,
 			Rel:       rel,
 			Hash:      x.Hash,
 			Size:      x.Size,
 			MediaType: x.MediaType,
-			Metadata:  fileMeta[x.Filename],
+			TieType:   item.tieType,
+			Metadata:  item.media,
 		})
 	}
 	return tie.executeImport(p)

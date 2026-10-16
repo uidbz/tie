@@ -2,7 +2,6 @@ package client
 
 import (
 	"fmt"
-	"os"
 	"path"
 
 	"github.com/uidbz/tie/metadata"
@@ -20,15 +19,14 @@ import (
 
 // planItem is one file an import places, already uploaded to the filehost.
 type planItem struct {
-	Src        string // local path: the source of classification and metadata
-	Rel        string // path below the import root, slash-separated ("disc1/song.flac")
-	Hash       string // content address on the filehost
-	Size       int
-	MediaType  string
-	Metadata   metadata.Media
-	TieType    TieType // used as-is when Classified
-	Classified bool    // the front end already resolved the tie-type
-	IsDir      bool
+	Src       string // local path: the source of classification and metadata
+	Rel       string // path below the import root, slash-separated ("disc1/song.flac")
+	Hash      string // content address on the filehost
+	Size      int
+	MediaType string
+	Metadata  metadata.Media
+	TieType   TieType // resolved by the front end, which reads the file
+	IsDir     bool
 }
 
 // planDir is one directory node of the imported tree. Every directory the plan
@@ -49,13 +47,8 @@ type importPlan struct {
 	Dirs  []planDir  // every directory node, in any order
 	Items []planItem // the files, in any order
 
-	Tags          []string
-	ForcedArchive TieType
+	Tags []string
 
-	// TieType handling: an item with an empty TieType is sniffed by the engine,
-	// and a file that cannot be classified is tagged unknown-file with a warning
-	// rather than aborting an import whose blobs are already uploaded.
-	//
 	// StampDirType writes DirType on the root even when it is empty (what
 	// ImportDir and the album importer do); ImportFile leaves it alone.
 	StampDirType bool
@@ -137,24 +130,13 @@ func (tie *TieClient) executeImport(p importPlan) error {
 		if err != nil {
 			return fmt.Errorf("import %s: parent dir: %w", it.Rel, err)
 		}
-		fileType := it.TieType
-		if !it.Classified {
-			// The blob is already on the filehost, so a classification failure
-			// must not abort the import — that would strand this file and every
-			// later one as an untagged upload. Warn and tag it as unknown-file.
-			if fileType, err = GetTieTypeFromPath(it.Src); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: %s: cannot classify (%v); tagging as %s\n", it.Src, err, TieUnknownFile)
-				fileType = TieUnknownFile
-			}
-			fileType = applyArchiveOverride(fileType, p.ForcedArchive)
-		}
 		info := TagInfo{
 			Hash:      it.Hash,
 			File:      it.Src,
 			Size:      it.Size,
 			MediaType: it.MediaType,
 			Directory: parent,
-			TieType:   fileType,
+			TieType:   it.TieType,
 			Tags:      p.Tags,
 			IsDir:     it.IsDir,
 			Metadata:  it.Metadata,

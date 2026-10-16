@@ -43,6 +43,16 @@ to follow semantic versioning.
 
 ### Performance
 
+- **An imported file is opened twice instead of five times.** The uploader
+  opened it to hash it, again to read the head for media-type detection, and a
+  third time to stream it; the client then opened it to classify it and a fifth
+  time to read its embedded tags — which re-ran the same 261-byte sniff. Now the
+  uploader hashes and captures the head in one open, and one `ingest` answers the
+  tie-type and the tags from a single open (the archive refinement included).
+  The content read per file: 5.9 µs / 1 642 B / 33 allocations, now 4.4 µs /
+  1 202 B / 29 — and on a network mount the saving is the two extra opens, which
+  is where the real cost was. A re-import of unchanged content skips the
+  streaming open too (#51's HEAD-skip), so it costs two opens in total.
 - **The tag facet list stops reading the collection twice.** `CoTags` — "given
   the tags I've already filtered by, which further tags exist?" — resolved the
   matched set once to enumerate its keys (decoding all three strings of every

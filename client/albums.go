@@ -934,11 +934,10 @@ func (tie *TieClient) importAlbum(g AlbumGroup, opts AlbumImportOptions) error {
 // would destroy files belonging to other albums sharing the directory.
 func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) error {
 	p := importPlan{
-		Root:          FileURIScheme + g.Dest,
-		Tags:          opts.Tags,
-		ForcedArchive: opts.ForcedArchive,
-		DirType:       opts.DirType,
-		StampDirType:  true,
+		Root:         FileURIScheme + g.Dest,
+		Tags:         opts.Tags,
+		DirType:      opts.DirType,
+		StampDirType: true,
 	}
 
 	all := make([]string, 0, len(g.Files)+len(g.Sidecars))
@@ -961,13 +960,15 @@ func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) er
 			return fmt.Errorf("upload %s: %s", f, status.ErrorMsg)
 		}
 		x := status.LastItem
+		tieType, media := ingestFor(f)
 		p.Items = append(p.Items, planItem{
 			Src:       f,
 			Rel:       rel,
 			Hash:      x.Hash,
 			Size:      x.Size,
 			MediaType: x.MediaType,
-			Metadata:  ExtractMediaMetadata(f),
+			TieType:   applyArchiveOverride(tieType, opts.ForcedArchive),
+			Metadata:  media,
 		})
 		total += x.Size
 		for cur := path.Dir(rel); cur != "." && cur != ""; cur = path.Dir(cur) {
