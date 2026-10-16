@@ -42,6 +42,10 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **A mount rename can no longer move a directory inside itself.** `mv a a/b/x`
+  over the FUSE mount or SMB succeeded and left the subtree unreachable from the
+  root — the cycle `tie verify` reports. It is refused now (EINVAL on the mount),
+  and a rename onto the same name is a no-op, as POSIX defines it.
 - **Two concurrent `mkdir`s no longer mint two directories.** `MkTieDir` asked
   "is there a UID for this path?", saw none, minted one and wrote it — so two
   creators racing on one path (two imports, a FUSE `mkdir` against an import, an

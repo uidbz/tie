@@ -9,6 +9,9 @@ import (
 	"github.com/uidbz/tie/client"
 )
 
+// ErrRenameLoop refuses moving a directory into its own subtree.
+var ErrRenameLoop = errors.New("cannot move a directory into itself")
+
 // ErrNotEmpty marks a delete of a directory that still has children.
 var ErrNotEmpty = errors.New("directory not empty")
 
@@ -92,6 +95,17 @@ func (t *Tree) Rename(parentSlash, name, dstSlash, newName string, replace bool)
 		}
 		oldPath := client.FileURIScheme + ChildPath(parentSlash, name)
 		newPath := client.FileURIScheme + ChildPath(dstSlash, newName)
+		// Moving a directory inside itself is what POSIX rename answers EINVAL
+		// for: the subtree stops being reachable from the root, which is the
+		// cycle verify reports. Refuse it here rather than let a mount or an
+		// SMB client write that state into the collection.
+		if newPath == oldPath {
+			return nil // a rename onto itself is a no-op, as POSIX defines it
+		}
+		if strings.HasPrefix(newPath, oldPath+"/") {
+			return fmt.Errorf("tiesfs: cannot move %q into itself (to %q): %w",
+				ChildPath(parentSlash, name), ChildPath(dstSlash, newName), ErrRenameLoop)
+		}
 		// Reject collisions with an existing destination directory.
 		if existing, err := t.Tie.DirUIDFromPath(ChildPath(dstSlash, newName)); err == nil && existing != "" {
 			return fmt.Errorf("tiesfs: destination %q exists: %w", ChildPath(dstSlash, newName), os.ErrExist)

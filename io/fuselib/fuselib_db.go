@@ -69,6 +69,8 @@ func errnoFor(err error, fallback syscall.Errno) syscall.Errno {
 		return syscall.EEXIST
 	case errors.Is(err, stdfs.ErrPermission):
 		return syscall.EACCES
+	case errors.Is(err, tiesfs.ErrRenameLoop):
+		return syscall.EINVAL
 	default:
 		return fallback
 	}
