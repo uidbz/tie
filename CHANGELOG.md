@@ -6,6 +6,35 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`tie-smb`: the tie filesystem over SMB2/3.** A standalone server
+  (`cmd/tie-smb`) exports the same live tag-derived tree as `tie mount --db`
+  (`query/`, `files/`, `tags/`) as a single SMB share, pure Go via
+  `github.com/go-filesystems/smb` (SMB 2.1/3.0/3.0.2, NTLMv2, signing) — no
+  Samba. TOML config with `[[Users]]` read/write roles (same role model as
+  tie-filehost), graceful SIGTERM shutdown, systemd unit with
+  `CAP_NET_BIND_SERVICE`. Full write parity with the mount: create/write/
+  rename/mkdir/delete under `files/`, tag and dir-type editing under
+  `tags/`. tie names are escaped reversibly into SMB-legal display names
+  (`~XX` hex for illegal bytes, trailing dot/space, reserved device names).
+  See [docs/smb.md](docs/smb.md).
+- **Transport-agnostic tree core (`io/tiefs`).** The query/path/meta/write/
+  cache semantics of the `--db` mount moved out of `io/fuselib` (now thin
+  adapters) so FUSE and SMB share one implementation. `io/smbfs` is the SMB
+  adapter (`filesystem.Filesystem` + `Opener` + `WritableFile`).
+- **Delete support in the client (`client.DeleteFile`/`client.DeleteDir`)**:
+  unlink a file from one directory (shared content keeps its metadata),
+  remove empty directories; wired to FUSE `Unlink`/`Rmdir` and to SMB.
+- **Tests:** `io/smbfs` escaping/resolution unit tests, live-store tests,
+  and an end-to-end SMB integration test using
+  `github.com/hirochachacha/go-smb2` as a test-only client.
+
+### Breaking
+
+- `go.mod` now requires Go 1.27.1 (pulled in by the smb libraries' toolchain
+  requirement).
+
 ## [v0.6.0] - 2026-10-12
 
 ### Added

@@ -46,6 +46,7 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | `tie-triplestore` | Web service exposing a tie triple store over HTTP. |
 | `tie`          | CLI client for a `tie-triplestore`: add/get/delete triples, import & tag files, upload/download, dump/restore, and mount. |
 | `tie-filehost` | Content-addressed file server. Stores file bytes and immutable directory (`tiedir`) blobs, addressed by highwayhash. |
+| `tie-smb`    | SMB2/3 server exposing the live `tie mount --db` filesystem (`/query`, `/files`, `/tags`) as one share. See [docs/smb.md](docs/smb.md). |
 
 ## Packages
 
@@ -59,6 +60,8 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | `io/putlib`   | Upload files to a `tie-filehost`. |
 | `io/getlib`   | Download files from a `tie-filehost`. |
 | `io/fuselib`  | Mount tie directories as a FUSE filesystem (the live `--db` mount is read-write: rename, `mkdir`, and tag editing). See [docs/mount.md](docs/mount.md). |
+| `io/tiefs`    | The transport-agnostic live tree both mounts serve: tag queries, path navigation, staged writes, tag/type meta files, blob cache. |
+| `io/smbfs`    | The `io/tiefs` tree as a go-filesystems `Filesystem` for `tie-smb` (path model, name escaping, staged writes). See [docs/smb.md](docs/smb.md). |
 
 ## The data model
 

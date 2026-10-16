@@ -1221,6 +1221,70 @@ func collectDescendantDirs(tie *TieClient, root DirUID) ([]SubDirectory, error) 
 	return out, nil
 }
 
+// DeleteFile unlinks a file from one directory: it removes the
+// (hash,"parent",parent) edge. If that was the hash's last parent, its
+// per-hash metadata (filename/name/tie-type/tags/...) is dropped too, since the
+// content is no longer reachable from any directory — the same shared-content
+// guard the import reconciliation uses (detachChild). The blob itself stays in
+// the filehost; its retention policy governs when the bytes go.
+func DeleteFile(tie *TieClient, hash string, parent DirUID) error {
+	return detachChild(tie, "", hash, parent)
+}
+
+// DeleteDir removes a directory from the path tree: it deletes the
+// (uid,"parent",parent) edge and the directory's (uid,"path",*) triples. The
+// directory must be empty (no subdirs, files, or archives); a non-empty
+// directory returns an error so callers surface "directory not empty" rather
+// than silently orphaning children. When the last parent edge is gone the
+// directory's own metadata triples are dropped as well, so the consistency
+// checker sees no orphaned directory.
+func DeleteDir(tie *TieClient, uid DirUID, parent DirUID) error {
+	dir, err := ReadTieDir(tie, uid)
+	if err != nil {
+		return err
+	}
+	if len(dir.SubDirs) > 0 || len(dir.Files) > 0 || len(dir.Archives) > 0 {
+		return fmt.Errorf("directory %s is not empty", uid)
+	}
+
+	batch := tie.NewBatch()
+	batch.Delete(str(uid), str(TieParent), str(parent))
+	for _, p := range dir.Paths {
+		batch.Delete(str(uid), str(TiePath), p)
+	}
+	if _, err := tie.Batch(batch); err != nil {
+		return err
+	}
+	if err := tie.Sync(); err != nil {
+		return err
+	}
+
+	n, err := parentCount(tie, string(uid))
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil // still reachable through another parent; keep its metadata
+	}
+	row, err := tie.Get(string(uid))
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	meta := tie.NewBatch()
+	for relation, values := range row.Attributes {
+		for _, value := range values {
+			meta.Delete(string(uid), relation, value)
+		}
+	}
+	if _, err := tie.Batch(meta); err != nil {
+		return err
+	}
+	return tie.Sync()
+}
+
 // GetTags returns the tags currently attached to a content hash, sorted. It
 // reads the (hash,"tag",<tag>) triples. A hash with no tags returns an empty
 // slice, not an error.

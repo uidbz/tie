@@ -1,0 +1,41 @@
+[Unit]
+Description=tie SMB server (tag-derived filesystem over SMB2/3)
+Documentation=https://github.com/uidbz/tie
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tie
+Group=tie
+ExecStart=/usr/local/bin/tie-smb -config /etc/tie/tie-smb.toml
+Restart=on-failure
+RestartSec=5s
+
+# State directory: /var/lib/tie (created and chowned to tie by systemd).
+StateDirectory=tie
+WorkingDirectory=/var/lib/tie
+
+# Hardening. The SMB server reads its config plus the tie client config and
+# writes only its temp dirs (blob cache + write staging) under $TMPDIR, which
+# PrivateTmp provides.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+ReadWritePaths=/var/lib/tie
+
+# Port 445 is privileged: this capability lets the unprivileged tie user bind
+# it. Drop this line (and use a high port) if you export through a relay.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

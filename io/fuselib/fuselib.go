@@ -4,39 +4,33 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	stdhash "hash"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/uidbz/tie/client"
-	"github.com/uidbz/tie/io/archivelib"
-	"github.com/uidbz/tie/metadata"
 	"github.com/h2non/filetype"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/io/tiefs"
+	"github.com/uidbz/tie/metadata"
 )
 
+// TieFuse is the go-fuse adapter for a content-addressed tree. The shared
+// read cache, inode numbering, and write staging live in tiesfs.Store; this
+// layer only translates between go-fuse node operations and those primitives.
 type TieFuse struct {
-	inodes      uint64
-	hashToInode map[string]uint64
-	inodeLock   sync.RWMutex
-	cache       *cache
-	config      config
-	uid         uint32 // owner uid for all files
-	gid         uint32 // owner gid for all files
+	store  *tiesfs.Store
+	config config
 }
 
 // Close releases the on-disk blob cache. Call once after the mount is torn down.
 func (state *TieFuse) Close() error {
-	return state.cache.close()
+	return state.store.Close()
 }
 
 // NewTieFuse builds a content-addressed FUSE state. verify controls whether
@@ -44,13 +38,9 @@ func (state *TieFuse) Close() error {
 // off by default, since for a trusted personal filehost the per-read hash pass
 // over multi-GB media is wasted work; turn it on when the filehost is untrusted.
 func NewTieFuse(host client.FileHost, cacheSizeGB int, verify bool) *TieFuse {
-	httpClient := client.HTTPClientFor(host)
 	return &TieFuse{
-		cache:       newCache(host.URL, httpClient, int64(cacheSizeGB)*1024*1024*1024, verify),
-		hashToInode: make(map[string]uint64),
-		config:      config{filehost: host.URL, client: httpClient, verify: verify},
-		uid:         uint32(os.Getuid()),
-		gid:         uint32(os.Getgid()),
+		store:  tiesfs.NewStore(host, cacheSizeGB, verify),
+		config: config{filehost: host.URL, client: client.HTTPClientFor(host), verify: verify},
 	}
 }
 
@@ -60,125 +50,9 @@ type config struct {
 	verify   bool
 }
 
-// cache is a disk-backed, single-flight blob cache. Blobs are streamed from the
-// filehost to files under dir (bounded by disk, not RAM), verified against their
-// content hash while streaming, and served to reads via ReadAt. Concurrent reads
-// of the same hash — go-fuse dispatches Read across goroutines — coalesce into a
-// single download.
-type cache struct {
-	filehost string
-	client   *http.Client
-	dir      string
-	maxSize  int64
-	verify   bool // hash downloaded bytes and check against their content address
+func (state *TieFuse) inodeID(hash string) uint64 { return state.store.InodeID(hash) }
 
-	// mu guards entries and the LRU order slice. Downloads happen outside the
-	// lock; the per-blob entry carries its own readiness signal.
-	mu      sync.Mutex
-	entries map[string]*cacheEntry
-	order   []string // hashes in insertion order, for size-based eviction
-	curSize int64
-}
-
-// cacheEntry is one cached blob. ready is closed once the download finishes (or
-// fails); until then, readers block on it. On success, file is an open,
-// read-only handle to the on-disk blob and size is its length; on failure, err
-// is set. Keeping the fd open means an evicted-and-unlinked blob stays readable
-// for handles that already resolved it (unlink removes the name, not the inode).
-type cacheEntry struct {
-	ready chan struct{}
-	file  *os.File
-	size  int64
-	err   error
-}
-
-func newCache(filehost string, client *http.Client, maxSize int64, verify bool) *cache {
-	dir, err := os.MkdirTemp("", "tie-fuse-cache-")
-	if err != nil {
-		// Fall back to the OS temp root; download() will surface open errors.
-		dir = os.TempDir()
-	}
-	return &cache{
-		filehost: filehost,
-		client:   client,
-		dir:      dir,
-		maxSize:  maxSize,
-		verify:   verify,
-		entries:  make(map[string]*cacheEntry),
-	}
-}
-
-// close removes the on-disk cache directory and closes open blob handles. Safe
-// to call once at unmount.
-func (c *cache) close() error {
-	c.mu.Lock()
-	for _, e := range c.entries {
-		if e.file != nil {
-			e.file.Close()
-		}
-	}
-	c.entries = make(map[string]*cacheEntry)
-	c.order = nil
-	c.curSize = 0
-	dir := c.dir
-	c.mu.Unlock()
-	if dir == "" || dir == os.TempDir() {
-		return nil
-	}
-	return os.RemoveAll(dir)
-}
-
-// blobPath returns the on-disk path for a hash. The hash is validated as hex by
-// callers, so it is safe as a single path segment.
-func (c *cache) blobPath(hash string) string {
-	return filepath.Join(c.dir, hash)
-}
-
-// evictLocked drops least-recently-inserted blobs until curSize fits maxSize.
-// The open fd of an evicted entry is closed and its file unlinked; any reader
-// still holding a reference to that entry keeps reading through its own fd.
-// Must be called with c.mu held.
-func (c *cache) evictLocked(keep string) {
-	for c.curSize > c.maxSize && len(c.order) > 0 {
-		oldest := c.order[0]
-		if oldest == keep {
-			// Never evict the blob we just admitted; stop to avoid churn.
-			if len(c.order) == 1 {
-				break
-			}
-			c.order = append(c.order[1:], oldest)
-			continue
-		}
-		c.order = c.order[1:]
-		e, ok := c.entries[oldest]
-		if !ok {
-			continue
-		}
-		delete(c.entries, oldest)
-		c.curSize -= e.size
-		if e.file != nil {
-			e.file.Close()
-		}
-		os.Remove(c.blobPath(oldest))
-	}
-}
-
-func (state *TieFuse) inodeID(hash string) uint64 {
-	state.inodeLock.RLock()
-	i, ok := state.hashToInode[hash]
-	state.inodeLock.RUnlock()
-	if ok {
-		return i
-	}
-
-	state.inodeLock.Lock()
-	defer state.inodeLock.Unlock()
-
-	state.inodes++
-	state.hashToInode[hash] = state.inodes
-
-	return state.inodes
-}
+func (state *TieFuse) cache() *tiesfs.Cache { return state.store.Cache() }
 
 // Ensure we are implementing the NodeReaddirer interface
 var _ = (fs.NodeReaddirer)((*node)(nil))
@@ -261,8 +135,8 @@ func (n *node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) 
 	} else {
 		out.Mode = 0444 | fuse.S_IFREG
 	}
-	out.Uid = n.State.uid
-	out.Gid = n.State.gid
+	out.Uid = n.State.store.UID()
+	out.Gid = n.State.store.GID()
 	if !n.Mtime.IsZero() {
 		out.SetTimes(nil, &n.Mtime, &n.Mtime)
 	}
@@ -277,7 +151,7 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 
 	if f.ArchiveMember != "" {
 		return &archiveMemberFileHandle{
-			cache:       f.State.cache,
+			cache:       f.State.cache(),
 			archiveHash: f.ArchiveHash,
 			member:      f.ArchiveMember,
 		}, fuse.FOPEN_KEEP_CACHE, fs.OK
@@ -285,7 +159,7 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 
 	fh = &bytesFileHandle{
 		hash:  f.Hash,
-		cache: f.State.cache,
+		cache: f.State.cache(),
 	}
 
 	// Return FOPEN_DIRECT_IO if content should not be cached.
@@ -296,128 +170,27 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 // bytesFileHandle is a file handle that serves one blob's bytes from the cache.
 type bytesFileHandle struct {
 	hash  string
-	cache *cache
+	cache *tiesfs.Cache
 }
 
-// blob returns the ready cache entry for hash, downloading it on the first
-// request and coalescing concurrent requests for the same hash into that single
-// download. The returned entry's file is an open, read-only handle positioned by
-// ReadAt; entry.err is set if the download failed.
-func (c *cache) blob(hash string) (*cacheEntry, error) {
-	if !metadata.IsHexHash(hash) {
-		return nil, fmt.Errorf("fuselib: invalid content hash %q", hash)
-	}
-	return c.get(hash, func() (*os.File, int64, error) { return c.download(hash) })
-}
-
-// get returns the ready cache entry for key, running producer on the first
-// request and coalescing concurrent requests for the same key into that single
-// run. producer must return an open, read-only file (already unlinked) plus its
-// size. Used both for whole-blob downloads (key = content hash) and extracted
-// archive members (key = archive hash + member name).
-func (c *cache) get(key string, producer func() (*os.File, int64, error)) (*cacheEntry, error) {
-	c.mu.Lock()
-	if e, ok := c.entries[key]; ok {
-		c.mu.Unlock()
-		<-e.ready
-		return e, e.err
-	}
-	e := &cacheEntry{ready: make(chan struct{})}
-	c.entries[key] = e
-	c.mu.Unlock()
-
-	// This goroutine won the race to create the entry, so it owns the work.
-	e.file, e.size, e.err = producer()
-	if e.err != nil {
-		// Drop the failed entry so a later read can retry rather than caching
-		// the error forever.
-		c.mu.Lock()
-		delete(c.entries, key)
-		c.mu.Unlock()
-		close(e.ready)
-		return nil, e.err
-	}
-
-	c.mu.Lock()
-	c.order = append(c.order, key)
-	c.curSize += e.size
-	c.evictLocked(key)
-	c.mu.Unlock()
-
-	close(e.ready)
-	return e, nil
-}
-
-// download streams the blob from the filehost to a file in the cache dir and
-// returns an open, read-only handle to it plus its size. Memory use is bounded
-// by the copy buffer, not the file size, so blobs larger than RAM (or the cache
-// budget) download and serve fine. When c.verify is set, the bytes are hashed as
-// they copy and checked against their content address (the filehost is treated
-// as untrusted); by default verification is skipped, since hashing every read of
-// multi-GB media on a trusted personal filehost is wasted work.
-func (c *cache) download(hash string) (*os.File, int64, error) {
-	resp, err := c.client.Get(c.filehost + "/" + hash)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("fuselib: bad status %s", resp.Status)
-	}
-
-	path := c.blobPath(hash)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	var dst io.Writer = f
-	var h stdhash.Hash
-	if c.verify {
-		h, err = metadata.NewHash()
-		if err != nil {
-			f.Close()
-			os.Remove(path)
-			return nil, 0, err
-		}
-		dst = io.MultiWriter(f, h)
-	}
-	size, err := io.Copy(dst, resp.Body)
-	if err != nil {
-		f.Close()
-		os.Remove(path)
-		return nil, 0, err
-	}
-	if c.verify {
-		if got := hex.EncodeToString(h.Sum(nil)); got != hash {
-			f.Close()
-			os.Remove(path)
-			return nil, 0, errors.New("fuselib: downloaded content does not match its hash")
-		}
-	}
-
-	// Unlink now: the open fd keeps the bytes reachable, and eviction/close no
-	// longer needs a second unlink. The dir is removed wholesale on cache close.
-	os.Remove(path)
-	return f, size, nil
-}
-
-// bytesFileHandle allows reads
+// Read serves a clamped window of the blob: FUSE reads past the end return the
+// remaining bytes without an error, unlike io.ReaderAt.
 var _ = (fs.FileReader)((*bytesFileHandle)(nil))
 
 func (fh *bytesFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	e, err := fh.cache.blob(fh.hash)
+	e, err := fh.cache.Blob(fh.hash)
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	if off < 0 || off > e.size {
+	size := e.Size()
+	if off < 0 || off > size {
 		return nil, syscall.EINVAL
 	}
 	end := off + int64(len(dest))
-	if end > e.size {
-		end = e.size
+	if end > size {
+		end = size
 	}
-	n, err := e.file.ReadAt(dest[:end-off], off)
+	n, err := e.ReadAt(dest[:end-off], off)
 	if err != nil && err != io.EOF {
 		return nil, syscall.EIO
 	}
@@ -454,7 +227,7 @@ func (n *node) AddChild(child *node) {
 // keyed by its (archive hash, member name) pair.
 func (n *node) inodeKey() string {
 	if n.ArchiveMember != "" {
-		return memberKey(n.ArchiveHash, n.ArchiveMember)
+		return tiesfs.MemberKey(n.ArchiveHash, n.ArchiveMember)
 	}
 	return n.Hash
 }
@@ -535,14 +308,14 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		// Flatten nested member paths to disambiguated base names — a dirent name
 		// cannot contain '/'. The full member name is kept as ArchiveMember for
 		// extraction. Shared with the --db mount's archiveDir.
-		for _, v := range archiveMemberViews(members) {
+		for _, v := range tiesfs.ArchiveMemberViews(members) {
 			child := &node{
-				Name:          v.display,
-				Size:          int(v.member.Size),
+				Name:          v.Display(),
+				Size:          int(v.Member().Size),
 				Mode:          fuse.S_IFREG,
 				State:         state,
 				ArchiveHash:   sourceHash,
-				ArchiveMember: v.member.Name,
+				ArchiveMember: v.Member().Name,
 			}
 			n.AddChild(child)
 		}

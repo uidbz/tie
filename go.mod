@@ -1,10 +1,13 @@
 module github.com/uidbz/tie
 
-go 1.25.0
+go 1.27.1
 
 require (
+	github.com/go-filesystems/interface v0.5.0
+	github.com/go-filesystems/smb v0.7.0
 	github.com/h2non/filetype v1.1.3
 	github.com/hanwen/go-fuse/v2 v2.11.0
+	github.com/hirochachacha/go-smb2 v1.1.0
 	github.com/mholt/archives v0.1.5
 	github.com/minio/highwayhash v1.0.3
 	github.com/schollz/progressbar/v3 v3.19.1
@@ -20,6 +23,8 @@ require (
 	github.com/bodgit/sevenzip v1.6.1 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
+	github.com/geoffgarside/ber v1.1.0 // indirect
+	github.com/go-filesystems/hostcopy v0.1.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
@@ -34,6 +39,7 @@ require (
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
-	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/crypto v0.9.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
 )

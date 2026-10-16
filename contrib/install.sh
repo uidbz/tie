@@ -2,11 +2,12 @@
 # Install the tie client, tie-triplestore, and tie-filehost, wiring up the
 # triplestore and filehost as system services.
 #
-# Builds all three binaries, installs them to /usr/local/bin, creates a
+# Builds all binaries, installs them to /usr/local/bin, creates a
 # dedicated `tie` system user, lays down config in /etc/tie and data dirs in
 # /var/lib/tie, then installs service files for whichever init system is
 # detected (systemd or OpenRC). The client (tie) is installed too so a server
-# box has the CLI on hand.
+# box has the CLI on hand. tie-smb (SMB server) is installed and its unit is
+# laid down, but not enabled: SMB on port 445 is opt-in.
 #
 # Usage: sudo ./contrib/install.sh
 #
@@ -46,6 +47,7 @@ log "building binaries (static)"
 ( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie" ./cmd/tie )
 ( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-triplestore" ./cmd/tie-triplestore )
 ( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-filehost" ./cmd/tie-filehost )
+( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-smb" ./cmd/tie-smb )
 
 # --- User ---------------------------------------------------------------
 if ! id "$TIE_USER" >/dev/null 2>&1; then
@@ -68,7 +70,8 @@ install -d "$BINDIR"
 install -m 0755 "$SCRIPT_DIR/tie" "$BINDIR/tie"
 install -m 0755 "$SCRIPT_DIR/tie-triplestore" "$BINDIR/tie-triplestore"
 install -m 0755 "$SCRIPT_DIR/tie-filehost" "$BINDIR/tie-filehost"
-rm -f "$SCRIPT_DIR/tie" "$SCRIPT_DIR/tie-triplestore" "$SCRIPT_DIR/tie-filehost"
+install -m 0755 "$SCRIPT_DIR/tie-smb" "$BINDIR/tie-smb"
+rm -f "$SCRIPT_DIR/tie" "$SCRIPT_DIR/tie-triplestore" "$SCRIPT_DIR/tie-filehost" "$SCRIPT_DIR/tie-smb"
 
 # --- Data dirs ----------------------------------------------------------
 log "creating data dirs under $DATADIR"
@@ -96,6 +99,8 @@ install_config "$REPO_ROOT/cmd/tie-triplestore/tie-triplestore.toml.example" \
 	"$CONFDIR/tie-triplestore.toml" "DbPath" "$DATADIR/db"
 install_config "$REPO_ROOT/cmd/tie-filehost/tie-filehost.toml.example" \
 	"$CONFDIR/tie-filehost.toml" "BlobPath" "$DATADIR/data"
+install_config "$REPO_ROOT/cmd/tie-smb/tie-smb.toml.example" \
+	"$CONFDIR/tie-smb.toml" "TieConfig" "$CONFDIR/config.toml"
 
 # --- Service files ------------------------------------------------------
 case "$INIT" in
@@ -103,6 +108,7 @@ systemd)
 	log "installing systemd units"
 	install -m 0644 "$SCRIPT_DIR/systemd/tie-triplestore.service" /etc/systemd/system/tie-triplestore.service
 	install -m 0644 "$SCRIPT_DIR/systemd/tie-filehost.service" /etc/systemd/system/tie-filehost.service
+	install -m 0644 "$SCRIPT_DIR/systemd/tie-smb.service" /etc/systemd/system/tie-smb.service
 	systemctl daemon-reload
 	log "enabling services"
 	systemctl enable tie-triplestore.service tie-filehost.service
@@ -111,6 +117,11 @@ systemd)
 	Done. Edit config in $CONFDIR (especially [[Users]] in tie-triplestore.toml), then:
 	    systemctl start tie-triplestore tie-filehost
 	    systemctl status tie-triplestore tie-filehost
+
+	tie-smb (SMB server on port 445) is installed but not enabled: point its
+	TieConfig at your tie client config (default $CONFDIR/config.toml), set
+	[[Users]], then opt in with:
+	    systemctl enable --now tie-smb
 	EOF
 	;;
 openrc)

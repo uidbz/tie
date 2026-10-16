@@ -1,0 +1,65 @@
+# tie-smb configuration
+#
+# Copy to tie-smb.toml (or pass -config <path>) and edit.
+#
+# TOML note: every key after a [[Users]] header belongs to that table until
+# the next header, so all plain key = value settings must stay ABOVE the
+# [[Users]] section at the bottom of this file.
+
+# SMB transport address. 445 is the standard port: binding it needs root or
+# AmbientCapabilities=CAP_NET_BIND_SERVICE (the systemd unit sets the
+# capability). Any high port works too - mount with an explicit port, e.g.
+#   Linux:   mount -t cifs //localhost:4445/tie mnt -o username=alice
+#   smbcli:  smbclient -p 4445 //localhost/tie -U alice
+ListenOn = ":445"
+
+# Name the server reports in NTLM challenges (cosmetic; Windows Explorer and
+# Finder show it).
+ServerName = "tie"
+
+# The single exported share, mirroring the "tie mount --db" root:
+#   query/  tag queries (README, tags, types, saved queries) - read-only
+#   files/  the path-based import tree - writable
+#   tags/   the same tree with writable tag/type text files
+ShareName = "tie"
+
+# Tie client config - the same file `tie -C` takes (triplestore URL,
+# credentials, namespace, collections, filehosts). A bare name searches the
+# usual config dirs; a path loads that file directly.
+TieConfig = "config.toml"
+
+# Collection within the tie config's [Collections] table. Empty uses the
+# config's default collection.
+Collection = ""
+
+# Filehost (name from the tie config's FileHosts) that serves blob reads and
+# receives uploads. Empty selects the collection's first filehost.
+Host = ""
+
+# On-disk blob cache budget (gibibytes) for reads served out of the filehost,
+# and whether to hash-check downloaded bytes against their content address
+# (off for a trusted filehost).
+CacheSizeGB = 1
+Verify = false
+
+# Logging. Records are always pretty-printed to stderr; set LogFile to also
+# append structured JSON to a file. LogLevel is debug, info, warn, or error.
+LogFile = ""
+LogLevel = "info"
+
+# ---------------------------------------------------------------------------
+# Accounts (SMB / NTLMv2). At least one [[Users]] entry is required: this
+# server has no anonymous mode. Role "write" may create, modify, rename and
+# delete under files/ and edit tags under tags/; Role "read" gets a
+# read-only mount. Passwords are plaintext - keep this file readable only by
+# the server's user (chmod 600).
+
+[[Users]]
+Username = "alice"
+Password = "change-me"
+Role = "write"
+
+# [[Users]]
+# Username = "bob"
+# Password = "change-me-too"
+# Role = "read"
