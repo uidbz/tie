@@ -2,23 +2,39 @@ package tiedb
 
 // Query paths: TagQuery/QueryTags, ExpandKeys and the plain Get lookup.
 
+// Get returns the forward triples (key, value1, *) — and only those.
+//
+// It used to also merge in the reverse triples whose relation is value1, keyed
+// by the other subject. That made Get unusable as a write primitive: for a
+// self-referencing triple (the root directory's own "parent" edge) the merge
+// overwrote data[key] with the reverse set, so SetValues/SimpleUpdate on the
+// root's parent could delete the wrong values. It also resolved the entire
+// reverse set for every call. Callers of Get read data[key], which is exactly
+// the forward set; anything wanting the other direction uses GetReverse.
 func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
-	if tree, found := ic.GetAssociations(key); found {
-		data, _ := ic.GetTripleSet(tree, value1, SortOptions{Limit: -1})
-		if data != nil {
-			if reverse, found := ic.GetReverseAssociations(key); found {
-				associated, _ := ic.GetTripleSet(reverse, value1, SortOptions{Limit: -1})
-				associated.ForEachKey(func(key string) {
-					data[key] = associated[key]
-				})
-			}
-			return data, true
-		} else {
-			return nil, false
-		}
-	} else {
+	tree, found := ic.GetAssociations(key)
+	if !found {
 		return nil, false
 	}
+	data, _ := ic.GetTripleSet(tree, value1, SortOptions{Limit: -1})
+	if data == nil {
+		return nil, false
+	}
+	return data, true
+}
+
+// GetReverse returns the triples of relation value1 that POINT AT key, keyed by
+// their subject: the "who references me" direction.
+func (ic *Collection) GetReverse(key string, value1 string) (TripleSet, bool) {
+	reverse, found := ic.GetReverseAssociations(key)
+	if !found {
+		return nil, false
+	}
+	data, _ := ic.GetTripleSet(reverse, value1, SortOptions{Limit: -1})
+	if data == nil {
+		return nil, false
+	}
+	return data, true
 }
 
 // TagQuery selects entries by association membership: a match must be associated
