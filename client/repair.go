@@ -522,6 +522,12 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 	const chunk = 500
 	for i := 0; i < len(ops); i += chunk {
 		batch := r.tie.NewBatchIn(r.collection)
+		// The journal lines and the Applied count are held until the batch has
+		// succeeded: a journal line is a record of something that happened, and
+		// Applied counts operations that were executed. Writing them first made
+		// a failed batch leave a journal claiming mutations that never took
+		// place (§5.1 L16).
+		var pending [][]string
 		for _, o := range ops[i:min(i+chunk, len(ops))] {
 			val := o.Value
 			if val == "DEST" {
@@ -540,14 +546,22 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 			case api.BatchDelete:
 				batch.Delete(o.Key, o.Relation, val)
 			}
-			if r.journal != nil {
-				r.journal.Write([]string{time.Now().Format(time.RFC3339), o.Kind, o.Key, o.Relation, val, o.Note})
-			}
-			r.res.Applied++
+			pending = append(pending, []string{time.Now().Format(time.RFC3339), o.Kind, o.Key, o.Relation, val, o.Note})
 		}
 		if _, err := r.tie.Batch(batch); err != nil {
 			return fmt.Errorf("batch in phase %q: %w", label, err)
 		}
+		for _, line := range pending {
+			if r.journal != nil {
+				r.journal.Write(line)
+			}
+		}
+		if r.journal != nil {
+			// Flush per chunk: if the run dies later, the journal still holds a
+			// complete record of everything that was applied.
+			r.journal.Flush()
+		}
+		r.res.Applied += len(pending)
 	}
 	return r.tie.SyncIn(r.collection)
 }

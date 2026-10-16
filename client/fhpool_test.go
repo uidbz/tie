@@ -39,7 +39,8 @@ func TestFileHostClientsArePooled(t *testing.T) {
 	if c1 != c2 {
 		t.Error("FileHostClient returned a new client per call, so connections are never pooled")
 	}
-	if HTTPClientFor(host) != HTTPClientFor(host) {
+	h1, h2 := HTTPClientFor(host), HTTPClientFor(host)
+	if h1 != h2 {
 		t.Error("HTTPClientFor returned a new client per call")
 	}
 	// A different credential set must not share a transport: the credentials are
