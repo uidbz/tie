@@ -32,6 +32,13 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **Mount inode numbers are derived from the key, not remembered.** The
+  FUSE/SMB inode map grew by one entry per distinct key ever listed and was
+  never pruned — a slow leak in a tie-smb server that runs for months — and
+  because the numbers came from a per-process counter, the same file changed
+  inode when the mount restarted. They are now 64-bit FNV-1a of the key:
+  stable across restarts, no map, no lock. Collisions are possible and
+  tolerable (two files would look like hard links); 0 is never handed out.
 - **`tie verify --fix` refuses to repair when the index check reported
   problems in the same run.** The tree scan it repairs against is seeded by
   reverse queries, so with an inconsistent index it can contain phantoms or
