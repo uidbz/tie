@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/uidbz/tie/tiedb"
 	"github.com/h2non/filetype"
 	"github.com/minio/highwayhash"
+	"github.com/uidbz/tie/tiedb"
 )
 
 // MagicNumber is how many leading bytes of a file are needed to sniff its
@@ -107,9 +107,78 @@ type DirEntry struct {
 // Line renders the entry as a tiedir-v2 line (trailing newline included). The
 // head bytes are base64-encoded so tabs/newlines in the raw bytes cannot break
 // column or line splitting; head is last so a malformed value cannot shift
-// earlier columns.
+// earlier columns. The filename is percent-encoded for the same reason: Linux
+// allows TAB and LF in a name, and a raw one either shifts the columns or
+// splits the line (§4.8).
 func (e DirEntry) Line() string {
-	return e.Hash + "\t" + e.Filename + "\t" + strconv.Itoa(e.Size) + "\t" + EncodeHead(e.Head) + "\n"
+	return e.Hash + "\t" + encodeName(e.Filename) + "\t" + strconv.Itoa(e.Size) + "\t" + EncodeHead(e.Head) + "\n"
+}
+
+// encodeName escapes the characters that would break a tiedir line's column or
+// line structure: '%', TAB, LF and CR. Percent-encoding was chosen over
+// rejecting such names because they are legal on Linux and losing an entry
+// silently is worse than escaping it — a manifest line that fails to parse is
+// skipped by every reader, including the reaper's dirChildren, which stops
+// protecting a child that is still referenced.
+func encodeName(name string) string {
+	if !strings.ContainsAny(name, "%\t\n\r") {
+		return name
+	}
+	var b strings.Builder
+	b.Grow(len(name) + 8)
+	for i := 0; i < len(name); i++ {
+		switch name[i] {
+		case '%':
+			b.WriteString("%25")
+		case '\t':
+			b.WriteString("%09")
+		case '\n':
+			b.WriteString("%0A")
+		case '\r':
+			b.WriteString("%0D")
+		default:
+			b.WriteByte(name[i])
+		}
+	}
+	return b.String()
+}
+
+// decodeName expands %XX escapes. It is deliberately lenient: only a '%'
+// followed by two hex digits is expanded, so a manifest written before names
+// were escaped — where a name could contain a bare '%' — still reads back
+// unchanged. The one ambiguity is an old manifest whose name literally spells
+// an escape (say "a%09b"); it reads back decoded. Only the displayed name can
+// differ; hashes and sizes are unaffected.
+func decodeName(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) && isHexDigit(s[i+1]) && isHexDigit(s[i+2]) {
+			b.WriteByte(hexVal(s[i+1])<<4 | hexVal(s[i+2]))
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isHexDigit(c byte) bool {
+	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+}
+
+func hexVal(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	default:
+		return c - 'A' + 10
+	}
 }
 
 // ParseDirLine parses one tiedir-v2 line. It returns false for malformed lines.
@@ -124,7 +193,11 @@ func ParseDirLine(line string) (DirEntry, bool) {
 	if !IsHexHash(parts[0]) {
 		return DirEntry{}, false
 	}
-	if !isValidEntryName(parts[1]) {
+	// Validate the decoded name: escaping means a manifest can spell a
+	// separator or a traversal name as %XX, and the check has to run on what
+	// the reader would actually use.
+	name := decodeName(parts[1])
+	if !isValidEntryName(name) {
 		return DirEntry{}, false
 	}
 	size, err := strconv.Atoi(parts[2])
@@ -135,8 +208,15 @@ func ParseDirLine(line string) (DirEntry, bool) {
 	if err != nil {
 		return DirEntry{}, false
 	}
-	return DirEntry{Hash: parts[0], Filename: parts[1], Size: size, Head: head}, true
+	return DirEntry{Hash: parts[0], Filename: name, Size: size, Head: head}, true
 }
+
+// ValidEntryName reports whether name can be stored in a tie directory
+// manifest: a single, safe path component. Writers should check it before
+// uploading a child, because an entry that cannot be represented is dropped by
+// every reader — and an unreferenced child is no longer protected by the
+// reaper.
+func ValidEntryName(name string) bool { return isValidEntryName(name) }
 
 // isValidEntryName reports whether name is a safe single path component: no
 // separators, not empty, and not the "." / ".." traversal names.

@@ -251,7 +251,17 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 		}
 		var hashes string = metadata.DirHeader
 		for _, x := range entries {
-			abs := filepath.Join(file, x.Name())
+			name := x.Name()
+			if !metadata.ValidEntryName(name) {
+				// This name cannot be represented in a manifest line at all (a
+				// backslash is a path separator on Windows). Uploading it would
+				// store a blob that every reader drops from the manifest, and a
+				// blob no manifest references is one the reaper may delete.
+				// Refuse it where the user can see it instead (§4.8).
+				status.ErrorMsg += "Cannot store " + filepath.Join(file, name) + ": this filename cannot appear in a tie directory\n"
+				return
+			}
+			abs := filepath.Join(file, name)
 			status.upload(url, abs, config)
 			if status.ErrorMsg != "" {
 				return
@@ -262,7 +272,7 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 			// where they were uploaded from.
 			hashes += metadata.DirEntry{
 				Hash:     status.LastItem.Hash,
-				Filename: x.Name(),
+				Filename: name,
 				Size:     status.LastItem.Size,
 				Head:     status.LastItem.Head,
 			}.Line()

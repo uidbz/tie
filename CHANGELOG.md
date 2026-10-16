@@ -30,6 +30,19 @@ to follow semantic versioning.
   and an end-to-end SMB integration test using
   `github.com/hirochachacha/go-smb2` as a test-only client.
 
+### Fixed
+
+- **Filenames containing TAB, LF or CR no longer corrupt tie directory
+  manifests.** Such a name is legal on Linux and used to be written raw into a
+  TAB/LF-delimited manifest line, so the line failed to parse and every reader
+  skipped it: the file disappeared from `download`/mount, and the reaper's
+  `dirChildren` never saw the child, leaving a referenced blob unprotected.
+  Names are now percent-encoded (`%`, TAB, LF, CR) in the filename column; the
+  line structure and the `tiedir-v2` header are unchanged, and decoding is
+  lenient so manifests written before this still read back. A name that cannot
+  be represented at all (a backslash, a separator on Windows) is now refused at
+  upload instead of being stored and silently dropped.
+
 ### Breaking
 
 - `go.mod` now requires Go 1.27.1 (pulled in by the smb libraries' toolchain
