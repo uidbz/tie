@@ -104,6 +104,88 @@ func (s progressSink) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// exists asks the filehost whether it already holds this content address
+// (HEAD /{hash}). putlib asks before streaming a body: the server would answer
+// an upload of existing content without reading it, but the client still pays
+// to read the file and send every byte — re-importing a library used to move
+// the whole library across the wire for nothing (§5.2 item 2).
+//
+// The answer must also report the same length we are about to send: a 200 from
+// something that is not a tie filehost (a proxy, a stub) must never be taken as
+// "stored", or the manifest would reference a blob that does not exist. Any
+// other answer — 404, a 403 from a read-restricted token, a transport error —
+// means "upload it", so this can only ever save work.
+func (pc *PutConfig) exists(uploadURL, hash string, size int64) bool {
+	req, err := http.NewRequest(http.MethodHead, blobURL(uploadURL, hash), nil)
+	if err != nil {
+		return false
+	}
+	httpClient := pc.Client
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if resp.Body != nil {
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}
+	}()
+	return resp.StatusCode == http.StatusOK && resp.ContentLength == size
+}
+
+// blobURL turns the upload endpoint back into the read endpoint, where HEAD
+// answers whether the store holds the content.
+func blobURL(uploadURL, hash string) string {
+	return strings.TrimSuffix(uploadURL, "upload/") + hash
+}
+
+// existingItem describes a blob the filehost already has, so the caller can
+// report it (and write its manifest entry) without reading the whole file. The
+// head bytes still have to be sampled: they are what classifies an entry as a
+// directory and let the media type be recomputed downstream.
+func (pc *PutConfig) existingItem(hash, path string, head []byte, mediaType string, size int) StatusItem {
+	return StatusItem{
+		Hash:      hash,
+		Filename:  path,
+		MediaType: mediaType,
+		Size:      size,
+		Head:      head,
+	}
+}
+
+// headOf returns the first metadata.MagicNumber bytes of s, the same prefix
+// UploadMultipart would have peeked.
+func headOf(s string) []byte {
+	if len(s) <= metadata.MagicNumber {
+		return []byte(s)
+	}
+	return []byte(s[:metadata.MagicNumber])
+}
+
+// fileHead samples a file's leading bytes and size without reading it whole.
+func fileHead(path string) (head []byte, size int, mediaType string) {
+	fi, err := os.Stat(path)
+	if err == nil {
+		size = int(fi.Size())
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, size, ""
+	}
+	defer f.Close()
+	buf := make([]byte, metadata.MagicNumber)
+	n, _ := io.ReadFull(f, buf)
+	head = buf[:n]
+	if t, err := filetype.Get(head); err == nil {
+		mediaType = t.MIME.Value
+	}
+	return head, size, mediaType
+}
+
 func (pc *PutConfig) UploadMultipart(url string, f io.Reader, length int, path string) StatusItem {
 	var (
 		writeErr error // Store the first write error in writeErr.
@@ -322,6 +404,10 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 			status.ErrorMsg += "Error hashing directory " + file + ": " + err.Error() + "\n"
 			return
 		}
+		if config.exists(url, localhash, int64(len(hashes))) {
+			validate(localhash, config.existingItem(localhash, file, headOf(hashes), "inode/directory", len(hashes)), status)
+			return
+		}
 		uploadStatus := config.UploadMultipart(url+localhash, strings.NewReader(hashes), len(hashes), file)
 		uploadStatus.MediaType = "inode/directory"
 		validate(localhash, uploadStatus, status)
@@ -329,6 +415,11 @@ func (status *Status) upload(url string, file string, config PutConfig) {
 		localhash, err := config.AddressOfFile(file)
 		if err != nil {
 			status.ErrorMsg += "Error hashing file " + file + ": " + err.Error() + "\n"
+			return
+		}
+		head, headSize, mediaType := fileHead(file)
+		if config.exists(url, localhash, int64(headSize)) {
+			validate(localhash, config.existingItem(localhash, file, head, mediaType, headSize), status)
 			return
 		}
 		uploadStatus := config.UploadFile(url+localhash, file)

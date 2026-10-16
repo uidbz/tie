@@ -1,12 +1,14 @@
 package putlib_test
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,10 @@ import (
 type blobStore struct {
 	mu    sync.Mutex
 	blobs map[string][]byte
+	// puts and heads count request kinds, so a test can assert a re-import
+	// asks instead of re-sending.
+	puts  int
+	heads int
 }
 
 func newBlobStore() *blobStore { return &blobStore{blobs: map[string][]byte{}} }
@@ -28,6 +34,9 @@ func (s *blobStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
 		hash := strings.TrimPrefix(r.URL.Path, "/upload/")
+		s.mu.Lock()
+		s.puts++
+		s.mu.Unlock()
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -37,6 +46,18 @@ func (s *blobStore) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.blobs[hash] = body
 		s.mu.Unlock()
 		w.Write([]byte(hash))
+	case http.MethodHead:
+		hash := strings.TrimPrefix(r.URL.Path, "/")
+		s.mu.Lock()
+		s.heads++
+		body, ok := s.blobs[hash]
+		s.mu.Unlock()
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(http.StatusOK)
 	case http.MethodGet:
 		hash := strings.TrimPrefix(r.URL.Path, "/")
 		s.mu.Lock()
@@ -157,4 +178,97 @@ func chdir(t *testing.T, dir string) func() {
 		t.Fatal(err)
 	}
 	return func() { os.Chdir(prev) }
+}
+
+// TestReimportSkipsExistingBlobs is the §5.2(2) guard: putlib used to stream
+// every byte again even when the filehost already held the content address, so
+// re-importing a library moved the whole library across the wire for nothing.
+func TestReimportSkipsExistingBlobs(t *testing.T) {
+	store := newBlobStore()
+	srv := httptest.NewServer(store)
+	defer srv.Close()
+
+	base := t.TempDir()
+	writeTree(t, filepath.Join(base, "mytree"))
+	defer chdir(t, base)()
+
+	first := putlib.Upload(srv.URL, "mytree", putlib.PutConfig{})
+	if first.ErrorMsg != "" {
+		t.Fatalf("first import: %s", first.ErrorMsg)
+	}
+	store.mu.Lock()
+	putsAfterFirst := store.puts
+	store.mu.Unlock()
+	if putsAfterFirst == 0 {
+		t.Fatal("the first import stored nothing")
+	}
+
+	second := putlib.Upload(srv.URL, "mytree", putlib.PutConfig{})
+	if second.ErrorMsg != "" {
+		t.Fatalf("second import: %s", second.ErrorMsg)
+	}
+	store.mu.Lock()
+	extraPuts := store.puts - putsAfterFirst
+	heads := store.heads
+	store.mu.Unlock()
+
+	if extraPuts != 0 {
+		t.Errorf("re-import sent %d PUTs, want 0", extraPuts)
+	}
+	if heads == 0 {
+		t.Error("the re-import asked no HEAD requests")
+	}
+	if second.LastItem.Hash != first.LastItem.Hash {
+		t.Errorf("root hash changed: %s vs %s", second.LastItem.Hash, first.LastItem.Hash)
+	}
+	// The skipped items must still carry the metadata callers rely on
+	// (tagging, manifest entries, media type).
+	for _, it := range second.UploadedItems {
+		if it.Hash == "" {
+			t.Errorf("item %q has no hash", it.Filename)
+		}
+		if it.Size == 0 {
+			t.Errorf("item %q has no size", it.Filename)
+		}
+	}
+}
+
+// BenchmarkReimport measures the cost of re-importing an unchanged tree: the
+// HEAD probe replaces a full read-and-send of every blob.
+func BenchmarkReimport(b *testing.B) {
+	store := newBlobStore()
+	srv := httptest.NewServer(store)
+	defer srv.Close()
+
+	base := b.TempDir()
+	tree := filepath.Join(base, "mytree")
+	for i := 0; i < 20; i++ {
+		rel := filepath.Join("sub", strconv.Itoa(i)+".bin")
+		full := filepath.Join(tree, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			b.Fatal(err)
+		}
+		if err := os.WriteFile(full, bytes.Repeat([]byte("x"), 32*1024), 0644); err != nil {
+			b.Fatal(err)
+		}
+	}
+	prev, err := os.Getwd()
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := os.Chdir(base); err != nil {
+		b.Fatal(err)
+	}
+	defer os.Chdir(prev)
+
+	if st := putlib.Upload(srv.URL, "mytree", putlib.PutConfig{}); st.ErrorMsg != "" {
+		b.Fatal(st.ErrorMsg)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if st := putlib.Upload(srv.URL, "mytree", putlib.PutConfig{}); st.ErrorMsg != "" {
+			b.Fatal(st.ErrorMsg)
+		}
+	}
 }

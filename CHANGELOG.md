@@ -32,6 +32,13 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **Re-importing a library no longer re-sends it.** `putlib` now asks
+  `HEAD /{hash}` before streaming a body and skips the upload when the filehost
+  already holds that content address (the answer must also report the same
+  length, so a 200 from something that is not a tie filehost is never taken as
+  "stored"). Benchmark, re-importing an unchanged 20-file/640 KiB tree:
+  1.5 ms / 3.67 MB → 0.8 ms / 0.96 MB in-process; over a network the body bytes
+  are the difference.
 - **A symlink to a directory no longer aborts a tree import.** It was
   classified by `Lstat` as a file, hashing failed with "is a directory", and the
   whole import stopped. Links are now followed, with the real paths of the
