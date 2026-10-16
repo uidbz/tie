@@ -438,13 +438,9 @@ func (r *repairSession) blobFH() (*fhclient.Client, error) {
 	if r.fh != nil {
 		return r.fh, nil
 	}
-	hosts := r.tie.ResolveHosts(r.collection, nil)
-	if len(hosts) == 0 {
-		return nil, fmt.Errorf("no filehosts configured")
-	}
-	host, ok := r.tie.Config.FileHosts[hosts[0]]
-	if !ok {
-		return nil, fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
+	host, err := r.tie.ResolveHostIn(r.collection, "")
+	if err != nil {
+		return nil, err
 	}
 	r.fh = FileHostClient(host)
 	return r.fh, nil

@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -372,16 +371,9 @@ func FileHostClient(host FileHost) *fhclient.Client {
 // selects the collection's default). Callers should use it instead of building
 // their own: the point is that one client serves the whole run.
 func (tc *TieClient) BlobClient(name string) (*fhclient.Client, error) {
-	hosts := tc.active.FileHosts
-	if name == "" {
-		if len(hosts) == 0 {
-			return nil, errors.New("no filehosts configured")
-		}
-		name = hosts[0]
-	}
-	host, ok := tc.Config.FileHosts[name]
-	if !ok {
-		return nil, fmt.Errorf("filehost %q has no [FileHosts] entry", name)
+	host, err := tc.ResolveHost(name)
+	if err != nil {
+		return nil, err
 	}
 	return FileHostClient(host), nil
 }

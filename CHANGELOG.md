@@ -42,6 +42,13 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **One path from a collection to its filehost.** `ResolveHost(name)` and
+  `ResolveHosts(collection, explicit)` answered the same question separately,
+  and every caller hand-rolled the `[FileHosts]` lookup afterwards. The
+  visible bug: `tie verify -c other --check-blobs` asked the *client's*
+  collection's filehost, so every blob of the other collection was reported
+  missing. `ResolveHostIn(collection, name)` is now the single path, used by
+  upload, verify, repair and the CLI.
 - **Mount inode numbers are derived from the key, not remembered.** The
   FUSE/SMB inode map grew by one entry per distinct key ever listed and was
   never pruned — a slow leak in a tie-smb server that runs for months — and

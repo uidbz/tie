@@ -1161,8 +1161,8 @@ func runImport(ctx *cli.Command, label string) error {
 	}
 	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
 	for _, h := range hosts {
-		if _, ok := tie.Config.FileHosts[h]; !ok {
-			return fmt.Errorf("unknown filehost %q (no [FileHosts.%s] entry in config)", h, h)
+		if _, err := tie.ResolveHost(h); err != nil {
+			return err
 		}
 	}
 	fmt.Println("Uploading to", hosts)
@@ -1210,8 +1210,8 @@ func runImportAlbums(ctx *cli.Command, dirType string, forcedArchive client.TieT
 	}
 	hosts := tie.ResolveHosts(ctx.String("collection"), ctx.StringSlice("host"))
 	for _, h := range hosts {
-		if _, ok := tie.Config.FileHosts[h]; !ok {
-			return fmt.Errorf("unknown filehost %q (no [FileHosts.%s] entry in config)", h, h)
+		if _, err := tie.ResolveHost(h); err != nil {
+			return err
 		}
 	}
 	var failed []string

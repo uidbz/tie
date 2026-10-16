@@ -182,7 +182,7 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 	sort.Slice(rep.MissingMetadata, func(i, j int) bool { return rep.MissingMetadata[i].Subject < rep.MissingMetadata[j].Subject })
 
 	if checkBlobs {
-		missing, err := tie.checkBlobsExist(files)
+		missing, err := tie.checkBlobsExist(collection, files)
 		if err != nil {
 			return rep, err // return the partial structural report plus the error
 		}
@@ -332,17 +332,15 @@ const blobCheckWorkers = 16
 // filehost and returns the hashes absent from all of them. One HEAD request per
 // hash; the work runs through a small worker pool and the result is sorted, so
 // it is the same list whatever the scheduling.
-func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
-	hosts := tie.active.FileHosts
-	if len(hosts) == 0 {
-		return nil, errors.New("no filehosts configured for blob check")
-	}
-	// Use the first configured host for existence; content-addressed blobs are
-	// identical across hosts, so presence on any one is what matters for
-	// reachability of the canonical copy.
-	host, ok := tie.Config.FileHosts[hosts[0]]
-	if !ok {
-		return nil, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
+func (tie *TieClient) checkBlobsExist(collection string, files []Row) ([]string, error) {
+	// The first host of the collection being verified, not of the client's
+	// bound collection: `tie verify -c other --check-blobs` has to ask the
+	// filehost that collection writes to (§8 S11). Only the first host is
+	// asked, because content-addressed blobs are identical across hosts and
+	// presence on any one is what matters for reachability.
+	host, err := tie.ResolveHostIn(collection, "")
+	if err != nil {
+		return nil, err
 	}
 	fh := FileHostClient(host)
 
