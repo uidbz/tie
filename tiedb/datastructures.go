@@ -325,24 +325,19 @@ type ReadRequest struct {
 	ReplyChan chan Triple
 }
 
+// EntryToBytes serializes a trie entry into the fixed ENTRY_SIZE frame:
+// datatype(2) | level(8) | entryID(8) | parentId(8) | value(24). One buffer,
+// written at the same fixed offsets the bufTo* decoders read — the old version
+// allocated six tiny slices and appended them (and a discarded make) per record.
 func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	levelBytes := make([]byte, SIZE_LEVEL)
-	id := make([]byte, SIZE_ID)
-	parentId := make([]byte, SIZE_PARENTID)
-
-	binary.LittleEndian.PutUint16(datatype, TYPE_ENTRY)
-	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
-	binary.LittleEndian.PutUint64(id, entryID)
-	binary.LittleEndian.PutUint64(parentId, uv.ParentId)
-
-	var out []byte
-	out = append(datatype[:], levelBytes[:]...)
-	out = append(out, id[:]...)
-	out = append(out, parentId[:]...)
-	out = append(out, uv.Value[:]...)
-
-	return out
+	var b [ENTRY_SIZE]byte
+	binary.LittleEndian.PutUint16(b[0:SIZE_DATATYPE], TYPE_ENTRY)
+	binary.LittleEndian.PutUint64(b[SIZE_DATATYPE:SIZE_DATATYPE+SIZE_LEVEL], uint64(level))
+	next := SIZE_DATATYPE + SIZE_LEVEL + SIZE_ID
+	binary.LittleEndian.PutUint64(b[next-SIZE_ID:next], entryID)
+	binary.LittleEndian.PutUint64(b[next:next+SIZE_PARENTID], uv.ParentId)
+	copy(b[next+SIZE_PARENTID:], uv.Value[:])
+	return b[:]
 }
 
 // HashToBytes serializes a whole-value hash entry into the same 50-byte frame as
@@ -350,46 +345,31 @@ func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
 // The 32-byte hash occupies the contiguous parentId+value region of the frame,
 // so ENTRY_SIZE is unchanged. The level field is always HASH_LEVEL.
 func HashToBytes(entryID uint64, raw [32]byte) []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	levelBytes := make([]byte, SIZE_LEVEL)
-	id := make([]byte, SIZE_ID)
-
-	level := int64(HASH_LEVEL)
-	binary.LittleEndian.PutUint16(datatype, TYPE_HASH)
-	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
-	binary.LittleEndian.PutUint64(id, entryID)
-
-	out := append(datatype[:], levelBytes[:]...)
-	out = append(out, id[:]...)
-	out = append(out, raw[:]...)
-
-	return out
+	var b [ENTRY_SIZE]byte
+	hashLevel := int64(HASH_LEVEL) // -1 as the all-ones level the format stores
+	binary.LittleEndian.PutUint16(b[0:SIZE_DATATYPE], TYPE_HASH)
+	binary.LittleEndian.PutUint64(b[SIZE_DATATYPE:SIZE_DATATYPE+SIZE_LEVEL], uint64(hashLevel))
+	next := SIZE_DATATYPE + SIZE_LEVEL + SIZE_ID
+	binary.LittleEndian.PutUint64(b[next-SIZE_ID:next], entryID)
+	copy(b[next:], raw[:])
+	return b[:]
 }
 
+// toBytes serializes an association record: datatype(2) | entry level(8) |
+// entry id(8) | value2 level(8) | value2(8) | value1 level(8) | value1(8).
 func (a *Triple) toBytes() []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	entry_level := make([]byte, SIZE_LEVEL)
-	entry_id := make([]byte, SIZE_ID)
-	association_level := make([]byte, SIZE_ID)
-	association := make([]byte, SIZE_ID)
-	relation_level := make([]byte, SIZE_LEVEL)
-	relation := make([]byte, SIZE_ID)
-
-	binary.LittleEndian.PutUint16(datatype, TYPE_ASSOCIATION)
-	binary.LittleEndian.PutUint64(entry_level, uint64(a.Level))
-	binary.LittleEndian.PutUint64(entry_id, a.Key)
-	binary.LittleEndian.PutUint64(association_level, uint64(a.Value2Level))
-	binary.LittleEndian.PutUint64(association, a.Value2)
-	binary.LittleEndian.PutUint64(relation_level, uint64(a.Value1Level))
-	binary.LittleEndian.PutUint64(relation, a.Value1)
-
-	var out []byte
-	out = append(datatype[:], entry_level[:]...)
-	out = append(out, entry_id[:]...)
-	out = append(out, association_level[:]...)
-	out = append(out, association[:]...)
-	out = append(out, relation_level[:]...)
-	out = append(out, relation[:]...)
-
-	return out
+	var b [ENTRY_SIZE]byte
+	binary.LittleEndian.PutUint16(b[0:SIZE_DATATYPE], TYPE_ASSOCIATION)
+	off := SIZE_DATATYPE
+	put := func(v uint64) {
+		binary.LittleEndian.PutUint64(b[off:off+8], v)
+		off += 8
+	}
+	put(uint64(a.Level))
+	put(a.Key)
+	put(uint64(a.Value2Level))
+	put(a.Value2)
+	put(uint64(a.Value1Level))
+	put(a.Value1)
+	return b[:]
 }

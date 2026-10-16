@@ -238,21 +238,29 @@ func (ic *Collection) getUniqueValue(level int, id uint64) *UniqueValue {
 // Returns a copy of a full value. A missing entry at any level yields nil:
 // CheckIndex deliberately samples dangling ids, and a nil-deref here would
 // crash the very report that exists to surface them.
+//
+// The chain is collected and copied into ONE buffer: the old recursion
+// re-appended at every level, which is O(L^2) bytes copied for an L-level
+// value.
 func (ic *Collection) getValue(level int, id uint64) []byte {
 	if level < 0 {
 		return []byte{}
 	}
-	if level == 0 {
-		if uv := ic.getUniqueValue(0, id); uv != nil {
-			return uv.Value[:]
+	chain := make([]*UniqueValue, 0, level+1)
+	cur := id
+	for l := level; l >= 0; l-- {
+		uv := ic.getUniqueValue(l, cur)
+		if uv == nil {
+			return nil
 		}
-		return nil
+		chain = append(chain, uv)
+		cur = uv.ParentId
 	}
-	uv := ic.getUniqueValue(level, id)
-	if uv != nil {
-		return append(ic.getValue(level-1, uv.ParentId), uv.Value[:]...)
+	out := make([]byte, 0, len(chain)*SIZE_VALUE)
+	for i := len(chain) - 1; i >= 0; i-- {
+		out = append(out, chain[i].Value[:]...)
 	}
-	return nil
+	return out
 }
 
 func (ic *Collection) getValueString(level int, entryID uint64) string {

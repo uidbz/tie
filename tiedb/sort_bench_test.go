@@ -43,3 +43,27 @@ func BenchmarkDump(b *testing.B) {
 		col.ForEachTriple(func(StringTriple) { n++ })
 	}
 }
+
+// BenchmarkGetValueLong measures resolving a long (multi-level) value: the old
+// getValue recursion re-appended at every level (O(L^2) bytes copied).
+func BenchmarkGetValueLong(b *testing.B) {
+	db := NewDB(false)
+	col := db.GetCollection(CollectionKey{"mem", "longvalue"})
+	// 20 * 24 bytes = 20 trie levels deep.
+	long := ""
+	for i := 0; i < 20; i++ {
+		long += "0123456789abcdef01234567"
+	}
+	col.Add(long, "rel", "v")
+	id, level, ok := col.getEntryFromString(long)
+	if !ok {
+		b.Fatal("value not interned")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if v := col.getValue(level, id); len(v) == 0 {
+			b.Fatal("empty value")
+		}
+	}
+}
