@@ -157,9 +157,15 @@ func runImportAlbums(a *app, ctx *cli.Command, dirType string, forcedArchive cli
 		if ctx.Bool("dry-run") {
 			continue
 		}
-		if !ctx.Bool("yes") && !confirmAlbumImport(len(plan)) {
-			fmt.Fprintln(os.Stderr, "aborted")
-			continue
+		if !ctx.Bool("yes") {
+			yes, err := confirmAlbumImport(len(plan))
+			if err != nil {
+				return err
+			}
+			if !yes {
+				fmt.Fprintln(os.Stderr, "aborted")
+				continue
+			}
 		}
 		for _, h := range hosts {
 			fmt.Fprintln(os.Stderr, "Uploading to", h)
@@ -199,11 +205,45 @@ func printAlbumPlan(plan []client.AlbumGroup) {
 	fmt.Fprintf(os.Stderr, "%d albums\n", len(plan))
 }
 
-// confirmAlbumImport asks before starting a bulk import; anything but
-// y/yes aborts.
-func confirmAlbumImport(n int) bool {
-	fmt.Printf("Import %d albums? [y/N] ", n)
-	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+// confirmAlbumImport asks before starting a bulk import; anything but y/yes
+// aborts. The question goes to stderr and the answer is read from the
+// controlling terminal, never from stdin (§6.3): with stdin from a pipe or
+// /dev/null — cron, xargs, a script piping something else in — the prompt was
+// swallowed and the import aborted silently, and a pipe whose first line began
+// with "y" confirmed it by accident. With no terminal to ask on, refuse and say
+// how to confirm non-interactively.
+func confirmAlbumImport(n int) (bool, error) {
+	return confirmAlbumImportOn(n, openTerminal)
+}
+
+// openTerminal is the process' controlling terminal. Opening it fails when
+// there is none (a cron job, a daemon, `nohup … &`), which is exactly the case
+// the prompt must refuse.
+func openTerminal() (*os.File, error) {
+	return os.Open("/dev/tty")
+}
+
+func confirmAlbumImportOn(n int, open func() (*os.File, error)) (bool, error) {
+	tty, err := open()
+	if err != nil {
+		return false, exitError{
+			code: 2,
+			msg:  fmt.Sprintf("no terminal to confirm on: pass -y to import %d %s without asking", n, plural(n, "album", "albums")),
+		}
+	}
+	defer tty.Close()
+
+	fmt.Fprintf(os.Stderr, "Import %d %s? [y/N] ", n, plural(n, "album", "albums"))
+	answer, err := bufio.NewReader(tty).ReadString('\n')
+	if err != nil && answer == "" {
+		// Ctrl-D, or a terminal that closed: that is a refusal, not a crash.
+		return false, nil
+	}
+	return confirms(answer), nil
+}
+
+// confirms is the whole of the answer grammar: y or yes, any case.
+func confirms(answer string) bool {
 	answer = strings.TrimSpace(answer)
 	return strings.EqualFold(answer, "y") || strings.EqualFold(answer, "yes")
 }

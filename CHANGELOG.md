@@ -178,6 +178,12 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie import --albums` no longer reads the confirmation from stdin.** It asks
+  on stderr and reads the answer from the controlling terminal (`/dev/tty`), so
+  a pipe or `/dev/null` on stdin — cron, `xargs`, a script piping something else
+  in — can no longer swallow the prompt (silently aborting) or answer it by
+  accident (a first line starting with `y`). With no terminal to ask on it
+  refuses with exit 2 and says to pass `-y`. Ctrl-D at the prompt is a refusal.
 - **`tie version` is now a health check.** It answers one row per component —
   `component<TAB>version<TAB>url` — instead of an aligned human table, prints
   `unavailable` in the version column for a server it cannot reach (the reason
