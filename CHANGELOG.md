@@ -58,6 +58,17 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **The triplestore client no longer replays writes, and it has a timeout.**
+  `webservice.Client.Run` retried *every* request after a transport error, on the
+  grounds that writes are idempotent — but an `Update` whose response was lost has
+  already applied, so the replay failed with "Did not find ..." and the client
+  reported an error for a write that succeeded. Only reads and `Sync` are replayed
+  now. There is also a 60 s per-request timeout (a stalled server used to hang the
+  CLI, the FUSE mount and tie-smb forever; `SetTimeout` changes it, streams are
+  exempt), `RunContext`/`RunStreamContext` accept a caller context, `NewClient`
+  returns an error instead of `nil` for a bad URL, and a non-2xx answer becomes a
+  `*StatusError` (`errors.Is` works with `ErrUnauthorized`/`ErrForbidden`) instead
+  of a JSON syntax error.
 - **Server configs with an empty password or a duplicate username are refused
   at start-up.** `auth.BuildStore` validates `[[Users]]` for both servers: an
   empty (or whitespace-only) password made an account authenticatable by anyone

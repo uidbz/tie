@@ -2,6 +2,7 @@ package webservice
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -16,9 +17,6 @@ import (
 // error. Go does not auto-retry a POST when it reuses a keep-alive connection
 // the server has since closed, so a long run of sequential writes (e.g. a big
 // import) surfaces a bare EOF that would otherwise abort the whole operation.
-// The request body is buffered in memory, so replaying it is free and safe: the
-// write ops are idempotent (duplicate add is a no-op, set replaces, delete is
-// idempotent).
 const maxAttempts = 4
 
 // retryBackoff returns the pause before attempt n (1-indexed): 100ms, 200ms,
@@ -27,10 +25,29 @@ func retryBackoff(attempt int) time.Duration {
 	return 100 * time.Millisecond * time.Duration(1<<(attempt-1))
 }
 
+// retrySafe reports whether a request may be re-sent after a transport failure.
+// Reads change nothing and Sync is idempotent by nature. Writes are not: an
+// Update whose response was lost may already have applied, and re-sending it
+// then fails with "Did not find ..." — the client would report an error for a
+// write that succeeded (§4.11). A Batch containing an update has the same
+// problem, so it is not retried either.
+func retrySafe(reqID string) bool {
+	return readRequests[reqID] || reqID == "Sync"
+}
+
+// defaultRequestTimeout bounds one non-streaming request. Without any timeout a
+// stalled server hung the CLI, the FUSE mount and tie-smb forever (§4.11). It
+// deliberately does not apply to RunStream, whose body (a Dump of a large
+// collection) can legitimately run for minutes.
+const defaultRequestTimeout = 60 * time.Second
+
 type Client struct {
 	server      string
 	credentials Credentials
 	hc          *http.Client
+	// timeout bounds a single Run. Zero selects defaultRequestTimeout; a
+	// negative value disables it.
+	timeout time.Duration
 }
 
 type Credentials struct {
@@ -38,24 +55,103 @@ type Credentials struct {
 	Password string
 }
 
+// ErrUnauthorized and ErrForbidden let callers branch on the two auth failures
+// without matching on the server's text.
+var (
+	ErrUnauthorized = errors.New("unauthorized: check Username/Password in your config")
+	ErrForbidden    = errors.New("forbidden: your role is not sufficient for this request")
+)
+
+// StatusError is an HTTP-level failure from the triplestore. The server keeps a
+// JSON ReplyStatus body on error answers, so Message carries what the server
+// said; when the body was not a reply at all (a proxy's HTML error page) Body
+// carries a snippet instead. Before this, a 403's plaintext "Forbidden" reached
+// json.Unmarshal and surfaced as "invalid character 'F'..." (§4.11).
+type StatusError struct {
+	Status  int
+	Request string
+	Message string
+	Body    string
+}
+
+func (e *StatusError) Error() string {
+	detail := e.Message
+	if detail == "" {
+		detail = e.Body
+	}
+	if detail == "" {
+		detail = http.StatusText(e.Status)
+	}
+	return fmt.Sprintf("%s: %s: %s", e.Request, http.StatusText(e.Status), detail)
+}
+
+// Unwrap maps the two auth statuses onto sentinels so errors.Is works.
+func (e *StatusError) Unwrap() error {
+	switch e.Status {
+	case http.StatusUnauthorized:
+		return ErrUnauthorized
+	case http.StatusForbidden:
+		return ErrForbidden
+	}
+	return nil
+}
+
+// SetTimeout bounds one non-streaming request. Zero restores the default, a
+// negative value disables the bound.
+func (c *Client) SetTimeout(d time.Duration) { c.timeout = d }
+
+// effectiveTimeout resolves the timeout field.
+func (c *Client) effectiveTimeout() time.Duration {
+	switch {
+	case c.timeout < 0:
+		return 0
+	case c.timeout == 0:
+		return defaultRequestTimeout
+	default:
+		return c.timeout
+	}
+}
+
+// Run sends the request with a background context.
 func (c *Client) Run(request RequestInterface) (*Reply, error) {
+	return c.RunContext(context.Background(), request)
+}
+
+// RunContext sends the request, honoring ctx and the client's per-request
+// timeout (whichever is shorter). Only requests classified by retrySafe are
+// replayed after a transport failure.
+func (c *Client) RunContext(ctx context.Context, request RequestInterface) (*Reply, error) {
 	body, errMarshal := json.Marshal(request)
 	if errMarshal != nil {
 		e := Reply{ReplyTypeEmpty, nil}
 		return &e, errMarshal
 	}
 
+	attempts := maxAttempts
+	if !retrySafe(request.GetId()) {
+		attempts = 1
+	}
+
 	// Retry only transport-level failures (Do error, response-body read error).
-	// A Do that returns a *response* — including an auth rejection or a body we
-	// then fail to unmarshal — means the server was reached, so we do not retry.
+	// A Do that returns a *response* means the server was reached, so the
+	// answer — including an auth rejection — is final.
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		if attempt > 1 {
-			time.Sleep(retryBackoff(attempt - 1))
+			select {
+			case <-time.After(retryBackoff(attempt - 1)):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
 
-		req, err := http.NewRequest(http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
+		reqCtx, cancel, err := c.requestContext(ctx)
 		if err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
+		if err != nil {
+			cancel()
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -63,49 +159,64 @@ func (c *Client) Run(request RequestInterface) (*Reply, error) {
 
 		resp, err := c.hc.Do(req)
 		if err != nil {
+			cancel()
 			lastErr = err
 			continue
 		}
 
-		if resp.StatusCode == http.StatusUnauthorized {
-			resp.Body.Close()
-			return nil, errors.New("Unauthorized")
-		}
-
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		replyStructPtr := request.GetReplyStructPtr()
-		errUnmarshal := json.Unmarshal(respBody, replyStructPtr)
-		if errUnmarshal != nil {
-			// A non-2xx answer whose body is not a reply (a proxy's HTML error
-			// page, a plain-text 413) must be reported as the status it is,
-			// not as a JSON syntax error.
-			if resp.StatusCode != http.StatusOK {
-				return nil, fmt.Errorf("webservice returned %s: %s", resp.Status, snippet(respBody))
-			}
-			return nil, errUnmarshal
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, c.statusError(request.GetId(), resp, respBody)
 		}
 
-		reply := Reply{
+		replyStructPtr := request.GetReplyStructPtr()
+		if errUnmarshal := json.Unmarshal(respBody, replyStructPtr); errUnmarshal != nil {
+			return nil, fmt.Errorf("webservice returned %s: %s", resp.Status, snippet(respBody))
+		}
+
+		return &Reply{
 			RequestName:    request.GetId(),
 			ReplyStructPtr: replyStructPtr,
-		}
-
-		return &reply, nil
+		}, nil
 	}
 
 	return nil, lastErr
 }
 
-// RunStream POSTs the request and hands the raw, unparsed response body to
-// consume, which reads it incrementally (e.g. NDJSON). The body is never fully
-// buffered in memory. Auth and non-200 failures are reported before consume is
-// called; a failure mid-stream surfaces as a read error inside consume.
+// requestContext applies the client's per-request timeout on top of the
+// caller's context.
+func (c *Client) requestContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, func() {}, err
+	}
+	to := c.effectiveTimeout()
+	if to == 0 {
+		return ctx, func() {}, nil
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, to)
+	return reqCtx, cancel, nil
+}
+
+// statusError turns a non-2xx answer into a typed error, decoding the server's
+// ReplyStatus body when it is one so the message survives.
+func (c *Client) statusError(reqID string, resp *http.Response, body []byte) error {
+	se := &StatusError{Status: resp.StatusCode, Request: reqID}
+	var st ReplyStatus
+	if err := json.Unmarshal(body, &st); err == nil && st.Message != "" {
+		se.Message = st.Message
+	} else {
+		se.Body = snippet(body)
+	}
+	return se
+}
+
 // snippet is a short, printable excerpt of a response body for error messages.
 func snippet(b []byte) string {
 	const max = 200
@@ -119,7 +230,19 @@ func snippet(b []byte) string {
 	return s
 }
 
+// RunStream POSTs the request with a background context and hands the raw,
+// unparsed response body to consume.
 func (c *Client) RunStream(request RequestInterface, consume func(io.Reader) error) error {
+	return c.RunStreamContext(context.Background(), request, consume)
+}
+
+// RunStreamContext POSTs the request and hands the raw, unparsed response body
+// to consume, which reads it incrementally (e.g. NDJSON). The body is never
+// fully buffered in memory. Auth and non-200 failures are reported before
+// consume is called; a failure mid-stream surfaces as a read error inside
+// consume. No per-request timeout is imposed: a large stream is legitimate, so
+// callers that need a deadline pass a context with one.
+func (c *Client) RunStreamContext(ctx context.Context, request RequestInterface, consume func(io.Reader) error) error {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -127,15 +250,20 @@ func (c *Client) RunStream(request RequestInterface, consume func(io.Reader) err
 
 	// Retry only the connection attempt (before any body byte is consumed); a
 	// failure mid-stream still surfaces inside consume, since the reply is not
-	// replayable once reading has started.
+	// replayable once reading has started. A stream is a read, so it is always
+	// safe to re-establish.
 	var resp *http.Response
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
-			time.Sleep(retryBackoff(attempt - 1))
+			select {
+			case <-time.After(retryBackoff(attempt - 1)):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
-		req, reqErr := http.NewRequest(http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
 		if reqErr != nil {
 			return reqErr
 		}
@@ -152,31 +280,30 @@ func (c *Client) RunStream(request RequestInterface, consume func(io.Reader) err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusUnauthorized {
-		return errors.New("Unauthorized")
-	}
-	if resp.StatusCode != http.StatusOK {
-		return errors.New("stream request failed: " + resp.Status)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+		return c.statusError(request.GetId(), resp, body)
 	}
 
 	return consume(resp.Body)
 }
 
-func NewClient(server, username, password string, insecure bool) *Client {
-	c := &Client{}
-	c.server = server
-	c.credentials = Credentials{username, password}
-
-	if len(c.server) < 5 {
-		return nil
+// NewClient builds a client for one triplestore. A URL that cannot be a
+// triplestore address is an error: returning nil used to store a nil client and
+// panic on the first request (§4.11).
+func NewClient(server, username, password string, insecure bool) (*Client, error) {
+	if len(server) < 5 || !(strings.HasPrefix(server, "http://") || strings.HasPrefix(server, "https://")) {
+		return nil, fmt.Errorf("webservice: %q is not a triplestore URL (want http://host:port)", server)
 	}
-
-	if strings.HasPrefix(c.server, "https") {
+	c := &Client{
+		server:      strings.TrimSuffix(server, "/"),
+		credentials: Credentials{username, password},
+	}
+	if strings.HasPrefix(server, "https") {
 		t := tls.Config{InsecureSkipVerify: insecure}
 		c.hc = &http.Client{Transport: &http.Transport{TLSClientConfig: &t}}
 	} else {
 		c.hc = &http.Client{}
 	}
-
-	return c
+	return c, nil
 }

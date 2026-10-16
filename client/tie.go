@@ -107,6 +107,10 @@ func RowHas(r Row, relation, value string) bool {
 
 type TieClient struct {
 	client *ws.Client
+	// runErr records a construction failure (a triplestore URL that cannot be
+	// dialed). It surfaces on the first request rather than as a nil dereference
+	// inside the transport (§4.11).
+	runErr error
 	Config Config
 	// active is the resolved collection this client operates on (triplestore,
 	// namespace, collection id, credentials, filehosts), chosen at construction.
@@ -327,12 +331,13 @@ func NewTieClient(config Config) (client *TieClient) {
 // credentials.
 func NewTieClientFor(config Config, collection string) (client *TieClient) {
 	active := config.ResolveCollection(collection)
-	client = &TieClient{
-		Config: config,
-		active: active,
-		client: ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure),
+	client = &TieClient{Config: config, active: active}
+	wsc, err := ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure)
+	if err != nil {
+		client.runErr = err
+		return client
 	}
-
+	client.client = wsc
 	return client
 }
 
@@ -375,6 +380,9 @@ func (tc *TieClient) collectionInfo(collection string) api.CollectionInfo {
 // run sends a request and returns the typed reply. err is non-nil on transport
 // failure; the API-level Success flag is checked by each method via replyError.
 func run[T any](tc *TieClient, request ws.RequestInterface) (*T, error) {
+	if tc.runErr != nil {
+		return nil, tc.runErr
+	}
 	generic, err := tc.client.Run(request)
 	if err != nil {
 		return nil, err
@@ -580,6 +588,9 @@ func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 // is unspecified. If fn returns an error, streaming stops and that error is
 // returned.
 func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
+	if tc.runErr != nil {
+		return tc.runErr
+	}
 	col := tc.collectionInfo("")
 	request := col.NewDumpRequest()
 

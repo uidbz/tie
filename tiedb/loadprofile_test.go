@@ -57,7 +57,7 @@ func TestLoadTimeProfile(t *testing.T) {
 	t.Logf("=== load-time profile ===")
 	t.Logf("file: %s (%.2f GiB)", path, float64(fi.Size())/(1024*1024*1024))
 	t.Logf("load wall time: %s", elapsed)
-	t.Logf("total entries: %d  total associations: %d", col.totalEntries, col.totalAssociations)
+	t.Logf("total entries: %d  total associations: %d", col.totalEntries.Load(), col.totalAssociations)
 
 	var m runtime.MemStats
 	runtime.GC()

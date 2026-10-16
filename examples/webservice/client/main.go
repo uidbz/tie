@@ -9,7 +9,11 @@ import (
 )
 
 func main() {
-	client := ws.NewClient("http://localhost:8080", "myuser", "mypassword", false)
+	client, err := ws.NewClient("http://localhost:8080", "myuser", "mypassword", false)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
 	request := api.NewDummyRequest()
 	request.SomeData = "Test"
