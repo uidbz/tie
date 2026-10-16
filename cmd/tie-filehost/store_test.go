@@ -181,7 +181,6 @@ func TestUploadRoutingAndSearchDownload(t *testing.T) {
 	if err := initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "ssd", Path: ssd}, {Name: "hdd", Path: hdd}}}); err != nil {
 		t.Fatal(err)
 	}
-	InitKey()
 	mux := http.NewServeMux()
 	routes(mux, auth.NewStore(nil, auth.RoleWrite))
 	srv := httptest.NewServer(mux)
@@ -201,10 +200,18 @@ func TestUploadRoutingAndSearchDownload(t *testing.T) {
 		t.Fatalf("upload returned non-hash %q", hash)
 	}
 
-	if _, err := os.Stat(PathFromHash(hdd, hash)); err != nil {
+	pHdd, err := PathFromHash(hdd, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pHdd); err != nil {
 		t.Errorf("blob not stored in the requested hdd store: %v", err)
 	}
-	if _, err := os.Stat(PathFromHash(ssd, hash)); err == nil {
+	pSsd, err := PathFromHash(ssd, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pSsd); err == nil {
 		t.Error("blob leaked into the ssd store")
 	}
 

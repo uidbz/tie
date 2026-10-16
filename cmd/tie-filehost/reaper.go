@@ -35,6 +35,7 @@ func startReaper(interval time.Duration) {
 // how many blobs were removed and how many expired blobs were kept because they
 // were still referenced.
 func reapOnce(now int64) (deleted, kept int) {
+	passStart := time.Now()
 	// Union the expired sets, remembering which store owns each expired hash.
 	expired := map[string]*blobStore{}
 	for _, s := range stores {
@@ -61,6 +62,15 @@ func reapOnce(now int64) (deleted, kept int) {
 			markReferences(h, protected, visited)
 		}
 	}
+	// A directory blob uploaded *during* this pass was not in the walk above,
+	// yet its children are in the expired snapshot and would be swept out from
+	// under it (TOCTOU). Re-walk for blobs whose mtime postdates the pass and
+	// mark their references too.
+	for _, s := range stores {
+		for _, h := range listBlobsModifiedSince(s.path, passStart) {
+			markReferences(h, protected, visited)
+		}
+	}
 
 	// Sweep phase, grouped per store so each index is saved once.
 	toDelete := map[*blobStore][]string{}
@@ -72,27 +82,45 @@ func reapOnce(now int64) (deleted, kept int) {
 		toDelete[s] = append(toDelete[s], h)
 	}
 	for s, hashes := range toDelete {
-		s.retention.mu.Lock()
-		changed := false
-		for _, h := range hashes {
-			path := PathFromHash(s.path, h)
-			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-				slog.Error("reaper: error removing blob", "path", path, "err", err)
-				continue
-			}
-			pruneShardDirs(s.path, path)
-			delete(s.retention.entries, h)
-			changed = true
-			deleted++
-		}
-		if changed {
-			if err := s.retention.save(); err != nil {
-				slog.Error("reaper: error saving index", "store", s.name, "err", err)
-			}
-		}
-		s.retention.mu.Unlock()
+		deleted += sweepStore(s, hashes, now)
 	}
 	return deleted, kept
+}
+
+// sweepStore deletes the given expired hashes from one store and prunes their
+// index entries, saving the index once. Each hash is re-checked under the
+// index lock before removal: between the expiredSet snapshot and this sweep a
+// client may have re-uploaded the blob with longer or infinite retention
+// (TOCTOU), and deleting those bytes is data loss. A hash whose entry is gone,
+// permanent, or no longer expired is skipped.
+func sweepStore(s *blobStore, hashes []string, now int64) (deleted int) {
+	s.retention.mu.Lock()
+	defer s.retention.mu.Unlock()
+	changed := false
+	for _, h := range hashes {
+		if e, ok := s.retention.entries[h]; !ok || e.ExpiresAt == 0 || now < e.ExpiresAt {
+			continue // re-extended or made permanent since the snapshot
+		}
+		path, err := PathFromHash(s.path, h)
+		if err != nil {
+			slog.Error("reaper: malformed hash in index", "hash", h, "err", err)
+			continue
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			slog.Error("reaper: error removing blob", "path", path, "err", err)
+			continue
+		}
+		pruneShardDirs(s.path, path)
+		delete(s.retention.entries, h)
+		changed = true
+		deleted++
+	}
+	if changed {
+		if err := s.retention.save(); err != nil {
+			slog.Error("reaper: error saving index", "store", s.name, "err", err)
+		}
+	}
+	return deleted
 }
 
 // expiredSet snapshots the hashes in this store whose retention has elapsed.
@@ -128,6 +156,29 @@ func listBlobs(root string) []string {
 	return hashes
 }
 
+// listBlobsModifiedSince returns blob hashes in the store whose file mtime is
+// at or after since — i.e. blobs written during the current reaper pass.
+func listBlobsModifiedSince(root string, since time.Time) []string {
+	var hashes []string
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !metadata.IsHexHash(name) {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && !info.ModTime().Before(since) {
+			hashes = append(hashes, name)
+		}
+		return nil
+	})
+	return hashes
+}
+
 // markReferences protects every blob reachable from hash via directory
 // references. hash itself is not added (a live root is never deleted); its
 // descendants are, transitively, regardless of their own expiry.
@@ -152,7 +203,11 @@ func dirChildren(hash string) []string {
 	if !ok {
 		return nil
 	}
-	f, err := os.Open(PathFromHash(st.path, hash))
+	path, err := PathFromHash(st.path, hash)
+	if err != nil {
+		return nil
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}

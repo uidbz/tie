@@ -66,7 +66,7 @@ func newBlobCache(dir string, maxSizeBytes int64) (*blobCache, error) {
 // the same sharded layout as the primary store (data/<xx>/<yy>/<hash>): a large
 // cache (e.g. 2 TB of small blobs) can hold millions of files, and a flat
 // directory at that scale degrades on most filesystems.
-func (c *blobCache) blobPath(hash string) string {
+func (c *blobCache) blobPath(hash string) (string, error) {
 	return PathFromHash(c.dir, hash)
 }
 
@@ -115,7 +115,10 @@ func (c *blobCache) copyBlob(hash, srcPath string) (string, int64, error) {
 	}
 	defer in.Close()
 
-	dst := c.blobPath(hash)
+	dst, err := c.blobPath(hash)
+	if err != nil {
+		return "", 0, fmt.Errorf("blob cache: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return "", 0, fmt.Errorf("blob cache: creating shard dir for %q: %w", dst, err)
 	}

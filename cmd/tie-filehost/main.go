@@ -2,8 +2,8 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,10 +16,10 @@ import (
 
 	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/auth"
+	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tielog"
 	"github.com/uidbz/tie/version"
 	"github.com/h2non/filetype"
-	"github.com/minio/highwayhash"
 )
 
 // User is a single account entry in the filehost config. Passwords are stored
@@ -33,7 +33,6 @@ type User struct {
 }
 
 var (
-	key       []byte
 	listenOn  string = ":1162"
 	filecache *blobCache
 )
@@ -108,56 +107,28 @@ func parseRetention(r *http.Request, now time.Time) (int64, error) {
 }
 
 const (
-	tieKey       = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
 	shardLevels  = 2    // directory nesting depth; uniform hashes cap dir count at 256^shardLevels
 	dirWidth     = 2    // hex chars per level
 	hashFunction = "hh" // highway hash
 )
 
-func InitKey() {
-	k, err := hex.DecodeString(tieKey)
-	if err != nil {
-		slog.Error("cannot decode hex key", "err", err)
-		return
+// PathFromHash maps a content address to its sharded location under dest. It
+// rejects anything that is not a well-formed hash, so a request-supplied
+// value (ServeMux hands wildcards back unescaped — %2F becomes /) can never
+// traverse out of the store root.
+func PathFromHash(dest, hash string) (string, error) {
+	if !metadata.IsHexHash(hash) {
+		return "", fmt.Errorf("malformed content address %q", hash)
 	}
-	key = k
-}
-
-func AddressOfFile(key []byte, file string) (string, error) { // function to compute address based on content
-	fsocket, err := os.Open(file)
-	if err != nil {
-		return "", err
-	}
-	defer fsocket.Close()
-
-	return AddressOf(key, fsocket)
-}
-
-func AddressOf(key []byte, input io.Reader) (string, error) { // function to compute address based on content
-	hash, err := highwayhash.New(key)
-	if err != nil {
-		return "", err
-	}
-
-	_, err = io.Copy(hash, input)
-
-	dest := hash.Sum(nil)
-
-	return hex.EncodeToString(dest), err
-}
-
-func PathFromHash(dest, hash string) string {
 	for i := 0; i < shardLevels*dirWidth; i += dirWidth {
 		dest = filepath.Join(dest, hash[i:i+dirWidth])
 	}
 
-	return filepath.Join(dest, hash)
+	return filepath.Join(dest, hash), nil
 }
 
 func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	h := r.PathValue("hash")
-	slog.Info("receiving file", "hash", h)
-	var dest string
 	defer func() {
 		if r.Body != nil {
 			r.Body.Close()
@@ -170,22 +141,6 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h == "" {
-		var errTmp error
-		if dest, errTmp = os.MkdirTemp("", "tie-filehost"); errTmp != nil {
-			fmt.Fprint(w, "Error creating temp dir on server:", errTmp)
-			return
-		}
-		dest = filepath.Join(dest, "tempfile")
-	} else {
-		var errMake error
-		if dest, errMake = st.makeDestinationPath(h); errMake != nil {
-			slog.Error("creating destination directory", "hash", h, "err", errMake)
-			http.Error(w, "Error creating destination directory on server: "+errMake.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-
 	now := time.Now()
 	expiresAt, errRet := st.uploadExpiry(r, now)
 	if errRet != nil {
@@ -194,61 +149,19 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	token := r.Header.Get("Tie-Owner")
 
-	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		if err := st.retention.recordUpload(h, expiresAt, token, now.Unix(), true); err != nil {
-			slog.Error("recording retention", "err", err)
-		}
-		fmt.Fprint(w, h)
+	hashHex, existed, err := putBlob(st, r.Body, h)
+	switch {
+	case errors.Is(err, errChecksumMismatch):
+		slog.Warn("checksum mismatch; nothing stored", "expected", h)
+		http.Error(w, "Checksum mismatch", http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		slog.Error("storing blob", "store", st.name, "err", err)
+		http.Error(w, "Error saving file on server: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		slog.Error("opening destination file", "dest", dest, "err", err)
-		http.Error(w, "Error opening destination file on server: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer out.Close()
-
-	if _, errCopy := io.Copy(out, r.Body); errCopy != nil {
-		slog.Error("copying upload body", "dest", dest, "err", errCopy)
-		if err := os.Remove(dest); err != nil {
-			slog.Error("deleting bad file", "dest", dest, "err", err)
-		}
-		http.Error(w, "Error writing upload body on server: "+errCopy.Error(), http.StatusInternalServerError)
-		return
-	}
-	hashHex, _ := AddressOfFile(key, dest)
-	if h != "" && hashHex != h {
-		slog.Warn("checksum mismatch; deleting file", "expected", h, "calculated", hashHex, "dest", dest)
-		if err := os.Remove(dest); err != nil {
-			slog.Error("deleting bad file", "dest", dest, "err", err)
-		}
-	}
-	blobExisted := false
-	if h == "" {
-		h = hashHex
-		dest2, errMake := st.makeDestinationPath(h)
-		if errMake != nil {
-			slog.Error("creating destination directory", "hash", h, "err", errMake)
-			http.Error(w, "Error creating destination directory on server: "+errMake.Error(), http.StatusInternalServerError)
-			os.RemoveAll(filepath.Dir(dest))
-			return
-		}
-		if _, err := os.Stat(dest2); os.IsNotExist(err) {
-			slog.Debug("moving file", "from", dest, "to", dest2)
-			if errMove := os.Rename(dest, dest2); errMove != nil {
-				fmt.Fprint(w, "Error saving file on server:", err)
-				os.RemoveAll(filepath.Dir(dest))
-				return
-			}
-		} else {
-			os.RemoveAll(filepath.Dir(dest)) // file existed previously, delete tmp file
-			blobExisted = true
-		}
-		dest = dest2
-	}
-	if err := st.retention.recordUpload(hashHex, expiresAt, token, now.Unix(), blobExisted); err != nil {
+	if err := st.retention.recordUpload(hashHex, expiresAt, token, now.Unix(), existed); err != nil {
 		slog.Error("recording retention", "err", err)
 	}
 	slog.Info("stored blob", "hash", hashHex, "store", st.name)
@@ -257,18 +170,17 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 
 func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		slog.Warn("invalid hash requested", "hash", hash)
-		fmt.Fprint(w, "Invalid hash:", hash)
-		return
-	}
 	slog.Info("serving blob", "hash", hash)
 	st, ok := findBlob(hash)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	path := PathFromHash(st.path, hash)
+	path, err := PathFromHash(st.path, hash)
+	if err != nil {
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
+		return
+	}
 	if filecache != nil {
 		if cached, err := filecache.get(hash, path); err == nil {
 			path = cached
@@ -328,16 +240,17 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 // hash.
 func StatHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		http.Error(w, "Invalid hash", http.StatusBadRequest)
-		return
-	}
 	st, ok := findBlob(hash)
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-	info, err := os.Stat(PathFromHash(st.path, hash))
+	p, err := PathFromHash(st.path, hash)
+	if err != nil {
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
@@ -354,18 +267,17 @@ func StatHandler(w http.ResponseWriter, r *http.Request) {
 func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
 	filename := r.PathValue("filename")
-	if len(hash) != 64 {
-		slog.Warn("invalid hash requested", "hash", hash)
-		fmt.Fprint(w, "Invalid hash:", hash)
-		return
-	}
 	slog.Info("serving blob", "hash", hash, "filename", filename)
 	st, ok := findBlob(hash)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	path := PathFromHash(st.path, hash)
+	path, err := PathFromHash(st.path, hash)
+	if err != nil {
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
+		return
+	}
 	if filecache != nil {
 		if cached, err := filecache.get(hash, path); err == nil {
 			path = cached
@@ -392,10 +304,6 @@ func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
 // both shorten and extend the retention.
 func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		http.Error(w, "Invalid hash", http.StatusBadRequest)
-		return
-	}
 	st, ok := findBlob(hash)
 	if !ok {
 		http.NotFound(w, r)
@@ -423,10 +331,6 @@ func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 // index is permanent. The owner token hash is never returned.
 func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		http.Error(w, "Invalid hash", http.StatusBadRequest)
-		return
-	}
 	resp := struct {
 		ExpiresAt int64 `json:"expires_at"`
 		HasOwner  bool  `json:"has_owner"`
@@ -506,7 +410,6 @@ set CertFile/KeyFile to serve HTTPS directly.
 	}
 	authStore := auth.NewStore(users, anon)
 
-	InitKey()
 	router := http.NewServeMux()
 	routes(router, authStore)
 

@@ -100,7 +100,11 @@ func storeByName(name string) *blobStore {
 // given hash under normal operation.
 func findBlob(hash string) (*blobStore, bool) {
 	for _, s := range stores {
-		if _, err := os.Stat(PathFromHash(s.path, hash)); err == nil {
+		p, err := PathFromHash(s.path, hash)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
 			return s, true
 		}
 	}
@@ -110,7 +114,10 @@ func findBlob(hash string) (*blobStore, bool) {
 // makeDestinationPath returns the on-disk path for hash within st, creating the
 // shard directories.
 func (st *blobStore) makeDestinationPath(hash string) (string, error) {
-	dest := PathFromHash(st.path, hash)
+	dest, err := PathFromHash(st.path, hash)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return "", err
 	}
