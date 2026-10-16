@@ -44,6 +44,12 @@ var builtinArchiveTypes = []string{"image-archive", "audio-archive", "video-arch
 // the root of an imported directory tree; an archive type instead forces the
 // tie-type of archive files (zips) found during the import.
 func runImport(a *app, ctx *cli.Command, label string) error {
+	// stdout carries data: one line per imported item, hash and virtual path,
+	// the same shape `tie upload` prints, so `tie import ... | cut -f1` works
+	// (§6.1). Everything else the import says goes to stderr or the logger.
+	a.tie.OnImport = func(it client.ImportedItem) {
+		fmt.Println(it.Hash + "\t" + it.Path)
+	}
 	dirType := label
 	var forcedArchive client.TieType
 	if t := client.StringToTieType(label); client.IsArchiveType(t) {
@@ -62,7 +68,7 @@ func runImport(a *app, ctx *cli.Command, label string) error {
 			return err
 		}
 	}
-	fmt.Println("Uploading to", hosts)
+	fmt.Fprintln(os.Stderr, "Uploading to", hosts)
 	// Keep going past a failed argument/host so one bad path doesn't block the
 	// rest, but report every failure on stderr and exit non-zero if any occurred
 	// so a scripted/cron import can detect a partial result.

@@ -1,7 +1,6 @@
 package client
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -94,10 +93,10 @@ func ingest(path string) (TieType, metadata.Media, error) {
 // ingestFor is ingest with the lenient failure mode a tree import needs: the
 // blob is already on the filehost by the time it runs, so refusing the file
 // would strand it as an untagged upload. Warn and tag it unknown instead.
-func ingestFor(path string) (TieType, metadata.Media) {
+func ingestFor(tc *TieClient, path string) (TieType, metadata.Media) {
 	tieType, media, err := ingest(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s: cannot classify (%v); tagging as %s\n", path, err, TieUnknownFile)
+		tc.log().Warn("cannot classify file, tagging it unknown", "path", path, "error", err)
 		return TieUnknownFile, media
 	}
 	return tieType, media

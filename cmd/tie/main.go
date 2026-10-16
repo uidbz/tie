@@ -51,6 +51,8 @@ func main() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
 			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection)"},
+			&cli.BoolFlag{Name: "quiet", Aliases: []string{"q"}, Usage: "Report errors only; silence library warnings and progress"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "Also report what the library does per file"},
 		},
 		Commands: []*cli.Command{
 			cmdAdd(a),

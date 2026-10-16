@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -141,36 +140,13 @@ func SaveConfig(name string, config Config) error {
 	return conf.SaveToUserConfigDir("tie", name, config)
 }
 
-func (tc *TieClient) PrintState() {
-	if tc.Config.verbose {
-		fmt.Println("Using triplestore:", tc.active.TripleStoreURL)
-		fmt.Println("Current namespace/collection is " + tc.active.Namespace + "/" + tc.active.Collection)
-	}
-}
-
+// InitKey decodes the constant tie key. The string is a build-time constant, so
+// a decode failure is a programming error: it panics rather than printing to
+// stdout and carrying on with a nil key (§6.1).
 func InitKey() []byte {
 	k, err := hex.DecodeString(tieKey)
 	if err != nil {
-		fmt.Printf("Cannot decode hex key: %v", err) // add error handling
-		return nil
+		panic("client: tieKey is not valid hex: " + err.Error())
 	}
-
 	return k
-}
-func GetVideoHeight(source string) string {
-	//ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1
-	args := []string{
-		"-v", "error",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=height",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		source,
-	}
-	cmd := exec.Command("ffprobe", args...)
-	if out, err := cmd.Output(); err != nil {
-		fmt.Println(err)
-		return ""
-	} else {
-		return strings.TrimSpace(string(out)) + "p"
-	}
 }

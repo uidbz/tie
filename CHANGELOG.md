@@ -8,6 +8,20 @@ to follow semantic versioning.
 
 ### Added
 
+- **`tie import` prints data on stdout: `hash<TAB>virtual-path` per imported
+  item**, the same shape `tie upload` prints, so `tie import … | cut -f1` gives
+  the hashes. Items are reported once the batch carrying them has been
+  committed, so a reported item is a stored one. The library hands them to
+  `TieClient.OnImport`; the CLI prints them, an embedder gets the callback.
+- **Global `-q` / `-V` on `tie`.** `-q` reports errors only, `-V` adds what the
+  library does per file; the default sits between them (warnings and history
+  changes, which is what the library printed before). They set the level of the
+  `slog` logger the CLI wires to stderr.
+- **`TieClient.Logger *slog.Logger`** is where the library reports what it
+  notices but cannot return — a file it could not classify, a superseded child
+  it versioned away, a destination template that did not apply, several UIDs
+  claiming one path. The zero value is silent, so an embedder (tie-fm) is never
+  written to and can capture everything by setting one handler.
 - **`tie restore` streams the dump instead of loading it whole.** A TSV backup
   used to be parsed into one slice and sent as one `Batch` request: a 2M-triple
   dump was hundreds of MB on both ends, held one request slot for the whole
@@ -164,6 +178,14 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **Library code no longer writes to stdout or stderr.** `client` printed
+  `Importing: …`, `tagging <hash>` (twice per file on the single-file path),
+  `reconcile: versioning superseded …` and various warnings directly to the
+  terminals, which no embedder could silence and which polluted
+  `tie import | …`. Those messages now go through `TieClient.Logger` (silent by
+  default) or the `TieClient.OnImport` callback. `client.PrintState` and
+  `client.GetVideoHeight` are gone (neither had callers); `client.InitKey`
+  panics on a decode failure instead of printing and returning nil.
 - **`tie` exits 2 when the config failed to load.** The check that 31 commands
   carried themselves (`Error: Config not loaded`, exit 1) is now one `Before`
   hook on the command tree, and it reports `config not loaded` with exit 2 —

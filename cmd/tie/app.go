@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"log/slog"
+	"os"
 
 	"github.com/uidbz/tie/client"
 	"github.com/urfave/cli/v3"
@@ -41,7 +43,33 @@ func (a *app) before(ctx context.Context, cmd *cli.Command) (context.Context, er
 	if a.tie == nil {
 		return ctx, exitError{code: 2, msg: "config not loaded"}
 	}
+	// The library reports what it notices through a slog logger rather than
+	// writing to stderr itself (§6.1); this is where it reaches the terminal.
+	a.tie.Logger = cliLogger(cmd)
 	return ctx, nil
+}
+
+// cliLogger is the stderr sink for library messages. No timestamps — a human
+// scanning a terminal reads the message, not the clock. The default level shows
+// warnings and what an import did to history, which is what the library used to
+// print unconditionally; -q keeps errors, -v adds the per-file chatter.
+func cliLogger(cmd *cli.Command) *slog.Logger {
+	level := slog.LevelInfo
+	switch {
+	case cmd.Bool("quiet"):
+		level = slog.LevelError
+	case cmd.Bool("verbose"):
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: level,
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
 }
 
 // exitError carries the exit code a failure should produce, so a command can

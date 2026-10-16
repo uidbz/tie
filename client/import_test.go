@@ -176,3 +176,50 @@ func namesOf(children []childEntry) []string {
 	}
 	return out
 }
+
+// TestImportReportsEachItem: the import's stdout data comes from the OnImport
+// callback — hash and virtual path per item, reported only once the batch
+// carrying it has been committed (§6.1).
+func TestImportReportsEachItem(t *testing.T) {
+	tc := NewTieClient(TestingConfig())
+	if err := tc.DropCollection(); err != nil {
+		t.Fatal(err)
+	}
+	dir := importFixtureTree(t)
+
+	type reported struct{ hash, path string }
+	var got []reported
+	tc.OnImport = func(it ImportedItem) { got = append(got, reported{it.Hash, it.Path}) }
+
+	if err := tc.ImportDir(dir, tc.Config.FileHosts["default"], "audio-dir", nil, "/trees", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string]string{
+		"/trees/loose.flac":     "",
+		"/trees/CD1/track.flac": "",
+	}
+	for _, g := range got {
+		if _, ok := want[g.path]; !ok {
+			t.Errorf("the import reported %q, which it did not place", g.path)
+			continue
+		}
+		if g.hash == "" {
+			t.Errorf("%s was reported without a hash", g.path)
+			continue
+		}
+		want[g.path] = g.hash
+	}
+	for path, hash := range want {
+		if hash == "" {
+			t.Errorf("%s was never reported", path)
+			continue
+		}
+		// A reported item is a stored item.
+		row := rowOf(t, tc, hash)
+		name := filepath.Base(path)
+		if !RowHas(row, str(TieFilename), name) {
+			t.Errorf("%s reported hash %s, which is not the row for %s: %v", path, hash, name, valuesOf(row, str(TieFilename)))
+		}
+	}
+}

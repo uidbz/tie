@@ -153,7 +153,7 @@ func applyArchiveOverride(sniffed, forced TieType) TieType {
 // it places one item under an existing node, so it neither reconciles the
 // directory — the item is a subset view — nor stamps a dir-type.
 func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, directory DirUID, forcedArchive TieType) error {
-	fmt.Println("Importing:", file)
+	tie.log().Debug("importing file", "path", file)
 	// Classification is strict here, unlike in a tree import: nothing has been
 	// uploaded yet, so an unclassifiable file is refused rather than tagged
 	// unknown and left stranded on the filehost. One open answers the type and
@@ -186,7 +186,6 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 		}},
 		Tags:    tags,
 		AddedAt: true,
-		Verbose: true,
 	})
 }
 
@@ -352,7 +351,7 @@ func (tie *TieClient) importRootPath(dir, dest, dirType string, meta []metadata.
 		if err == nil {
 			return FileURIScheme + "/" + strings.TrimPrefix(filepath.ToSlash(rendered), "/"), nil
 		}
-		fmt.Println("import destination template not applied, using source path:", err)
+		tie.log().Warn("import destination template not applied, using source path", "error", err)
 	}
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
@@ -449,7 +448,7 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags 
 		if x.MediaType == "inode/directory" {
 			continue
 		}
-		tieType, media := ingestFor(x.Filename)
+		tieType, media := ingestFor(tie, x.Filename)
 		ing[x.Filename] = ingested{applyArchiveOverride(tieType, forcedArchive), media}
 		allMeta = append(allMeta, media)
 	}
@@ -467,7 +466,6 @@ func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags 
 		// A whole-tree import owns every child of every directory it walked, so
 		// anything the tree no longer contains is superseded.
 		Reconcile: true,
-		Verbose:   true,
 	}
 	for _, x := range status.UploadedItems {
 		rel, err := filepath.Rel(dir, x.Filename)
@@ -646,7 +644,7 @@ func reconcileDir(tie *TieClient, uid DirUID, want map[string]bool, prevVersions
 	}
 
 	for _, c := range superseded {
-		fmt.Fprintf(os.Stderr, "reconcile: versioning superseded %s (%s) from %s\n", c.Filename, c.Hash, uid)
+		tie.log().Info("versioning superseded child", "filename", c.Filename, "hash", c.Hash, "dir", uid)
 		if err := supersedeToPrev(tie, uid, c.Filename, c.Hash); err != nil {
 			return err
 		}
@@ -655,7 +653,6 @@ func reconcileDir(tie *TieClient, uid DirUID, want map[string]bool, prevVersions
 }
 
 func Tag(tie *TieClient, info TagInfo) error {
-	fmt.Println("tagging", info.Hash)
 	batch := tie.NewBatch()
 	appendTagOps(batch, info)
 	if _, err := tie.Batch(batch); err != nil {
@@ -840,9 +837,8 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 		// directory nodes).  Warn on stderr and return the first entry so that
 		// callers can continue rather than hard-failing.  Use the dedup script
 		// (scripts/dedup-tie-paths.py) to clean the DB offline.
-		fmt.Fprintf(os.Stderr,
-			"warning: %d UIDs found for path %q; expected 1 — using %s (run dedup script to fix)\n",
-			len(rows), path, rows[0].Key)
+		tie.log().Warn("multiple UIDs found for path, expected 1 — run the dedup script to fix",
+			"count", len(rows), "path", path, "using", rows[0].Key)
 	}
 	var uid DirUID
 	for _, row := range rows {

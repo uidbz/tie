@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -121,7 +122,33 @@ type TieClient struct {
 	// active is the resolved collection this client operates on (triplestore,
 	// namespace, collection id, credentials, filehosts), chosen at construction.
 	active ResolvedCollection
+
+	// Logger receives what the library notices but cannot return: a file it
+	// could not classify, a superseded child it versioned away, a destination
+	// template that did not apply, several UIDs claiming one path. Library code
+	// must not write to stdout or stderr (§6.1): an embedder like tie-fm has
+	// nowhere to put that noise, and `tie import | cut -f1` would swallow it.
+	// The zero value is silent; the CLI wires a stderr handler whose level
+	// comes from -q/-v.
+	Logger *slog.Logger
+
+	// OnImport, when set, is called once per item an import places, after the
+	// batch carrying it has been committed. It is how `tie import` prints data
+	// on stdout — hash and virtual path per item — instead of chatter (§6.1).
+	OnImport func(ImportedItem)
 }
+
+// log is the client's logger, silent unless one was set.
+func (tc *TieClient) log() *slog.Logger {
+	if tc.Logger != nil {
+		return tc.Logger
+	}
+	return silentLogger
+}
+
+// silentLogger is the default: a library that is not told where to talk keeps
+// quiet.
+var silentLogger = slog.New(slog.DiscardHandler)
 
 // firstNonEmpty returns the first non-empty string, or "".
 func firstNonEmpty(vals ...string) string {
@@ -224,7 +251,6 @@ type Config struct {
 	// (space-ANDed terms, "-" excludes, optional "type:" scope).
 	Queries map[string]string
 	key     []byte
-	verbose bool
 }
 
 // Path returns the filesystem path the config was loaded from (empty for a

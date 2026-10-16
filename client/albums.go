@@ -960,7 +960,7 @@ func (tie *TieClient) importAlbumFiles(g AlbumGroup, opts AlbumImportOptions) er
 			return fmt.Errorf("upload %s: %s", f, status.ErrorMsg)
 		}
 		x := status.LastItem
-		tieType, media := ingestFor(f)
+		tieType, media := ingestFor(tie, f)
 		p.Items = append(p.Items, planItem{
 			Src:       f,
 			Rel:       rel,

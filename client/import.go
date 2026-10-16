@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"path"
+	"strings"
 
 	"github.com/uidbz/tie/metadata"
 )
@@ -39,6 +40,18 @@ type planDir struct {
 	TiedirHash string // immutable tiedir snapshot to link, when the import has one
 }
 
+// ImportedItem is one item an import placed, reported to TieClient.OnImport
+// once the batch carrying it has been committed. Path is the item's virtual
+// path below the import root ("/music/album/01.flac"); a plan rooted at an
+// existing node instead of a virtual path (ImportFile) names the item by the
+// local file it came from.
+type ImportedItem struct {
+	Hash    string
+	Path    string
+	TieType TieType
+	Size    int
+}
+
 // importPlan is the shared shape of an import.
 type importPlan struct {
 	Root    string // virtual root path ("tie:/albums/x"); ignored when RootUID is set
@@ -56,7 +69,6 @@ type importPlan struct {
 	Index        bool // run IndexCollection on the root regardless of its type
 	Reconcile    bool // version away children this import did not place
 	AddedAt      bool // stamp added-at on each item
-	Verbose      bool // print each tagged hash
 }
 
 // executeImport runs a plan: place every file under its directory (creating the
@@ -69,6 +81,11 @@ func (tie *TieClient) executeImport(p importPlan) error {
 	// request size), and api.Batch applies every op under a single Sync.
 	const flushThreshold = 1000
 	batch := tie.NewBatch()
+	// reported holds the items whose ops are in the open batch. They are
+	// announced only when that batch commits, so a reported item is a stored
+	// item — a pipeline reading `tie import`'s stdout never sees one that a
+	// later failure rolled back.
+	var reported []ImportedItem
 	flush := func() error {
 		if len(batch.Ops) == 0 {
 			return nil
@@ -77,6 +94,12 @@ func (tie *TieClient) executeImport(p importPlan) error {
 			return err
 		}
 		batch = tie.NewBatch()
+		if tie.OnImport != nil {
+			for _, it := range reported {
+				tie.OnImport(it)
+			}
+		}
+		reported = reported[:0]
 		return nil
 	}
 
@@ -141,10 +164,16 @@ func (tie *TieClient) executeImport(p importPlan) error {
 			IsDir:     it.IsDir,
 			Metadata:  it.Metadata,
 		}
-		if p.Verbose {
-			fmt.Println("tagging", info.Hash)
-		}
 		appendTagOps(batch, info)
+		if tie.OnImport != nil {
+			vpath := it.Src
+			if p.Root != "" {
+				vpath = strings.TrimPrefix(p.Root, FileURIScheme) + "/" + it.Rel
+			}
+			reported = append(reported, ImportedItem{
+				Hash: it.Hash, Path: vpath, TieType: it.TieType, Size: it.Size,
+			})
+		}
 		if albums[rel] == nil {
 			albums[rel] = &albumMeta{}
 		}
