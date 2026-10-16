@@ -213,14 +213,14 @@ func (s TripleSet) Has(key string) bool {
 }
 
 func (s TripleSet) ForEachKey(do func(key string)) {
-	for key, _ := range s {
+	for key := range s {
 		do(key)
 	}
 }
 
 func (s TripleSet) ForEachValue1(do func(key, value1 string)) {
 	for key, keys := range s {
-		for value1, _ := range keys {
+		for value1 := range keys {
 			do(key, value1)
 		}
 	}
@@ -229,7 +229,7 @@ func (s TripleSet) ForEachValue1(do func(key, value1 string)) {
 func (s TripleSet) ForEachValue2(do func(key, value1, value2 string)) {
 	for key, keys := range s {
 		for value1, value1s := range keys {
-			for value2, _ := range value1s {
+			for value2 := range value1s {
 				do(key, value1, value2)
 			}
 		}
@@ -242,14 +242,14 @@ func (s Value1) Has(value1 string) bool {
 }
 
 func (s Value1) ForEach(do func(value1 string)) {
-	for value1, _ := range s {
+	for value1 := range s {
 		do(value1)
 	}
 }
 
 func (s Value1) ForEachValue2(do func(value1, value2 string)) {
 	for value1, value1s := range s {
-		for value2, _ := range value1s {
+		for value2 := range value1s {
 			do(value1, value2)
 		}
 	}
@@ -260,7 +260,7 @@ func (s Value2) One() (string, bool) {
 	if len(s) != 1 {
 		return "", false
 	}
-	for value2, _ := range s {
+	for value2 := range s {
 		return value2, true
 	}
 	return "", false
@@ -284,7 +284,7 @@ func (s Value2) ToSlice() []string {
 }
 
 func (s Value2) ForEach(do func(value2 string)) {
-	for value2, _ := range s {
+	for value2 := range s {
 		do(value2)
 	}
 }
@@ -316,8 +316,7 @@ func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
 	binary.LittleEndian.PutUint64(id, entryID)
 	binary.LittleEndian.PutUint64(parentId, uv.ParentId)
 
-	out := make([]byte, ENTRY_SIZE)
-
+	var out []byte
 	out = append(datatype[:], levelBytes[:]...)
 	out = append(out, id[:]...)
 	out = append(out, parentId[:]...)
@@ -364,8 +363,7 @@ func (a *Triple) toBytes() []byte {
 	binary.LittleEndian.PutUint64(relation_level, uint64(a.Value1Level))
 	binary.LittleEndian.PutUint64(relation, a.Value1)
 
-	out := make([]byte, ENTRY_SIZE)
-
+	var out []byte
 	out = append(datatype[:], entry_level[:]...)
 	out = append(out, entry_id[:]...)
 	out = append(out, association_level[:]...)

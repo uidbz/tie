@@ -361,13 +361,6 @@ func (s *Share) resolveTags(segs []string, canon string) (*node, error) {
 	return nil, err // report the meta-leaf miss: it names what the client asked about
 }
 
-// metaTarget identifies which meta binding a /tags leaf carries.
-type metaTarget struct {
-	hash string          // content hash for a file's tag file
-	uid  client.DirUID   // DirUID for .tags/.type of a directory
-	typ  bool            // true: .type (dir types); false: tags
-}
-
 // resolveMeta resolves one /tags leaf: ".tags"/".type" of the parent
 // directory, or the tag file of a file child of the parent.
 func (s *Share) resolveMeta(canon string, segs []string) (*node, error) {

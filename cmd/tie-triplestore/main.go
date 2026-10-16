@@ -10,15 +10,9 @@ import (
 	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
-	"github.com/uidbz/tie/tiedb"
 	"github.com/uidbz/tie/tielog"
 	"github.com/uidbz/tie/version"
 	"github.com/uidbz/tie/webservice"
-)
-
-var (
-	db     *tiedb.TieTree
-	dbPath string
 )
 
 // User is a single account entry in the triplestore config. Passwords are

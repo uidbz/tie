@@ -236,10 +236,7 @@ func IsCollectionLabel(t string) bool {
 	case "", str(TieDirectory), str(TieFile), TypeDisc, TypePlayEvent:
 		return false
 	}
-	if strings.HasSuffix(t, "-file") {
-		return false
-	}
-	return true
+	return !strings.HasSuffix(t, "-file")
 }
 
 // collectionLabels returns a row's collection labels (see IsCollectionLabel).

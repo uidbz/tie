@@ -164,16 +164,4 @@ func (c *blobCache) evictLocked(keep string) {
 	}
 }
 
-// close removes all cached files and clears the in-memory state. It does not
-// delete the cache directory itself (it is user-configured and may be reused
-// across restarts).
-func (c *blobCache) close() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for hash, e := range c.entries {
-		os.Remove(e.path)
-		delete(c.entries, hash)
-	}
-	c.order = nil
-	c.curSize = 0
-}
+

@@ -912,24 +912,9 @@ func appendTagOps(batch *api.Batch, info TagInfo) {
 	}
 }
 
-// tagDir writes a directory's queryable metadata onto its DirUID: display name,
-// size, tag date, and its tags (each tag also registered in the (tags,"all",<tag>)
-// table, mirroring Tag/SetTags). A leading "-" on a tag deletes it. The structural
-// (uid,"tie-type","directory") marker and the (uid,"path",...) triple are already
-// written by MkTieDir, so they are not repeated here. Unlike Tag, this does not
-// touch the tiedir content hash — a directory's identity for tagging is its DirUID.
-func tagDir(tie *TieClient, uid DirUID, dirname string, size int, tags []string, collection string) error {
-	batch := tie.NewBatchIn(collection)
-	appendTagDirOps(batch, uid, dirname, size, tags)
-	if _, err := tie.Batch(batch); err != nil {
-		return err
-	}
-	return nil
-}
-
 // appendTagDirOps appends a directory's queryable metadata ops onto batch
-// without sending. See tagDir for the semantics; ImportDir reuses one batch
-// across many directories to cut round-trips.
+// without sending. The semantics are described on appendTagDirOps' callers;
+// ImportDir reuses one batch across many directories to cut round-trips.
 func appendTagDirOps(batch *api.Batch, uid DirUID, dirname string, size int, tags []string) {
 	batch.Add(str(uid), str(TieFilename), dirname)
 	batch.Add(str(uid), str(TieName), dirname)
