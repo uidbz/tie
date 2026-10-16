@@ -19,13 +19,13 @@ func (ic *Collection) insertHash(raw [32]byte) uint64 {
 	ic.hashEntries.Put(id, raw)
 	ic.hashValues.Put(raw, id)
 	if ic.writeToDisk {
-		ic.dBWriteQueue <- FileMod{
+		ic.queueWrite(FileMod{
 			EntryType: TYPE_HASH,
 			Mode:      FILE_ADD,
 			EntryID:   id,
 			HashValue: raw,
 			Position:  ic.allocSlot(),
-		}
+		})
 	}
 	return id
 }
@@ -199,7 +199,7 @@ func (ic *Collection) insertValue(level int, parentId uint64, value [SIZE_VALUE]
 			UniqueValue: uv,
 			Position:    ic.allocSlot(),
 		}
-		ic.dBWriteQueue <- m
+		ic.queueWrite(m)
 	}
 	ic.insertEntry(level, entryID, uv)
 

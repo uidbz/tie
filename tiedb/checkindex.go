@@ -312,6 +312,6 @@ func (ic *Collection) rewriteAssociation(f indexFix) {
 		}
 	}
 	if ic.writeToDisk {
-		ic.dBWriteQueue <- FileMod{EntryType: TYPE_ASSOCIATION, Level: f.level, Mode: FILE_ADD, Position: pos, Triple: &t}
+		ic.queueWrite(FileMod{EntryType: TYPE_ASSOCIATION, Level: f.level, Mode: FILE_ADD, Position: pos, Triple: &t})
 	}
 }

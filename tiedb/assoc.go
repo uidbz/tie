@@ -70,13 +70,13 @@ func (ic *Collection) addLocked(key string, value1 string, value2 string) {
 		// The old order (index, then enqueue) let a RECLAIMED slot be read as
 		// its old tombstone: ReadAt succeeded with stale bytes, decoding
 		// failed, and the triple silently vanished from that query.
-		ic.dBWriteQueue <- FileMod{
+		ic.queueWrite(FileMod{
 			EntryType: TYPE_ASSOCIATION,
 			Level:     keyLevel,
 			Mode:      FILE_ADD,
 			Position:  pos,
 			Triple:    &ass,
-		}
+		})
 	} else {
 		pos = ic.arenaStore(&ass)
 	}
@@ -269,7 +269,7 @@ func (ic *Collection) deleteAssociation(tree *AssociationSet, key UniqueAssociat
 			Mode:     FILE_DELETE,
 			Position: triplePos,
 		}
-		ic.dBWriteQueue <- m
+		ic.queueWrite(m)
 	} else {
 		ic.arenaFreeSlot(triplePos)
 	}
@@ -346,11 +346,40 @@ func (ic *Collection) resolveEntry(ua UniqueAssociation, pos int64) (Triple, boo
 // readTripleAt reads and decodes the association record at pos from disk. The
 // read is serviced by the writer goroutine, which owns the file handle; each
 // call has its own reply channel, so concurrent queries do not serialize.
+// queueWrite hands a modification to the collection's writer goroutine. It
+// never blocks forever: if the writer has stopped (DropCollection, shutdown),
+// the write is dropped and logged instead of parking a goroutine — and its
+// MaxConcurrentRequests slot — on a queue nobody drains.
+func (ic *Collection) queueWrite(m FileMod) bool {
+	select {
+	case ic.dBWriteQueue <- m:
+		return true
+	case <-ic.writerDone:
+		slog.Error("dropping write: collection writer is gone", "path", ic.dBFullPath, "mode", m.Mode)
+		return false
+	}
+}
+
+// readTripleAt asks the writer goroutine to read one record. Like queueWrite
+// it is hang-proof: a collection whose writer has gone returns not-found
+// instead of waiting for a reply that can never come.
 func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
+	if ic.closed.Load() {
+		return Triple{}, false
+	}
 	reply := make(chan Triple, 1)
-	ic.dBReadQueue <- ReadRequest{Position: pos, ReplyChan: reply}
-	t, ok := <-reply
-	return t, ok
+	select {
+	case ic.dBReadQueue <- ReadRequest{Position: pos, ReplyChan: reply}:
+	case <-ic.writerDone:
+		return Triple{}, false
+	}
+	select {
+	// ok is false when the writer closed the channel to signal a failed read.
+	case t, ok := <-reply:
+		return t, ok
+	case <-ic.writerDone:
+		return Triple{}, false
+	}
 }
 
 // SetValues makes (key, value1) hold exactly the given values: it removes every

@@ -162,10 +162,14 @@ func (db *TieTree) DropCollection(key CollectionKey) error {
 	defer db.colMutex.Unlock()
 
 	if col, found := db.collections.Get(key); found {
+		// Remove the map entry FIRST, so a request arriving after this point
+		// resolves a fresh collection instead of the dying one. The live writer
+		// is then closed (draining its queue and releasing its fd) before the
+		// .tie file is removed, so a draining write can never resurrect the file.
+		db.collections.Delete(key)
 		if db.writeToDisk {
 			col.closeDB()
 		}
-		db.collections.Delete(key)
 	}
 
 	if !db.writeToDisk {

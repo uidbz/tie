@@ -4,11 +4,11 @@ import "fmt"
 
 // Op kinds accepted by Apply.
 const (
-	OpAdd         = "add"          // add (Key, Relation, Values[0])
-	OpDelete      = "delete"       // delete (Key, Relation, Values[0]); absent is a no-op
-	OpSet         = "set"          // make (Key, Relation) hold exactly Values
-	OpUpdate      = "update"       // change Values[0] into NewValue
-	OpUpdateAdd   = "update-add"   // like update, but adds NewValue when the source is absent
+	OpAdd         = "add"           // add (Key, Relation, Values[0])
+	OpDelete      = "delete"        // delete (Key, Relation, Values[0]); absent is a no-op
+	OpSet         = "set"           // make (Key, Relation) hold exactly Values
+	OpUpdate      = "update"        // change Values[0] into NewValue
+	OpUpdateAdd   = "update-add"    // like update, but adds NewValue when the source is absent
 	OpAddIfAbsent = "add-if-absent" // add Values only if (Key, Relation) is empty
 )
 

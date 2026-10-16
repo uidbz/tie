@@ -70,7 +70,9 @@ func (ic *Collection) Sync() {
 		return
 	}
 	ch := make(chan struct{})
-	ic.dBWriteQueue <- FileMod{Mode: FILE_BARRIER, Done: ch}
+	if !ic.queueWrite(FileMod{Mode: FILE_BARRIER, Done: ch}) {
+		return // writer gone: it drained and synced on the way out
+	}
 	select {
 	case <-ch:
 	case <-ic.writerDone:
