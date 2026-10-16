@@ -60,29 +60,34 @@ type TagQuery struct {
 	Sort            SortOptions // pagination (Offset/Limit/SortBy)
 }
 
-// QueryTags resolves the include/exclude set algebra internally and returns a
-// paginated result: the unordered TripleSet, the ordered+paged slice, and the
-// pre-pagination total, plus whether the seed existed. The intermediate
-// association trees never leave tiedb.
-func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTriple, total int, found bool) {
+// resolveQuery applies the query's set algebra — the seed term, the AND of the
+// remaining include terms, the exclusions, the scope, the missing-relation
+// filter — and returns the association set the query matches. QueryTags and
+// CoTags are the same algebra over different answers (§8 S6), so it lives here
+// once: the two used to carry copies, and CoTags had already drifted (it never
+// honoured MissingRelation).
+//
+// found=false means the seed term has no associations at all, so the query
+// cannot match anything. empty=true means the seed existed but the algebra
+// matched nothing (an unmet AND term, or a scope no subject carries).
+func (ic *Collection) resolveQuery(q TagQuery) (set *AssociationSet, found, empty bool) {
 	if len(q.Include) == 0 {
-		return make(TripleSet), nil, 0, false
+		return nil, false, false
 	}
 
-	var set *AssociationSet
 	if q.Reverse {
 		set, found = ic.GetReverseAssociations(q.Include[0])
 	} else {
 		set, found = ic.GetAssociations(q.Include[0])
 	}
 	if !found {
-		return make(TripleSet), nil, 0, false
+		return nil, false, false
 	}
 
 	for _, tag := range q.Include[1:] {
 		other, ok := ic.GetReverseAssociations(tag)
 		if !ok {
-			return make(TripleSet), nil, 0, true // an unmet AND term yields no matches
+			return nil, true, true // an unmet AND term yields no matches
 		}
 		set = set.intersect(other)
 	}
@@ -96,13 +101,29 @@ func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTr
 	if q.Scope != "" {
 		scope, ok := ic.GetReverseAssociations(q.Scope)
 		if !ok {
-			return make(TripleSet), nil, 0, true // nothing carries the scope value
+			return nil, true, true // nothing carries the scope value
 		}
 		set = set.intersectByAssociate(scope)
 	}
 
 	if q.MissingRelation != "" {
 		set = ic.filterMissingRelation(set, q.MissingRelation)
+	}
+
+	return set, true, false
+}
+
+// QueryTags resolves the include/exclude set algebra internally and returns a
+// paginated result: the unordered TripleSet, the ordered+paged slice, and the
+// pre-pagination total, plus whether the seed existed. The intermediate
+// association trees never leave tiedb.
+func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTriple, total int, found bool) {
+	set, found, empty := ic.resolveQuery(q)
+	if !found {
+		return make(TripleSet), nil, 0, false
+	}
+	if empty {
+		return make(TripleSet), nil, 0, true
 	}
 
 	result, sorted, total = ic.GetPage(set, q.Filter, q.Sort)

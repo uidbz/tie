@@ -13,37 +13,12 @@ func (ic *Collection) CoTags(q TagQuery, tagRelation string) ([]string, bool) {
 		return nil, false
 	}
 
-	var set *AssociationSet
-	var found bool
-	if q.Reverse {
-		set, found = ic.GetReverseAssociations(q.Include[0])
-	} else {
-		set, found = ic.GetAssociations(q.Include[0])
-	}
+	set, found, empty := ic.resolveQuery(q)
 	if !found {
 		return nil, false
 	}
-
-	for _, tag := range q.Include[1:] {
-		other, ok := ic.GetReverseAssociations(tag)
-		if !ok {
-			return nil, true // unmet AND term: empty result
-		}
-		set = set.intersect(other)
-	}
-
-	for _, tag := range q.Exclude {
-		if other, ok := ic.GetReverseAssociations(tag); ok {
-			set = set.exclude(other)
-		}
-	}
-
-	if q.Scope != "" {
-		scope, ok := ic.GetReverseAssociations(q.Scope)
-		if !ok {
-			return nil, true // nothing carries the scope value
-		}
-		set = set.intersectByAssociate(scope)
+	if empty {
+		return nil, true
 	}
 
 	// Resolve the result set to unique key strings (the matching content hashes).
