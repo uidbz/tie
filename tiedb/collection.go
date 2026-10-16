@@ -159,12 +159,13 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 	var pos int64
 	if ic.writeToDisk {
 		pos = ic.allocSlot()
-	} else {
-		pos = ic.arenaStore(&ass)
-	}
-	ic.insertAssociation(keyLevel, &ass, pos)
-
-	if ic.writeToDisk {
+		// Enqueue the write BEFORE making the triple visible in the index.
+		// Both steps run under changeMutex, and a channel send happens-before
+		// the matching receive, so any reader that can see the index entry
+		// finds the FILE_ADD already queued and drainWriteQueue applies it.
+		// The old order (index, then enqueue) let a RECLAIMED slot be read as
+		// its old tombstone: ReadAt succeeded with stale bytes, decoding
+		// failed, and the triple silently vanished from that query.
 		ic.finishedAdding.Add(1)
 		ic.dBWriteQueue <- FileMod{
 			EntryType: TYPE_ASSOCIATION,
@@ -173,7 +174,10 @@ func (ic *Collection) Add(key string, value1 string, value2 string) {
 			Position:  pos,
 			Triple:    &ass,
 		}
+	} else {
+		pos = ic.arenaStore(&ass)
 	}
+	ic.insertAssociation(keyLevel, &ass, pos)
 }
 
 func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
