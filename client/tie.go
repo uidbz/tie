@@ -17,10 +17,13 @@ import (
 // a real transport or server failure.
 var ErrNotFound = errors.New("key has no associated values")
 
-// Default values
+// Default values.
+//
+// Credentials are deliberately empty: the auto-created config used to carry
+// defaultuser/defaultpassword, which wrote a password to disk that no server is
+// configured to accept (§5.1 L17). A server that requires auth answers 401
+// until the operator sets Username/Password, which is the honest failure.
 var defaultConfig = Config{
-	Username:         "defaultuser",
-	Password:         "defaultpassword",
 	TripleStoreURL:   "http://localhost:1161",
 	Namespace:        "Collections",
 	Collection:       "Main",

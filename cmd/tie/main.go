@@ -25,6 +25,7 @@ func main() {
 	} else {
 		if created {
 			fmt.Fprintf(os.Stderr, "No config found; created a default at %s\n", config.Path())
+			fmt.Fprintln(os.Stderr, "Set Username and Password there if the triplestore requires authentication.")
 		}
 		tie = client.NewTieClientFor(config, collection)
 	}
