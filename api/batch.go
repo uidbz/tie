@@ -34,8 +34,12 @@ type BatchOp struct {
 
 // Batch is an ordered list of write ops against one collection. Ops execute in
 // slice order (the caller controls sequencing — e.g. a delete before an add to
-// replace a value); every op is applied and checked, and the whole batch shares
-// one durability Sync at the end.
+// replace a value); the whole batch shares one durability Sync at the end.
+//
+// A batch is NOT atomic: execution stops at the first failing op, and every
+// op before it remains applied. Callers that need all-or-nothing semantics
+// must compensate or re-verify (see the code review §4.12; atomic batches are
+// tracked separately).
 type Batch struct {
 	Collection CollectionInfo `json:"collection"`
 	Ops        []BatchOp      `json:"ops"`
@@ -75,7 +79,15 @@ func (batch *Batch) Update(update Update) {
 
 func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := BatchReply{}
-	col := env.Collection(request.Batch.Collection.Namespace, request.Batch.Collection.CollectionId)
+	if request.Batch == nil {
+		reply.Success = false
+		reply.Message = "batch: no batch in request"
+		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, errors.New(reply.Message)
+	}
+	col, err := env.Collection(request.Batch.Collection.Namespace, request.Batch.Collection.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
 
 	for i, op := range request.Batch.Ops {
 		var msg string

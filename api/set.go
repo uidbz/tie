@@ -28,7 +28,10 @@ type SetReply struct {
 func (request *SetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := SetReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
 	col.SetValues(request.Key, request.Relation, request.Values)
 
 	reply.Success = true

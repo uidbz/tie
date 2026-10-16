@@ -3,6 +3,7 @@ package webservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"syscall"
 
 	"github.com/uidbz/tie/auth"
@@ -161,8 +163,34 @@ func accessFor(reqName string) auth.Access {
 	return auth.AccessWrite
 }
 
+// ErrCollectionNotFound is returned by the read-path collection resolution
+// when the collection does not exist. Reads must not create collections:
+// any read-role caller (anonymous by default) could otherwise mint an
+// unbounded number of them — a file, directory, writer goroutine and
+// channel buffers per name — just by querying random names.
+var ErrCollectionNotFound = errors.New("collection not found")
+
+// collectionNamePattern bounds namespace and collection ids to name-safe
+// characters. Both arrive straight from the request and are used to build
+// filesystem paths (DbPath join + "<collection>.tie"); without this,
+// Namespace: "../../home/x" creates or appends .tie files anywhere the
+// service user can write, and Drop deletes them.
+var collectionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func validCollectionName(s string) bool { return collectionNamePattern.MatchString(s) }
+
 func (ws *Webservice) DbPath(namespace string) string {
 	return filepath.Join(ws.Config.DbPath, namespace)
+}
+
+// collectionKey validates the request-supplied namespace and collection id
+// and builds the tiedb key. This is the single validation point for every
+// request-supplied collection name.
+func (ws *Webservice) collectionKey(namespace, collection string) (tiedb.CollectionKey, error) {
+	if !validCollectionName(namespace) || !validCollectionName(collection) {
+		return tiedb.CollectionKey{}, fmt.Errorf("invalid namespace/collection name %q/%q", namespace, collection)
+	}
+	return tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}, nil
 }
 
 func (ws *Webservice) GetAccount(account string) *tiedb.Collection {
@@ -171,14 +199,29 @@ func (ws *Webservice) GetAccount(account string) *tiedb.Collection {
 	return ws.db.GetCollection(key)
 }
 
-func (ws *Webservice) GetCollection(namespace, collection string) *tiedb.Collection {
-	key := tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}
-
-	return ws.db.GetCollection(key)
+// GetCollection resolves a request's collection. Write requests may create
+// it; read requests only ever look it up, and get ErrCollectionNotFound for
+// an absent one (handlers answer that like an empty collection).
+func (ws *Webservice) GetCollection(namespace, collection string, writable bool) (*tiedb.Collection, error) {
+	key, err := ws.collectionKey(namespace, collection)
+	if err != nil {
+		return nil, err
+	}
+	if writable {
+		return ws.db.GetCollection(key), nil
+	}
+	col, ok := ws.db.LookupCollection(key)
+	if !ok {
+		return nil, ErrCollectionNotFound
+	}
+	return col, nil
 }
 
 func (ws *Webservice) DropCollection(namespace, collection string) error {
-	key := tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}
+	key, err := ws.collectionKey(namespace, collection)
+	if err != nil {
+		return err
+	}
 
 	return ws.db.DropCollection(key)
 }
@@ -239,7 +282,11 @@ func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterf
 		return
 	}
 
-	env := &Environment{username, ws.GetAccount, ws.GetCollection, ws}
+	// Write requests may create the collection; reads only look it up.
+	writable := accessFor(request.GetId()) == auth.AccessWrite
+	env := &Environment{username, ws.GetAccount, func(ns, col string) (*tiedb.Collection, error) {
+		return ws.GetCollection(ns, col, writable)
+	}, ws}
 
 	// Streaming requests write their reply directly to w (NDJSON) so the whole
 	// reply is never held in memory. The caller's semaphore slot (see

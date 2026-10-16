@@ -15,6 +15,11 @@ type TieTree struct {
 	writeToDisk bool
 	colMutex    sync.Mutex
 
+	// pending holds in-flight collection loads (single-flight). colMutex
+	// guards it; the load itself runs outside the mutex so a slow load of
+	// one collection never blocks requests to the others.
+	pending map[CollectionKey]*pendingLoad
+
 	// defaultReverseRelations is applied to every Collection this DB creates
 	// that has no entry in reverseOverrides. nil means "index all relations in
 	// reverse"; see Collection.reverseRelations.
@@ -62,19 +67,69 @@ func NewDB(writeToDisk bool) *TieTree {
 	return &TieTree{
 		collections: newLockedTree[CollectionKey, *Collection](collectionKeyHash),
 		writeToDisk: writeToDisk,
+		pending:     map[CollectionKey]*pendingLoad{},
 	}
 }
 
+// pendingLoad is the single-flight record for one collection load: concurrent
+// getters for the same key wait on ready instead of each starting their own
+// load (which would double-open the file and race two indexes).
+type pendingLoad struct {
+	ready chan struct{}
+	col   *Collection
+}
+
+// GetCollection returns the collection for key, loading (and in disk mode,
+// creating) it on first use. The load runs outside colMutex; only the map
+// bookkeeping takes it, so loading a large collection no longer stalls
+// requests to every other collection.
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {
-	db.colMutex.Lock()
-	defer db.colMutex.Unlock()
-
-	col, found := db.collections.Get(key)
-	if !found {
-		col = db.initialize(key.Database, key.Collection, false)
-		db.collections.Put(key, col)
+	if col, found := db.collections.Get(key); found {
+		return col
 	}
+	return db.loadCollection(key)
+}
 
+// LookupCollection returns the collection for key only if it exists — either
+// already loaded, or present on disk. It never creates one: a read-role caller
+// probing arbitrary collection names must not mint a fresh collection (file,
+// directory, writer goroutine and channel buffers) per name.
+func (db *TieTree) LookupCollection(key CollectionKey) (*Collection, bool) {
+	if col, found := db.collections.Get(key); found {
+		return col, true
+	}
+	if !db.writeToDisk {
+		return nil, false
+	}
+	if _, err := os.Stat(key.Database + "/" + key.Collection + ".tie"); err != nil {
+		return nil, false
+	}
+	return db.loadCollection(key), true
+}
+
+func (db *TieTree) loadCollection(key CollectionKey) *Collection {
+	db.colMutex.Lock()
+	if col, found := db.collections.Get(key); found {
+		db.colMutex.Unlock()
+		return col
+	}
+	if p, ok := db.pending[key]; ok {
+		db.colMutex.Unlock()
+		<-p.ready
+		return p.col
+	}
+	p := &pendingLoad{ready: make(chan struct{})}
+	db.pending[key] = p
+	db.colMutex.Unlock()
+
+	col := db.initialize(key.Database, key.Collection, false) // heavy load, no mutex held
+	p.col = col
+
+	db.colMutex.Lock()
+	db.collections.Put(key, col)
+	delete(db.pending, key)
+	db.colMutex.Unlock()
+	close(p.ready)
 	return col
 }
 

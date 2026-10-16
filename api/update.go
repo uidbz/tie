@@ -40,7 +40,10 @@ type UpdateReply struct {
 func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := UpdateReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
 
 	if request.AddOnFailure {
 		reply.Message, reply.Success = col.UpdateAdd(request.Key, request.Value1, request.Value2, request.NewValue2)
@@ -49,7 +52,7 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	}
 
 	reply.OrigKey = request.Key
-	reply.OrigValue1 = request.Value2
+	reply.OrigValue1 = request.Value1
 	reply.OrigValue2 = request.Value2
 	reply.OrigNewValue2 = request.NewValue2
 

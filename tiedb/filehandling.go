@@ -372,8 +372,12 @@ func (ic *Collection) readSlot(db *os.File, pos int64) (Triple, bool) {
 }
 
 func (ic *Collection) dBWriter() {
-	ic.dBWriteQueue = make(chan FileMod, 100000)
-	ic.dBReadQueue = make(chan ReadRequest, 100000)
+	// Queues absorb write bursts; when full, Add blocks — back-pressure is
+	// the point. 100 000 slots per collection (~a few MB of channel buffer)
+	// let a caller loop mint unbounded pending work; 4096 is plenty for
+	// burst smoothing and bounds memory per collection.
+	ic.dBWriteQueue = make(chan FileMod, 4096)
+	ic.dBReadQueue = make(chan ReadRequest, 4096)
 	ic.dBCloseWriter = make(chan bool, 1)
 
 	// db_size is the append cursor consumed by allocSlot. Set it once here,

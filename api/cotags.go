@@ -40,7 +40,15 @@ func (request *CoTagsRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		reply.OrigKey = request.Terms[0]
 	}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
+	if !found {
+		reply.Success = false
+		reply.Message = "Key has no associated values"
+		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
+	}
 
 	q := tiedb.TagQuery{
 		Include: request.Terms,

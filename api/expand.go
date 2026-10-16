@@ -29,8 +29,13 @@ type ExpandReply struct {
 func (request *ExpandRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := ExpandReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
-	reply.Rows = col.ExpandKeys(request.Keys, request.Filter)
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
+	if found {
+		reply.Rows = col.ExpandKeys(request.Keys, request.Filter)
+	}
 	reply.Success = true
 
 	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil

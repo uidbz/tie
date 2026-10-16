@@ -27,7 +27,11 @@ type SyncReply struct {
 
 func (request *SyncRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := SyncReply{}
-	env.Collection(request.Namespace, request.CollectionId).Sync()
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
+	col.Sync()
 	reply.Success = true
 
 	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil

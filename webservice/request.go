@@ -32,9 +32,12 @@ type StreamingRequestInterface interface {
 }
 
 type Environment struct {
-	Username   string
-	Account    func(account string) *tiedb.Collection
-	Collection func(namespace, collection string) *tiedb.Collection
+	Username string
+	Account  func(account string) *tiedb.Collection
+	// Collection resolves the request's namespace/collection. It returns an
+	// error for a malformed name (every request) and ErrCollectionNotFound
+	// for a read of an absent collection: reads never create collections.
+	Collection func(namespace, collection string) (*tiedb.Collection, error)
 	Webservice *Webservice
 }
 

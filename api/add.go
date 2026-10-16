@@ -34,13 +34,16 @@ type AddReply struct {
 func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := AddReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
 
 	col.Add(request.Key, request.Value1, request.Value2)
 
 	reply.Success = true
 	reply.OrigKey = request.Key
-	reply.OrigValue1 = request.Value2
+	reply.OrigValue1 = request.Value1
 	reply.OrigValue2 = request.Value2
 
 	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil

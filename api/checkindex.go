@@ -30,7 +30,10 @@ type CheckIndexReply struct {
 
 func (request *CheckIndexRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := CheckIndexReply{}
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
 	reply.Report = col.CheckIndex(tiedb.IndexCheckOptions{
 		Deep:        request.Deep,
 		Repair:      request.Repair,

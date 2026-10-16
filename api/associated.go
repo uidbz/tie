@@ -37,9 +37,16 @@ type AssociatedReply struct {
 func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply := AssociatedReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return ws.Reply{}, err
+	}
 
-	if assPtr, found := col.GetReverseAssociations(request.Key); found {
+	var assPtr *tiedb.AssociationSet
+	if found {
+		assPtr, found = col.GetReverseAssociations(request.Key)
+	}
+	if found {
 		set, _ := col.GetTripleSet(assPtr, "", tiedb.SortOptions{})
 		set.ForEachKey(func(key string) {
 			if t, ok := col.GetAssociations(key); ok {
