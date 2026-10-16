@@ -90,6 +90,7 @@ func cmdMedia() *cli.Command {
 					&cli.StringSliceFlag{Name: "type", Usage: "Only collections with this label (repeatable; default: all)"},
 					&cli.BoolFlag{Name: "rescan", Usage: "Also re-read audio tags from the filehost for tracks predating genre/disc/composer (downloads file heads)"},
 					&cli.BoolFlag{Name: "playlists", Value: true, Usage: "Also migrate legacy playlists"},
+					&cli.BoolFlag{Name: "names", Value: true, Usage: "Also recompute name triples from filename (fixes pre-0.6 TrimRight corruption)"},
 				},
 				Action: func(_ context.Context, c *cli.Command) error {
 					if tie == nil {
@@ -116,6 +117,13 @@ func cmdMedia() *cli.Command {
 							return err
 						}
 						fmt.Printf("migrated playlists: %d\n", n)
+					}
+					if c.Bool("names") {
+						n, err := tie.RepairNames("")
+						if err != nil {
+							return err
+						}
+						fmt.Printf("names repaired: %d\n", n)
 					}
 					var types []string
 					if t := c.StringSlice("type"); len(t) > 0 {

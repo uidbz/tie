@@ -7,6 +7,65 @@ import (
 	"time"
 )
 
+// TestNameFromFilename pins the TrimSuffix behaviour: the old TrimRight used
+// the extension as a character set and truncated stems ("map.mp3" → "ma").
+func TestNameFromFilename(t *testing.T) {
+	cases := map[string]string{
+		"map.mp3":      "map",
+		"bigpig.jpg":   "bigpig",
+		"song.mp4":     "song",
+		"no.ext.here":  "no.ext",
+		"plain":        "plain",
+		".hidden":      ".hidden",
+		"a.b.c.mp3":    "a.b.c",
+		"trailing.mp3": "trailing",
+		"p.p":          "p",
+	}
+	for in, want := range cases {
+		if got := nameFromFilename(in); got != want {
+			t.Errorf("nameFromFilename(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestRepairNames is the migration regression: rows tagged by the old
+// TrimRight path hold a truncated name; RepairNames recomputes it from
+// filename.
+func TestRepairNames(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+	const subj = "repairnames-map-mp3"
+	if _, err := tie.Add(subj, str(TieTypeProperty), str(TieFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tie.Add(subj, str(TieFilename), "map.mp3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tie.Add(subj, str(TieName), "ma"); err != nil { // the old corruption
+		t.Fatal(err)
+	}
+	if err := tie.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tie.RepairNames(""); err != nil {
+		t.Fatal(err)
+	}
+	row, err := tie.Get(subj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := RowValues(row, str(TieName))
+	if len(names) != 1 || names[0] != "map" {
+		t.Errorf("name after repair = %v, want [map]", names)
+	}
+	// Idempotent: a second pass must not rewrite the row.
+	n, err := tie.RepairNames("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = n
+}
+
 func TestSupersededChildren(t *testing.T) {
 	day := func(d int) time.Time { return time.Date(2026, 7, d, 0, 0, 0, 0, time.UTC) }
 	children := []childEntry{

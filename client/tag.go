@@ -777,13 +777,67 @@ func Tag(tie *TieClient, info TagInfo, collection string) error {
 	return nil
 }
 
+// nameFromFilename derives the display name from a filename by stripping its
+// extension. TrimSuffix, not TrimRight: TrimRight treats its second argument
+// as a character *set*, so "map.mp3" became "ma" and "bigpig.jpg" "bigpi".
+func nameFromFilename(filename string) string {
+	name := strings.TrimSuffix(filename, filepath.Ext(filename))
+	if name == "" && filename != "" {
+		return filename // dotfiles (".hidden") keep their whole name
+	}
+	return name
+}
+
+// RepairNames recomputes the `name` triple from `filename` for every file in
+// the collection, fixing rows written by the old appendTagOps which used
+// strings.TrimRight(filename, ext) — a character-set trim, not a suffix trim —
+// so stems ending in a character that also appears in the extension were
+// truncated ("map.mp3" → "ma"). It returns how many subjects were rewritten.
+// An empty collection targets the bound one.
+func (tc *TieClient) RepairNames(collection string) (int, error) {
+	rows, err := tc.allOfType(collection, str(TieFile))
+	if err != nil {
+		return 0, err
+	}
+	fixed := 0
+	b := tc.NewBatchIn(collection)
+	for _, row := range rows {
+		filename := RowFirst(row, str(TieFilename))
+		if filename == "" {
+			continue
+		}
+		want := nameFromFilename(filename)
+		names := RowValues(row, str(TieName))
+		if len(names) == 1 && names[0] == want {
+			continue
+		}
+		if len(names) == 0 && want == "" {
+			continue
+		}
+		b.Set(row.Key, str(TieName), []string{want})
+		fixed++
+		if len(b.Ops) >= historyFlush {
+			if _, err := tc.Batch(b); err != nil {
+				return fixed, err
+			}
+			b = tc.NewBatchIn(collection)
+		}
+	}
+	if len(b.Ops) > 0 {
+		if _, err := tc.Batch(b); err != nil {
+			return fixed, err
+		}
+	}
+	return fixed, nil
+}
+
 // appendTagOps appends the write ops that tag a single item (file) onto batch,
 // without sending anything. Callers that tag many items reuse one batch to cut
 // round-trips (see ImportDir); Tag is the single-item wrapper.
 func appendTagOps(batch *api.Batch, info TagInfo) {
 	filename := filepath.Base(info.File)
 	hash := info.Hash
-	name := strings.TrimRight(filename, filepath.Ext(filename)) // Remove extension
+	name := nameFromFilename(filename) // Remove extension
 	batch.Add(hash, str(TieFilename), filename)
 	batch.Add(hash, str(TieName), name)
 	batch.Add(hash, str(TieMediaType), info.MediaType)
@@ -1139,7 +1193,7 @@ func RenameFile(tie *TieClient, hash string, oldParent, newParent DirUID, newNam
 
 	batch := tie.NewBatch()
 	if newName != oldFilename {
-		newBase := strings.TrimSuffix(newName, filepath.Ext(newName))
+		newBase := nameFromFilename(newName)
 		// AddOnFailure so a file that never recorded a filename (the
 		// hash-fallback case in ReadTieDir) still gets one.
 		fn := tie.NewUpdate(hash, str(TieFilename), oldFilename, newName)
