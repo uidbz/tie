@@ -808,7 +808,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	if workers <= 0 {
 		workers = 8
 	}
-	fh := fhclient.New(host.URL, HTTPClientFor(host))
+	fh := FileHostClient(host)
 	type result struct {
 		hash string
 		ops  func(b *api.Batch)

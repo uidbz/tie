@@ -4,10 +4,14 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"sync"
 
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/tiedb"
 	ws "github.com/uidbz/tie/webservice"
 )
@@ -300,12 +304,31 @@ func (t *basicAuthTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return t.base.RoundTrip(r)
 }
 
+// transportKey names a connection profile: only the credentials and the TLS
+// setting change the transport, so hosts that share them share a pool.
+func transportKey(host FileHost) string {
+	return host.Username + "\x00" + host.Password + "\x00" + strconv.FormatBool(host.Insecure)
+}
+
+// httpClientCache memoizes one *http.Client per connection profile.
+//
+// HTTPClientFor used to build a fresh transport on every call, so nothing was
+// ever pooled: verify, repair, blob stat and the media rescan each carried
+// their own connections, and a large run piled up sockets in TIME_WAIT while
+// paying a handshake per request (§5.1 L19).
+var httpClientCache sync.Map
+
 // HTTPClientFor returns an *http.Client honoring the host's Insecure flag and
 // credentials. A plain, credential-free secure host reuses http.DefaultClient;
-// anything needing a custom TLS config or Basic Auth gets a dedicated client.
+// anything needing a custom TLS config or Basic Auth gets a shared client per
+// profile, so its connections are pooled across calls.
 func HTTPClientFor(host FileHost) *http.Client {
 	if !host.Insecure && host.Username == "" {
 		return http.DefaultClient
+	}
+	key := transportKey(host)
+	if cached, ok := httpClientCache.Load(key); ok {
+		return cached.(*http.Client)
 	}
 	var base http.RoundTripper = http.DefaultTransport
 	if host.Insecure {
@@ -314,7 +337,46 @@ func HTTPClientFor(host FileHost) *http.Client {
 	if host.Username != "" {
 		base = &basicAuthTransport{base: base, username: host.Username, pass: host.Password}
 	}
-	return &http.Client{Transport: base}
+	c := &http.Client{Transport: base}
+	actual, _ := httpClientCache.LoadOrStore(key, c)
+	return actual.(*http.Client)
+}
+
+// fhClientCache memoizes one *fhclient.Client per filehost and profile.
+var fhClientCache sync.Map
+
+// FileHostClient returns the shared filehost client for one configured host:
+// one per host, store and credential profile for the life of the process, so a
+// whole verify or repair run reuses the same pooled connections.
+//
+// The returned client is shared — do not mutate its fields.
+func FileHostClient(host FileHost) *fhclient.Client {
+	key := host.URL + "\x00" + host.Store + "\x00" + transportKey(host)
+	if cached, ok := fhClientCache.Load(key); ok {
+		return cached.(*fhclient.Client)
+	}
+	c := fhclient.New(host.URL, HTTPClientFor(host))
+	c.Store = host.Store
+	actual, _ := fhClientCache.LoadOrStore(key, c)
+	return actual.(*fhclient.Client)
+}
+
+// BlobClient returns the shared filehost client for the named filehost (empty
+// selects the collection's default). Callers should use it instead of building
+// their own: the point is that one client serves the whole run.
+func (tc *TieClient) BlobClient(name string) (*fhclient.Client, error) {
+	hosts := tc.active.FileHosts
+	if name == "" {
+		if len(hosts) == 0 {
+			return nil, errors.New("no filehosts configured")
+		}
+		name = hosts[0]
+	}
+	host, ok := tc.Config.FileHosts[name]
+	if !ok {
+		return nil, fmt.Errorf("filehost %q has no [FileHosts] entry", name)
+	}
+	return FileHostClient(host), nil
 }
 
 type TagOptions struct {

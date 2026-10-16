@@ -446,7 +446,7 @@ func (r *repairSession) blobFH() (*fhclient.Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
 	}
-	r.fh = fhclient.New(host.URL, HTTPClientFor(host))
+	r.fh = FileHostClient(host)
 	return r.fh, nil
 }
 

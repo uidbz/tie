@@ -2,7 +2,6 @@ package client
 
 import (
 	"github.com/uidbz/tie/api"
-	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/version"
 )
 
@@ -20,5 +19,5 @@ func (tc *TieClient) ServerVersion() (version.Info, error) {
 
 // FileHostVersion asks a filehost which build it is running (GET /-/version).
 func FileHostVersion(host FileHost) (version.Info, error) {
-	return fhclient.New(host.URL, HTTPClientFor(host)).Version()
+	return FileHostClient(host).Version()
 }

@@ -17,8 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-
-	"github.com/uidbz/tie/io/fhclient"
 	"strings"
 	"time"
 )
@@ -338,7 +336,7 @@ func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
 	}
-	fh := fhclient.New(host.URL, HTTPClientFor(host))
+	fh := FileHostClient(host)
 
 	var missing []string
 	for _, row := range files {
@@ -362,15 +360,11 @@ func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
 // Content-Length header). A 404 returns (false, 0, nil); any other non-200
 // status or transport error is surfaced as an error.
 func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) {
-	hosts := tc.active.FileHosts
-	if len(hosts) == 0 {
-		return false, 0, errors.New("no filehosts configured for blob stat")
+	fh, err := tc.BlobClient("")
+	if err != nil {
+		return false, 0, err
 	}
-	host, ok := tc.Config.FileHosts[hosts[0]]
-	if !ok {
-		return false, 0, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
-	}
-	return fhclient.New(host.URL, HTTPClientFor(host)).Stat(hash)
+	return fh.Stat(hash)
 }
 
 // RepairOrphans re-homes every orphan in rep under a timestamped restored/
