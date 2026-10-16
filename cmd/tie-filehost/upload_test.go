@@ -134,7 +134,11 @@ func (e *errMidStream) Read(p []byte) (int, error) {
 func TestUploadInterruptedLeavesNoBlob(t *testing.T) {
 	h := newTestServer(t)
 	st := h.st
-	content := bytes.Repeat([]byte("payload-"), 1000)
+	// Large enough that the transport cannot have buffered the whole body:
+	// with a few KB the server receives every byte before the client's error
+	// surfaces, and the store legitimately holds the blob (which made this
+	// test flaky).
+	content := bytes.Repeat([]byte("payload-"), 512*1024) // 4 MiB
 	want, err := metadata.HashReader(bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +153,9 @@ func TestUploadInterruptedLeavesNoBlob(t *testing.T) {
 			t.Error("interrupted upload reported success")
 		}
 	}
+	// Wait for the handler to finish before inspecting the store: otherwise the
+	// assertions race the server goroutine.
+	h.hs.Close()
 	if _, ok := h.s.findBlob(want); ok {
 		t.Error("interrupted upload left a blob at the content address")
 	}
@@ -289,6 +296,8 @@ func TestReaperMidPassDirectoryProtection(t *testing.T) {
 	// The directory blob lands after the pass started (fresh mtime).
 	entry := metadata.DirEntry{Hash: child, Filename: "kid", Size: 5}
 	writeBlob(t, st, dirHash, []byte(metadata.DirHeader+entry.Line()))
+	// Not indexed: it landed after the pass started, which is what the
+	// mid-pass re-check exists to catch.
 
 	deleted, kept := srv.reapOnce(now)
 	if deleted != 0 || kept != 1 {
@@ -333,5 +342,62 @@ func TestReaperRechecksBeforeDelete(t *testing.T) {
 	}
 	if _, ok := st.retention.get(kept); !ok {
 		t.Error("re-extended blob lost its index entry")
+	}
+}
+
+// TestDirIndexTracksUploads is the §5.2(9) regression: the reaper used to open
+// every blob in the store on every pass looking for manifests. Uploads now
+// record the manifests they are, the index survives a restart, and a store
+// predating the file is bootstrapped once.
+func TestDirIndexTracksUploads(t *testing.T) {
+	h := newTestServer(t)
+	st := h.st
+
+	child := hexHash("a1")
+	body := bytes.NewReader([]byte("kid"))
+	req, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload", body)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	childHash := strings.TrimSpace(string(childBytes))
+
+	entry := metadata.DirEntry{Hash: childHash, Filename: "kid", Size: 3}
+	manifest := metadata.DirHeader + entry.Line()
+	req, _ = http.NewRequest(http.MethodPut, h.hs.URL+"/upload", strings.NewReader(manifest))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirBytes, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	dirHash := strings.TrimSpace(string(dirBytes))
+	_ = child
+
+	if got := st.dirs.all(); len(got) != 1 || got[0] != dirHash {
+		t.Fatalf("dir index = %v, want exactly the manifest %s", got, dirHash)
+	}
+
+	// A plain blob upload must not be indexed as a manifest.
+	req, _ = http.NewRequest(http.MethodPut, h.hs.URL+"/upload", strings.NewReader("not a dir"))
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if len(st.dirs.all()) != 1 {
+		t.Errorf("a plain blob was indexed as a directory: %v", st.dirs.all())
+	}
+
+	// Reopening the store reads the index back instead of rescanning.
+	srv2 := &server{}
+	if err := srv2.initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "default", Path: st.path}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := srv2.storeByName("default").dirs.all(); len(got) != 1 || got[0] != dirHash {
+		t.Errorf("dir index after restart = %v, want %s", got, dirHash)
 	}
 }

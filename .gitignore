@@ -29,6 +29,13 @@ _testmain.go
 dist/*
 
 /tie
+# `go build ./cmd/<name>` drops the binary in the repo root; keep those out too.
+/tie-filehost
+/tie-triplestore
+/tie-download
+/tie-upload
+/tie-handle
+/tie-fuse
 cmd/tie/tie
 cmd/tie-triplestore/tie-triplestore
 cmd/tie-triplestore/authentication
