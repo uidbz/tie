@@ -416,10 +416,11 @@ func (tc *TieClient) Sync() error {
 func (tc *TieClient) SyncIn(collection string) error {
 	request := tc.collectionInfo(collection).NewSyncRequest()
 
-	if _, err := tc.client.Run(request); err != nil {
+	reply, err := run[api.SyncReply](tc, request)
+	if err != nil {
 		return err
 	}
-	return nil
+	return replyError(reply.ReplyStatus)
 }
 
 // Get a TripleSet with all triples that are associated with 'key'.
