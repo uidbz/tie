@@ -143,6 +143,18 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **A paginated query that asks for no ordering answers in entry order.**
+  Every page of a query used to resolve (a record read per match) and string-sort
+  *all* the matches: paging a 20 000-match tag query by 1 000 read 20 000 records
+  per page, and a 100k-item directory cost that per page. The store now collects
+  the matches' association entries first, and when they do not fit in one page it
+  orders them by entry id and resolves only the page — 20 000 matches paged by
+  1 000: 10 ms / 4.3 MB / 132 000 allocations, now 2 ms / 1.3 MB / 10 400. Entry
+  ids are stable, so pages never overlap, skip or repeat a match, but the order
+  is by subject id rather than alphabetically: `tie query --limit N` over more
+  than N matches now lists in insertion order. Ask for an order (`--sortby`, or
+  `SortBy`/`SortByValue` in a query) and you get the old behaviour, resolving
+  every match. A result that fits in one page keeps its alphabetical order.
 - **`client.TieClient` addresses one collection; `tc.In(name)` picks which.**
   The per-call `collection string` argument is gone from `Verify`, `CheckIndex`,
   `RepairTree`, `RepairOrphans`, `ImportDir`, `ImportFile`, `ImportAlbums`,

@@ -137,6 +137,14 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 		filterID = id
 	}
 
+	// A paginated query that asks for no ordering does not need every match
+	// resolved — only the page does (§5.2 item 4).
+	if o.SortBy == "" && o.SortByValue == "" && o.Limit >= 0 {
+		if sorted, total, done := ic.sortPaged(tree, filterID, filterActive, o); done {
+			return sorted, total
+		}
+	}
+
 	// Resolve straight into a slice sized by the set's cardinality. The old
 	// shape — a 10 000-slot channel, a goroutine, and a 1000-triple
 	// preallocation — cost 533 KB per call regardless of how little it
@@ -220,11 +228,7 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 				n = cmp.Compare(a.Key, b.Key)
 			}
 		} else if o.SortBy == "" {
-			if n = cmp.Compare(a.Key, b.Key); n == 0 {
-				if n = cmp.Compare(a.Value1, b.Value1); n == 0 {
-					n = cmp.Compare(a.Value2, b.Value2)
-				}
-			}
+			n = compareTriples(a, b)
 		} else {
 			if a.Value1 != o.SortBy {
 				n = 1
@@ -255,6 +259,111 @@ func (ic *Collection) Sort(tree *AssociationSet, value1Filter string, o SortOpti
 	}
 
 	return sorted[o.Offset : o.Offset+o.Limit], count
+}
+
+// sortPaged answers a paginated query that requested no ordering, and reports
+// whether it handled the call. It first collects the matching association
+// entries, which costs no record read, and then decides:
+//
+//   - The matches do not fit in one page (real paging): order them by entry id
+//     and resolve only the entries the page selects. A 100 000-match query paged
+//     by 1 000 reads 1 000 records instead of 100 000, per page. Entry ids are
+//     assigned once per string and never reused, so the sequence is stable:
+//     repeated pages of one query agree, and no match is skipped or repeated.
+//     The order is by subject then relation, not alphabetical — pass SortBy for
+//     that, at the cost of resolving every match.
+//   - The matches fit in one page: resolve them all and order them as before, so
+//     the common `query --limit 1000` over a small result keeps its alphabetical
+//     output. Nothing extra is read: every match is returned anyway.
+//
+// A stale association entry (an index entry whose record no longer matches) is
+// counted in the total of the paging case and dropped from the page; the store
+// reports those through CheckIndex.
+func (ic *Collection) sortPaged(tree *AssociationSet, filterID uint64, filterActive bool, o SortOptions) (sorted []StringTriple, totalCount int, handled bool) {
+	if o.SortBy != "" || o.SortByValue != "" || o.Limit < 0 {
+		return nil, 0, false
+	}
+
+	type entry struct {
+		ua  UniqueAssociation
+		pos int64
+	}
+	all := make([]entry, 0, tree.Size())
+	tree.ForEach(func(ua UniqueAssociation, pos int64) {
+		if filterActive && ua.Relation != filterID {
+			return
+		}
+		all = append(all, entry{ua: ua, pos: pos})
+	})
+
+	if o.Offset < 0 {
+		o.Offset = 0
+	}
+	pageEnd := len(all)
+	if o.Offset+o.Limit < pageEnd {
+		pageEnd = o.Offset + o.Limit
+	}
+
+	if len(all) > pageEnd {
+		slices.SortFunc(all, func(a, b entry) int {
+			// AssociateTo first: in a reverse set (a tag or parent query, the
+			// paginated case) it is the subject, so a subject's rows stay
+			// together and pages read like a list of items.
+			n := cmp.Compare(a.ua.AssociateTo, b.ua.AssociateTo)
+			if n == 0 {
+				n = cmp.Compare(a.ua.Relation, b.ua.Relation)
+			}
+			if o.Descending {
+				return -n
+			}
+			return n
+		})
+		if len(all) < o.Offset {
+			return make([]StringTriple, 0), len(all), true
+		}
+		page := all[o.Offset:pageEnd]
+		sorted = make([]StringTriple, 0, len(page))
+		for _, e := range page {
+			t, ok := ic.resolveEntry(e.ua, e.pos)
+			if !ok {
+				continue
+			}
+			sorted = append(sorted, ic.makeStringTriple(t))
+		}
+		return sorted, len(all), true
+	}
+
+	sorted = make([]StringTriple, 0, len(all))
+	for _, e := range all {
+		t, ok := ic.resolveEntry(e.ua, e.pos)
+		if !ok {
+			continue
+		}
+		sorted = append(sorted, ic.makeStringTriple(t))
+	}
+	slices.SortFunc(sorted, func(a, b StringTriple) int {
+		n := compareTriples(a, b)
+		if o.Descending {
+			return -n
+		}
+		return n
+	})
+	totalCount = len(sorted)
+	if totalCount < o.Offset {
+		return make([]StringTriple, 0), totalCount, true
+	}
+	return sorted[o.Offset:], totalCount, true
+}
+
+// compareTriples is the default ordering: by key, then relation, then value.
+func compareTriples(a, b StringTriple) int {
+	if n := cmp.Compare(a.Key, b.Key); n != 0 {
+		return n
+	}
+	if n := cmp.Compare(a.Value1, b.Value1); n != 0 {
+		return n
+	}
+	return cmp.Compare(a.Value2, b.Value2)
 }
 
 func (ic *Collection) GetTripleSet(s *AssociationSet, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {

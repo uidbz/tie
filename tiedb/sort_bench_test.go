@@ -175,3 +175,38 @@ func BenchmarkCoTags(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkQueryPaged is the second page of a tag query over a large match set
+// — tie-fm walking a 100k-item tag directory. It used to resolve and sort every
+// match for every page (§5.2 item 4).
+func BenchmarkQueryPaged(b *testing.B) {
+	db := NewDB(true)
+	defer db.Close()
+	col := db.GetCollection(CollectionKey{b.TempDir(), "paged"})
+
+	const matches = 20000
+	for i := 0; i < matches; i++ {
+		key := "file" + strconv.Itoa(i)
+		if err := col.Add(key, "tag", "shared"); err != nil {
+			b.Fatal(err)
+		}
+		if err := col.Add(key, "tie-type", "audio-file"); err != nil {
+			b.Fatal(err)
+		}
+	}
+	col.Sync()
+
+	set, found := col.GetReverseAssociations("shared")
+	if !found {
+		b.Fatal("no reverse associations for the shared tag")
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, page, total := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 1000})
+		if total != matches || len(page) != 1000 {
+			b.Fatalf("page = %d rows of %d, want 1000 of %d", len(page), total, matches)
+		}
+	}
+}
