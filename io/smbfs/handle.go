@@ -152,6 +152,11 @@ func (h *dataHandle) Close() error {
 			h.file = h.wh.File()
 		}
 	}
+	if h.blob != nil {
+		// Release the cache reference this handle took on first read.
+		h.blob.Close()
+		h.blob = nil
+	}
 	h.sh.dropPending(h.path, h)
 	return err
 }

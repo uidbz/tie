@@ -182,6 +182,11 @@ func (fh *bytesFileHandle) Read(ctx context.Context, dest []byte, off int64) (fu
 	if err != nil {
 		return nil, syscall.EIO
 	}
+	// The handle holds a reference for the duration of the read: eviction can
+	// no longer close the fd under us (that was the EIO). Re-resolving per
+	// read also keeps the entry hot in the LRU instead of pinning a multi-GB
+	// blob for the whole lifetime of an open file.
+	defer e.Close()
 	size := e.Size()
 	if off < 0 || off > size {
 		return nil, syscall.EINVAL

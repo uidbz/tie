@@ -24,7 +24,7 @@ func TestEscapeName(t *testing.T) {
 		{"CON.txt", "~43ON.txt"},
 		{"nul", "~6eul"},
 		{"COM1.log", "~43OM1.log"},
-		{"CONEY", "CONEY"}, // not a reserved base
+		{"CONEY", "CONEY"},   // not a reserved base
 		{"图片.jpg", "图片.jpg"}, // UTF-8 bytes pass through
 	}
 	for _, c := range cases {

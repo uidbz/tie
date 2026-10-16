@@ -249,8 +249,10 @@ func (s *Share) ReadLink(p string) (string, error) {
 	return "", fmt.Errorf("smbfs: %q is not a symlink: %w", p, fs.ErrNotExist)
 }
 
-// readAll drains a Blob following io.ReaderAt semantics.
+// readAll drains a Blob following io.ReaderAt semantics, then releases the
+// cache reference the caller took.
 func readAll(b *tiesfs.Blob) ([]byte, error) {
+	defer b.Close()
 	out := make([]byte, b.Size())
 	if _, err := b.ReadAt(out, 0); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err

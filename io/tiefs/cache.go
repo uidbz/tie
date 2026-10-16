@@ -1,6 +1,7 @@
 package tiesfs
 
 import (
+	"container/list"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -33,20 +34,34 @@ type Cache struct {
 	// lock; the per-blob entry carries its own readiness signal.
 	mu      sync.Mutex
 	entries map[string]*cacheEntry
-	order   []string // hashes in insertion order, for size-based eviction
+	// order is the LRU list: front = least recently used, back = most recent.
+	// Every hit moves its entry to the back, so eviction drops what has been
+	// idle longest — the old slice was insertion order (FIFO), which evicted
+	// the hottest blob as readily as the coldest.
+	order   *list.List
 	curSize int64
 }
 
 // cacheEntry is one cached blob. ready is closed once the download finishes (or
 // fails); until then, readers block on it. On success, file is an open,
 // read-only handle to the on-disk blob and size is its length; on failure, err
-// is set. Keeping the fd open means an evicted-and-unlinked blob stays readable
-// for handles that already resolved it (unlink removes the name, not the inode).
+// is set. The file is unlinked as soon as it is downloaded, so the fd is the
+// only thing keeping the bytes reachable.
+//
+// refs counts the Blob handles open on this entry. Eviction must not close an
+// fd a live reader is using (that surfaced as EIO in FUSE and "file already
+// closed" in SMB), so it only marks the entry evicted; the last release()
+// closes the fd. refs is guarded by Cache.mu.
 type cacheEntry struct {
 	ready chan struct{}
 	file  *os.File
 	size  int64
 	err   error
+
+	refs    int
+	evicted bool
+	// elem is this entry's position in Cache.order, so a hit can move it in O(1).
+	elem *list.Element
 }
 
 // NewCache builds a blob cache reading from filehostURL with the given HTTP
@@ -66,6 +81,7 @@ func NewCache(filehostURL string, client *http.Client, maxBytes int64, verify bo
 		maxSize:  maxBytes,
 		verify:   verify,
 		entries:  make(map[string]*cacheEntry),
+		order:    list.New(),
 	}
 }
 
@@ -76,8 +92,11 @@ func (c *Cache) Close() error {
 	for _, e := range c.entries {
 		if e.file != nil {
 			e.file.Close()
+			e.file = nil
 		}
 	}
+	// An entry already evicted but still held by a reader keeps its fd until
+	// that handle releases; release() closes it then.
 	c.entries = make(map[string]*cacheEntry)
 	c.order = nil
 	c.curSize = 0
@@ -95,32 +114,52 @@ func (c *Cache) blobPath(hash string) string {
 	return filepath.Join(c.dir, hash)
 }
 
-// evictLocked drops least-recently-inserted blobs until curSize fits maxSize.
-// The open fd of an evicted entry is closed and its file unlinked; any reader
-// still holding a reference to that entry keeps reading through its own fd.
-// Must be called with c.mu held.
+// evictLocked drops least-recently-used blobs until curSize fits maxSize. An
+// evicted entry leaves the map and the LRU list, so its bytes stop counting
+// toward the budget; its fd closes only when no Blob handle is still reading
+// through it (otherwise the last release does). The blob file is already
+// unlinked at download time. Must be called with c.mu held.
 func (c *Cache) evictLocked(keep string) {
-	for c.curSize > c.maxSize && len(c.order) > 0 {
-		oldest := c.order[0]
+	for c.curSize > c.maxSize {
+		el := c.order.Front()
+		if el == nil {
+			break
+		}
+		oldest := el.Value.(string)
 		if oldest == keep {
-			// Never evict the blob we just admitted; stop to avoid churn.
-			if len(c.order) == 1 {
+			// Never evict the blob we just admitted; rotate and keep going.
+			if c.order.Len() == 1 {
 				break
 			}
-			c.order = append(c.order[1:], oldest)
+			c.order.MoveToBack(el)
 			continue
 		}
-		c.order = c.order[1:]
+		c.order.Remove(el)
 		e, ok := c.entries[oldest]
 		if !ok {
 			continue
 		}
 		delete(c.entries, oldest)
 		c.curSize -= e.size
-		if e.file != nil {
+		e.evicted = true
+		if e.refs <= 0 && e.file != nil {
 			e.file.Close()
+			e.file = nil
 		}
-		os.Remove(c.blobPath(oldest))
+	}
+}
+
+// release drops one Blob handle's reference. The fd closes when the last
+// handle goes AND the entry has already left the cache. Must NOT hold c.mu.
+func (c *Cache) release(e *cacheEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e.refs > 0 {
+		e.refs--
+	}
+	if e.refs == 0 && e.evicted && e.file != nil {
+		e.file.Close()
+		e.file = nil
 	}
 }
 
@@ -135,7 +174,7 @@ func (c *Cache) Blob(hash string) (*Blob, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Blob{entry: e}, nil
+	return &Blob{c: c, entry: e}, nil
 }
 
 // get returns the ready cache entry for key, running producer on the first
@@ -146,11 +185,21 @@ func (c *Cache) Blob(hash string) (*Blob, error) {
 func (c *Cache) get(key string, producer func() (*os.File, int64, error)) (*cacheEntry, error) {
 	c.mu.Lock()
 	if e, ok := c.entries[key]; ok {
+		// Take the reference under the lock: an eviction that starts after
+		// this point sees refs > 0 and cannot close the fd under the caller.
+		e.refs++
+		if e.elem != nil {
+			c.order.MoveToBack(e.elem) // a hit makes it the most recently used
+		}
 		c.mu.Unlock()
 		<-e.ready
-		return e, e.err
+		if e.err != nil {
+			c.release(e)
+			return nil, e.err
+		}
+		return e, nil
 	}
-	e := &cacheEntry{ready: make(chan struct{})}
+	e := &cacheEntry{ready: make(chan struct{}), refs: 1}
 	c.entries[key] = e
 	c.mu.Unlock()
 
@@ -167,7 +216,7 @@ func (c *Cache) get(key string, producer func() (*os.File, int64, error)) (*cach
 	}
 
 	c.mu.Lock()
-	c.order = append(c.order, key)
+	e.elem = c.order.PushBack(key)
 	c.curSize += e.size
 	c.evictLocked(key)
 	c.mu.Unlock()
@@ -233,8 +282,24 @@ func (c *Cache) download(hash string) (*os.File, int64, error) {
 // Blob is a random-access handle to one cached blob. It follows io.ReaderAt
 // to the letter: a short read always carries a non-nil error, reading at or
 // past Size returns 0, io.EOF, and ReadAt calls may run concurrently.
+// A Blob holds a reference on its cache entry: the entry may be evicted while
+// the handle is live, but its fd stays open until Close. Handles that are
+// never closed pin the blob's bytes forever, so every Blob must be released
+// when the protocol handle using it goes away.
 type Blob struct {
+	c     *Cache
 	entry *cacheEntry
+}
+
+// Close releases this handle's reference on the cached blob. Reading through a
+// Blob after Close is a programming error.
+func (b *Blob) Close() error {
+	if b == nil || b.c == nil {
+		return nil
+	}
+	b.c.release(b.entry)
+	b.c = nil
+	return nil
 }
 
 // ReadAt reads len(p) bytes from the blob at off.
@@ -268,6 +333,7 @@ func (c *Cache) ArchiveMembers(archiveHash string) ([]archivelib.Member, error) 
 	if err != nil {
 		return nil, err
 	}
+	defer c.release(e)
 	// A SectionReader gives an independent, zero-based view of the shared cache
 	// fd, so concurrent listings/reads don't race on its offset.
 	return archivelib.List(io.NewSectionReader(e.file, 0, e.size))
@@ -283,6 +349,7 @@ func (c *Cache) Member(archiveHash, member string) (*Blob, error) {
 		if err != nil {
 			return nil, 0, err
 		}
+		defer c.release(ae)
 		rc, err := archivelib.Open(io.NewSectionReader(ae.file, 0, ae.size), member)
 		if err != nil {
 			return nil, 0, err
@@ -308,5 +375,5 @@ func (c *Cache) Member(archiveHash, member string) (*Blob, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Blob{entry: e}, nil
+	return &Blob{c: c, entry: e}, nil
 }

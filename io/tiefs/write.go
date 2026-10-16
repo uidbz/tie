@@ -57,6 +57,7 @@ func (h *WriteHandle) Seed() error {
 	if err != nil {
 		return err
 	}
+	defer e.Close()
 	_, err = io.Copy(h.tmp, io.NewSectionReader(e, 0, e.Size()))
 	return err
 }

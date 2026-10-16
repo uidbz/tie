@@ -95,14 +95,14 @@ const (
 type node struct {
 	kind nodeKind
 	// path tree members (kPathDir/kPathFile/kTagsDir/kMetaFile):
-	parentSlash string      // tie slash path of the containing dir ("/" for root)
-	name        string      // unescaped name within parentSlash
+	parentSlash string        // tie slash path of the containing dir ("/" for root)
+	name        string        // unescaped name within parentSlash
 	uid         client.DirUID // kTaggedDir/kTagsDir/kPathDir ("" when unmaterialized)
-	hash        string      // kQueryFile/kArchiveDir/kMember/kMetaFile (content hash)
-	member      string      // kMember: member name within the archive
-	memberSize  int64       // kMember
-	query       string      // kQueryDir: the query expression
-	file        client.File // kPathFile: the stored file (zero Uid for pending)
+	hash        string        // kQueryFile/kArchiveDir/kMember/kMetaFile (content hash)
+	member      string        // kMember: member name within the archive
+	memberSize  int64         // kMember
+	query       string        // kQueryDir: the query expression
+	file        client.File   // kPathFile: the stored file (zero Uid for pending)
 	pending     *pendingEntry
 }
 

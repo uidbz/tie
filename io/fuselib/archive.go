@@ -26,6 +26,7 @@ func (fh *archiveMemberFileHandle) Read(ctx context.Context, dest []byte, off in
 	if err != nil {
 		return nil, syscall.EIO
 	}
+	defer e.Close() // hold the reference only for the read; see bytesFileHandle
 	size := e.Size()
 	if off < 0 || off > size {
 		return nil, syscall.EINVAL

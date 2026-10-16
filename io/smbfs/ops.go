@@ -202,7 +202,16 @@ func (f *lazyFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *lazyFile) Size() int64 { return f.size }
-func (f *lazyFile) Close() error { return nil }
+
+func (f *lazyFile) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.b != nil {
+		f.b.Close() // drop the reference taken on first read
+		f.b = nil
+	}
+	return nil
+}
 
 // MkDir creates a subdirectory of the /files path tree. The /query and /tags
 // views and the fixed top level are refused with fs.ErrPermission/fs.ErrExist.
