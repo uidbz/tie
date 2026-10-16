@@ -14,12 +14,12 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/h2non/filetype"
 	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tielog"
 	"github.com/uidbz/tie/version"
-	"github.com/h2non/filetype"
 )
 
 // User is a single account entry in the filehost config. Passwords are stored
@@ -31,11 +31,6 @@ type User struct {
 	// defaults to "write".
 	Role string
 }
-
-var (
-	listenOn  string = ":1162"
-	filecache *blobCache
-)
 
 // FilehostConfig is the full tie-filehost configuration, loaded from TOML.
 // TLS is expected to be terminated by a reverse proxy in front of the filehost
@@ -127,15 +122,14 @@ func PathFromHash(dest, hash string) (string, error) {
 	return filepath.Join(dest, hash), nil
 }
 
-func UploadHandler(w http.ResponseWriter, r *http.Request) {
-	h := r.PathValue("hash")
+func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request, h string) {
 	defer func() {
 		if r.Body != nil {
 			r.Body.Close()
 		}
 	}()
 
-	st := storeByName(r.Header.Get("Tie-Store"))
+	st := s.storeByName(r.Header.Get("Tie-Store"))
 	if st == nil {
 		http.Error(w, "Unknown store: "+r.Header.Get("Tie-Store"), http.StatusBadRequest)
 		return
@@ -168,21 +162,15 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, hashHex)
 }
 
-func DownloadHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
+func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	slog.Info("serving blob", "hash", hash)
-	st, ok := findBlob(hash)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
 	path, err := PathFromHash(st.path, hash)
-	if err != nil {
+	if err != nil { // unreachable: withHash validated the hash
 		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return
 	}
-	if filecache != nil {
-		if cached, err := filecache.get(hash, path); err == nil {
+	if s.cache != nil {
+		if cached, err := s.cache.get(hash, path); err == nil {
 			path = cached
 		} else {
 			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
@@ -219,10 +207,10 @@ func sniffContentType(path string) string {
 	return ""
 }
 
-// VersionHandler reports the running build as JSON: {"server":"tie-filehost",
+// versionHandler reports the running build as JSON: {"server":"tie-filehost",
 // "build":{version, commit, date, dirty, goVersion}} — the same shape as the
 // triplestore's Version reply, so `tie version` can print both alike.
-func VersionHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) versionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"server": "tie-filehost",
@@ -230,7 +218,7 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// StatHandler reports whether a blob exists in the store, without transferring
+// statHandler reports whether a blob exists in the store, without transferring
 // it. It answers HEAD /{hash}: 200 with a Content-Length when the blob is
 // present, 404 when absent. Existence is checked against the primary store
 // (BlobPath) directly — a blob is the durable content of record, so a blob that
@@ -238,15 +226,9 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 // or reaped blob is a clean 404. The blob is never copied into the cache for a
 // stat, and no body is read or written, so a full-store sweep costs one stat per
 // hash.
-func StatHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
-	st, ok := findBlob(hash)
-	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
+func (s *server) statHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	p, err := PathFromHash(st.path, hash)
-	if err != nil {
+	if err != nil { // unreachable: withHash validated the hash
 		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return
 	}
@@ -264,22 +246,16 @@ func StatHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
+func (s *server) namedDownloadHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	filename := r.PathValue("filename")
 	slog.Info("serving blob", "hash", hash, "filename", filename)
-	st, ok := findBlob(hash)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
 	path, err := PathFromHash(st.path, hash)
-	if err != nil {
+	if err != nil { // unreachable: withHash validated the hash
 		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return
 	}
-	if filecache != nil {
-		if cached, err := filecache.get(hash, path); err == nil {
+	if s.cache != nil {
+		if cached, err := s.cache.get(hash, path); err == nil {
 			path = cached
 		} else {
 			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
@@ -298,17 +274,11 @@ func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, filename, info.ModTime(), reader)
 }
 
-// SetRetentionHandler is the explicit owner action to change a blob's expiry.
+// setRetentionHandler is the explicit owner action to change a blob's expiry.
 // It requires a matching Tie-Owner token when the blob is already owned; an
 // unowned blob is claimed by the first token presented. Unlike upload, it may
 // both shorten and extend the retention.
-func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
-	st, ok := findBlob(hash)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
+func (s *server) setRetentionHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	token := r.Header.Get("Tie-Owner")
 	if !st.retention.authorized(hash, token) {
 		http.Error(w, "Forbidden: owner token required", http.StatusForbidden)
@@ -327,15 +297,14 @@ func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "ok")
 }
 
-// GetRetentionHandler reports a blob's current expiry. A blob absent from the
+// getRetentionHandler reports a blob's current expiry. A blob absent from the
 // index is permanent. The owner token hash is never returned.
-func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
+func (s *server) getRetentionHandler(w http.ResponseWriter, r *http.Request, hash string) {
 	resp := struct {
 		ExpiresAt int64 `json:"expires_at"`
 		HasOwner  bool  `json:"has_owner"`
 	}{}
-	if st, found := findBlob(hash); found {
+	if st, found := s.findBlob(hash); found {
 		if e, ok := st.retention.get(hash); ok {
 			resp.ExpiresAt = e.ExpiresAt
 			resp.HasOwner = e.OwnerTokenHash != ""
@@ -410,17 +379,13 @@ set CertFile/KeyFile to serve HTTPS directly.
 	}
 	authStore := auth.NewStore(users, anon)
 
-	router := http.NewServeMux()
-	routes(router, authStore)
-
-	listenOn = cfg.ListenOn
-
-	if err := initStores(cfg); err != nil {
+	srv := &server{}
+	if err := srv.initStores(cfg); err != nil {
 		slog.Error("configuring blob stores", "err", err)
 		os.Exit(1)
 	}
-	for _, s := range stores {
-		slog.Info("blob store", "name", s.name, "path", s.path, "defaultRetention", s.defaultRetention)
+	for _, st := range srv.stores {
+		slog.Info("blob store", "name", st.name, "path", st.path, "defaultRetention", st.defaultRetention)
 	}
 
 	if cfg.CachePath != "" {
@@ -428,15 +393,19 @@ set CertFile/KeyFile to serve HTTPS directly.
 		if maxBytes <= 0 {
 			maxBytes = 1 << 30 // 1 GiB default when CacheSizeGB is unset/zero
 		}
-		if filecache, err = newBlobCache(filepath.Clean(cfg.CachePath), maxBytes); err != nil {
+		if srv.cache, err = newBlobCache(filepath.Clean(cfg.CachePath), maxBytes); err != nil {
 			slog.Error("initializing blob cache", "err", err)
 			os.Exit(1)
 		}
 		slog.Info("blob cache enabled", "path", cfg.CachePath, "size_gb", cfg.CacheSizeGB)
 	}
 
-	startReaper(reapInterval)
+	router := http.NewServeMux()
+	srv.routes(router, authStore)
 
+	startReaper(reapInterval, srv)
+
+	listenOn := cfg.ListenOn
 	if cfg.Insecure {
 		slog.Info("listening", "addr", "http://"+listenOn)
 		if err := http.ListenAndServe(listenOn, router); err != nil {

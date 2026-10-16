@@ -14,7 +14,7 @@ import (
 
 // startReaper launches the background sweep of expired blobs. interval <= 0
 // disables reaping entirely.
-func startReaper(interval time.Duration) {
+func startReaper(interval time.Duration, srv *server) {
 	if interval <= 0 {
 		return
 	}
@@ -22,7 +22,7 @@ func startReaper(interval time.Duration) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			deleted, kept := reapOnce(time.Now().Unix())
+			deleted, kept := srv.reapOnce(time.Now().Unix())
 			slog.Info("reaper pass complete", "removed", deleted, "keptReferenced", kept)
 		}
 	}()
@@ -34,13 +34,13 @@ func startReaper(interval time.Duration) {
 // reference children in another, so protection is computed globally. It returns
 // how many blobs were removed and how many expired blobs were kept because they
 // were still referenced.
-func reapOnce(now int64) (deleted, kept int) {
+func (srv *server) reapOnce(now int64) (deleted, kept int) {
 	passStart := time.Now()
 	// Union the expired sets, remembering which store owns each expired hash.
 	expired := map[string]*blobStore{}
-	for _, s := range stores {
-		for h := range s.expiredSet(now) {
-			expired[h] = s
+	for _, st := range srv.stores {
+		for h := range st.expiredSet(now) {
+			expired[h] = st
 		}
 	}
 	if len(expired) == 0 {
@@ -54,21 +54,21 @@ func reapOnce(now int64) (deleted, kept int) {
 	// references and shields a live directory's whole sub-tree transitively.
 	protected := map[string]bool{}
 	visited := map[string]bool{}
-	for _, s := range stores {
-		for _, h := range listBlobs(s.path) {
+	for _, st := range srv.stores {
+		for _, h := range listBlobs(st.path) {
 			if _, isExpired := expired[h]; isExpired {
 				continue // an expired blob is not a live root
 			}
-			markReferences(h, protected, visited)
+			srv.markReferences(h, protected, visited)
 		}
 	}
 	// A directory blob uploaded *during* this pass was not in the walk above,
 	// yet its children are in the expired snapshot and would be swept out from
 	// under it (TOCTOU). Re-walk for blobs whose mtime postdates the pass and
 	// mark their references too.
-	for _, s := range stores {
-		for _, h := range listBlobsModifiedSince(s.path, passStart) {
-			markReferences(h, protected, visited)
+	for _, st := range srv.stores {
+		for _, h := range listBlobsModifiedSince(st.path, passStart) {
+			srv.markReferences(h, protected, visited)
 		}
 	}
 
@@ -182,14 +182,14 @@ func listBlobsModifiedSince(root string, since time.Time) []string {
 // markReferences protects every blob reachable from hash via directory
 // references. hash itself is not added (a live root is never deleted); its
 // descendants are, transitively, regardless of their own expiry.
-func markReferences(hash string, protected, visited map[string]bool) {
+func (srv *server) markReferences(hash string, protected, visited map[string]bool) {
 	if visited[hash] {
 		return
 	}
 	visited[hash] = true
-	for _, child := range dirChildren(hash) {
+	for _, child := range srv.dirChildren(hash) {
 		protected[child] = true
-		markReferences(child, protected, visited)
+		srv.markReferences(child, protected, visited)
 	}
 }
 
@@ -198,8 +198,8 @@ func markReferences(hash string, protected, visited map[string]bool) {
 // store holds it (findBlob), so a directory can reference children across
 // stores. It reuses the hardened metadata.ParseDirLine so a crafted manifest
 // cannot smuggle a bad hash.
-func dirChildren(hash string) []string {
-	st, ok := findBlob(hash)
+func (srv *server) dirChildren(hash string) []string {
+	st, ok := srv.findBlob(hash)
 	if !ok {
 		return nil
 	}

@@ -163,5 +163,3 @@ func (c *blobCache) evictLocked(keep string) {
 		slog.Debug("blob evicted from cache", "hash", oldest)
 	}
 }
-
-

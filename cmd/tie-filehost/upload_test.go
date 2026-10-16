@@ -17,19 +17,27 @@ import (
 	"github.com/uidbz/tie/metadata"
 )
 
-// newTestServer builds a single-store filehost on a temp dir and returns the
-// server plus the store root.
-func newTestServer(t *testing.T) (*httptest.Server, *blobStore) {
+// testHost is a running single-store filehost for a test: the filehost server
+// itself (for store-level assertions like findBlob) plus its HTTP front end.
+type testHost struct {
+	s  *server
+	hs *httptest.Server
+	st *blobStore
+}
+
+// newTestServer builds a single-store filehost on a temp dir.
+func newTestServer(t *testing.T) *testHost {
 	t.Helper()
 	dir := t.TempDir()
-	if err := initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "default", Path: dir}}}); err != nil {
+	srv := &server{}
+	if err := srv.initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "default", Path: dir}}}); err != nil {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	routes(mux, auth.NewStore(nil, auth.RoleWrite))
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv, storeByName("default")
+	srv.routes(mux, auth.NewStore(nil, auth.RoleWrite))
+	hs := httptest.NewServer(mux)
+	t.Cleanup(hs.Close)
+	return &testHost{s: srv, hs: hs, st: srv.storeByName("default")}
 }
 
 // TestHashRoutesRejectTraversal is the regression test for the path-traversal
@@ -37,7 +45,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *blobStore) {
 // "..%2F" repetitions used to reach PathFromHash and serve arbitrary files.
 // Every {hash} route must now answer 400.
 func TestHashRoutesRejectTraversal(t *testing.T) {
-	srv, _ := newTestServer(t)
+	h := newTestServer(t)
 	trav := strings.Repeat("..%2F", 18) + "etc%2Fpasswd" // 64 chars when unescaped
 	if n := len(strings.ReplaceAll(trav, "%2F", "/")); n != 64 {
 		t.Fatalf("probe length %d, want 64", n)
@@ -53,7 +61,7 @@ func TestHashRoutesRejectTraversal(t *testing.T) {
 		{http.MethodGet, "/retention/" + trav},
 	}
 	for _, c := range cases {
-		req, _ := http.NewRequest(c.method, srv.URL+c.path, strings.NewReader("x"))
+		req, _ := http.NewRequest(c.method, h.hs.URL+c.path, strings.NewReader("x"))
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("%s %s: %v", c.method, c.path, err)
@@ -81,8 +89,9 @@ func TestPathFromHashRejectsNonHex(t *testing.T) {
 // TestUploadChecksumMismatchIs422 verifies a mismatched upload fails with 422,
 // stores nothing, and records no retention entry.
 func TestUploadChecksumMismatchIs422(t *testing.T) {
-	srv, st := newTestServer(t)
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/upload/"+hexHash("ff"), strings.NewReader("actual content"))
+	h := newTestServer(t)
+	st := h.st
+	req, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload/"+hexHash("ff"), strings.NewReader("actual content"))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +101,7 @@ func TestUploadChecksumMismatchIs422(t *testing.T) {
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Errorf("status = %d, want 422; body %q", resp.StatusCode, body)
 	}
-	if _, ok := findBlob(hexHash("ff")); ok {
+	if _, ok := h.s.findBlob(hexHash("ff")); ok {
 		t.Error("mismatched upload stored a blob at the claimed address")
 	}
 	if _, ok := st.retention.get(hexHash("ff")); ok {
@@ -123,13 +132,14 @@ func (e *errMidStream) Read(p []byte) (int, error) {
 // TestUploadInterruptedLeavesNoBlob is the §2.3 regression: an interrupted
 // upload must never leave a truncated file at the content address.
 func TestUploadInterruptedLeavesNoBlob(t *testing.T) {
-	srv, st := newTestServer(t)
+	h := newTestServer(t)
+	st := h.st
 	content := bytes.Repeat([]byte("payload-"), 1000)
 	want, err := metadata.HashReader(bytes.NewReader(content))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/upload/"+want, &errMidStream{data: content})
+	req, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload/"+want, &errMidStream{data: content})
 	req.ContentLength = int64(len(content))
 	resp, err := http.DefaultClient.Do(req)
 	if err == nil { // server-side copy error surfaces as 500 or a transport error; either is fine
@@ -139,7 +149,7 @@ func TestUploadInterruptedLeavesNoBlob(t *testing.T) {
 			t.Error("interrupted upload reported success")
 		}
 	}
-	if _, ok := findBlob(want); ok {
+	if _, ok := h.s.findBlob(want); ok {
 		t.Error("interrupted upload left a blob at the content address")
 	}
 	if leftovers := listBlobs(st.path); len(leftovers) != 0 {
@@ -151,7 +161,7 @@ func TestUploadInterruptedLeavesNoBlob(t *testing.T) {
 // content both succeed and the stored bytes are intact (the old O_APPEND
 // path interleaved them).
 func TestConcurrentSameHashUpload(t *testing.T) {
-	srv, _ := newTestServer(t)
+	h := newTestServer(t)
 	content := strings.Repeat("race-condition-probe", 5000)
 	want, err := metadata.HashReader(strings.NewReader(content))
 	if err != nil {
@@ -163,7 +173,7 @@ func TestConcurrentSameHashUpload(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			req, _ := http.NewRequest(http.MethodPut, srv.URL+"/upload/"+want, strings.NewReader(content))
+			req, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload/"+want, strings.NewReader(content))
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				codes[i] = -1
@@ -180,7 +190,7 @@ func TestConcurrentSameHashUpload(t *testing.T) {
 			t.Errorf("upload %d: status %d, want 200", i, c)
 		}
 	}
-	got, err := metadata.HashReader(strings.NewReader(readBlob(t, want)))
+	got, err := metadata.HashReader(strings.NewReader(readBlob(t, h, want)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,10 +202,10 @@ func TestConcurrentSameHashUpload(t *testing.T) {
 // TestUploadExistingHashDedup verifies re-uploading existing bytes returns
 // the hash without corrupting the stored copy.
 func TestUploadExistingHashDedup(t *testing.T) {
-	srv, _ := newTestServer(t)
+	h := newTestServer(t)
 	content := "dedup me"
 	want, _ := metadata.HashReader(strings.NewReader(content))
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/upload/"+want, strings.NewReader(content))
+	req, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload/"+want, strings.NewReader(content))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +214,7 @@ func TestUploadExistingHashDedup(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("first upload status %d", resp.StatusCode)
 	}
-	req2, _ := http.NewRequest(http.MethodPut, srv.URL+"/upload/"+want, strings.NewReader(content))
+	req2, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload/"+want, strings.NewReader(content))
 	resp2, err := http.DefaultClient.Do(req2)
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +224,7 @@ func TestUploadExistingHashDedup(t *testing.T) {
 	if resp2.StatusCode != http.StatusOK || strings.TrimSpace(string(b)) != want {
 		t.Errorf("dedup upload: status %d body %q, want 200 %q", resp2.StatusCode, b, want)
 	}
-	if readBlob(t, want) != content {
+	if readBlob(t, h, want) != content {
 		t.Error("dedup upload corrupted the stored blob")
 	}
 }
@@ -222,8 +232,9 @@ func TestUploadExistingHashDedup(t *testing.T) {
 // TestHashlessUploadStaysInStore verifies the hashless path stages inside the
 // store (no /tmp EXDEV class of bug) and lands the blob.
 func TestHashlessUploadStaysInStore(t *testing.T) {
-	srv, st := newTestServer(t)
-	req, _ := http.NewRequest(http.MethodPut, srv.URL+"/upload", strings.NewReader("hashless content"))
+	h := newTestServer(t)
+	st := h.st
+	req, _ := http.NewRequest(http.MethodPut, h.hs.URL+"/upload", strings.NewReader("hashless content"))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +245,7 @@ func TestHashlessUploadStaysInStore(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !metadata.IsHexHash(hash) {
 		t.Fatalf("hashless upload: status %d body %q", resp.StatusCode, b)
 	}
-	if _, ok := findBlob(hash); !ok {
+	if _, ok := h.s.findBlob(hash); !ok {
 		t.Fatal("hashless upload did not land in the store")
 	}
 	if leftovers := listBlobs(st.path); len(leftovers) != 1 {
@@ -242,9 +253,9 @@ func TestHashlessUploadStaysInStore(t *testing.T) {
 	}
 }
 
-func readBlob(t *testing.T, hash string) string {
+func readBlob(t *testing.T, h *testHost, hash string) string {
 	t.Helper()
-	st, ok := findBlob(hash)
+	st, ok := h.s.findBlob(hash)
 	if !ok {
 		t.Fatalf("blob %s not found", hash)
 	}
@@ -264,11 +275,12 @@ func readBlob(t *testing.T, hash string) string {
 // mark-phase walk).
 func TestReaperMidPassDirectoryProtection(t *testing.T) {
 	dir := t.TempDir()
-	if err := initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "s", Path: dir}}}); err != nil {
+	srv := &server{}
+	if err := srv.initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "s", Path: dir}}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
-	st := storeByName("s")
+	st := srv.storeByName("s")
 	child := hexHash("77")
 	dirHash := hexHash("88")
 	writeBlob(t, st, child, []byte("child"))
@@ -278,11 +290,11 @@ func TestReaperMidPassDirectoryProtection(t *testing.T) {
 	entry := metadata.DirEntry{Hash: child, Filename: "kid", Size: 5}
 	writeBlob(t, st, dirHash, []byte(metadata.DirHeader+entry.Line()))
 
-	deleted, kept := reapOnce(now)
+	deleted, kept := srv.reapOnce(now)
 	if deleted != 0 || kept != 1 {
 		t.Errorf("reapOnce = (%d, %d), want (0, 1)", deleted, kept)
 	}
-	if _, ok := findBlob(child); !ok {
+	if _, ok := srv.findBlob(child); !ok {
 		t.Error("child of a mid-pass directory blob was reaped")
 	}
 }
@@ -291,11 +303,12 @@ func TestReaperMidPassDirectoryProtection(t *testing.T) {
 // (or made permanent) after the expired-set snapshot must survive the sweep.
 func TestReaperRechecksBeforeDelete(t *testing.T) {
 	dir := t.TempDir()
-	if err := initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "s", Path: dir}}}); err != nil {
+	srv := &server{}
+	if err := srv.initStores(FilehostConfig{BlobPaths: []BlobPathConfig{{Name: "s", Path: dir}}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().Unix()
-	st := storeByName("s")
+	st := srv.storeByName("s")
 	gone := hexHash("98")
 	kept := hexHash("99")
 	writeBlob(t, st, gone, []byte("expired for real"))
@@ -312,10 +325,10 @@ func TestReaperRechecksBeforeDelete(t *testing.T) {
 	st.retention.mu.Unlock()
 	sweepStore(st, []string{gone, kept}, now)
 
-	if _, ok := findBlob(gone); ok {
+	if _, ok := srv.findBlob(gone); ok {
 		t.Error("genuinely expired blob was not reaped")
 	}
-	if _, ok := findBlob(kept); !ok {
+	if _, ok := srv.findBlob(kept); !ok {
 		t.Error("re-extended blob was reaped despite the re-check")
 	}
 	if _, ok := st.retention.get(kept); !ok {
