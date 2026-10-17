@@ -163,7 +163,7 @@ func TestReapCrossStoreProtection(t *testing.T) {
 	setExpired(t, srv.storeByName("b"), child, past)
 	setExpired(t, srv.storeByName("b"), orphan, past)
 
-	deleted, kept := srv.reapOnce(now)
+	deleted, kept := srv.reapOnce(now, false)
 	if kept != 1 {
 		t.Errorf("kept = %d, want 1 (cross-store-referenced child)", kept)
 	}

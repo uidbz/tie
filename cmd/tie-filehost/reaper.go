@@ -13,16 +13,26 @@ import (
 )
 
 // startReaper launches the background sweep of expired blobs. interval <= 0
-// disables reaping entirely.
-func startReaper(interval time.Duration, srv *server) {
+// disables reaping entirely. With dryRun the pass runs the whole mark phase and
+// reports what it would remove — per blob, and as a summary — without touching a
+// byte. That is the way to look at a new retention policy before trusting it
+// with data (§9 risk map: the reaper is destructive, time-based and cross-store).
+func startReaper(interval time.Duration, dryRun bool, srv *server) {
 	if interval <= 0 {
 		return
+	}
+	if dryRun {
+		slog.Info("reaper running in dry-run mode: nothing will be removed", "interval", interval)
 	}
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			deleted, kept := srv.reapOnce(time.Now().Unix())
+			deleted, kept := srv.reapOnce(time.Now().Unix(), dryRun)
+			if dryRun {
+				slog.Info("reaper dry run complete", "wouldRemove", deleted, "keptReferenced", kept)
+				continue
+			}
 			slog.Info("reaper pass complete", "removed", deleted, "keptReferenced", kept)
 		}
 	}()
@@ -34,7 +44,11 @@ func startReaper(interval time.Duration, srv *server) {
 // reference children in another, so protection is computed globally. It returns
 // how many blobs were removed and how many expired blobs were kept because they
 // were still referenced.
-func (srv *server) reapOnce(now int64) (deleted, kept int) {
+//
+// With dryRun the pass is read-only: the mark phase runs identically, every
+// candidate is logged with its store and expiry, and nothing is removed, pruned
+// or rewritten. The counts mean "would be removed" / "would be kept".
+func (srv *server) reapOnce(now int64, dryRun bool) (deleted, kept int) {
 	passStart := time.Now()
 	// Union the expired sets, remembering which store owns each expired hash.
 	expired := map[string]*blobStore{}
@@ -93,7 +107,7 @@ func (srv *server) reapOnce(now int64) (deleted, kept int) {
 		toDelete[s] = append(toDelete[s], h)
 	}
 	for st, hashes := range toDelete {
-		deleted += sweepStore(st, hashes, now)
+		deleted += sweepStore(st, hashes, now, dryRun)
 		// Forget reaped manifests so the index tracks the live set.
 		for _, h := range hashes {
 			st.dirs.remove(h)
@@ -107,18 +121,27 @@ func (srv *server) reapOnce(now int64) (deleted, kept int) {
 // index lock before removal: between the expiredSet snapshot and this sweep a
 // client may have re-uploaded the blob with longer or infinite retention
 // (TOCTOU), and deleting those bytes is data loss. A hash whose entry is gone,
-// permanent, or no longer expired is skipped.
-func sweepStore(s *blobStore, hashes []string, now int64) (deleted int) {
+// permanent, or no longer expired is skipped — and the same re-check runs in dry
+// run, so the report describes what a real pass would do now, not what the
+// snapshot said minutes ago.
+func sweepStore(s *blobStore, hashes []string, now int64, dryRun bool) (deleted int) {
 	s.retention.mu.Lock()
 	defer s.retention.mu.Unlock()
 	changed := false
 	for _, h := range hashes {
-		if e, ok := s.retention.entries[h]; !ok || e.ExpiresAt == 0 || now < e.ExpiresAt {
+		e, ok := s.retention.entries[h]
+		if !ok || e.ExpiresAt == 0 || now < e.ExpiresAt {
 			continue // re-extended or made permanent since the snapshot
 		}
 		path, err := PathFromHash(s.path, h)
 		if err != nil {
 			slog.Error("reaper: malformed hash in index", "hash", h, "err", err)
+			continue
+		}
+		if dryRun {
+			slog.Info("reaper dry run: would remove blob",
+				"store", s.name, "hash", h, "expires-at", time.Unix(e.ExpiresAt, 0).UTC().Format(time.RFC3339))
+			deleted++
 			continue
 		}
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

@@ -299,7 +299,7 @@ func TestReaperMidPassDirectoryProtection(t *testing.T) {
 	// Not indexed: it landed after the pass started, which is what the
 	// mid-pass re-check exists to catch.
 
-	deleted, kept := srv.reapOnce(now)
+	deleted, kept := srv.reapOnce(now, false)
 	if deleted != 0 || kept != 1 {
 		t.Errorf("reapOnce = (%d, %d), want (0, 1)", deleted, kept)
 	}
@@ -332,7 +332,7 @@ func TestReaperRechecksBeforeDelete(t *testing.T) {
 	e.ExpiresAt = 0
 	st.retention.entries[kept] = e
 	st.retention.mu.Unlock()
-	sweepStore(st, []string{gone, kept}, now)
+	sweepStore(st, []string{gone, kept}, now, false)
 
 	if _, ok := srv.findBlob(gone); ok {
 		t.Error("genuinely expired blob was not reaped")

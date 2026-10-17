@@ -20,6 +20,12 @@ BlobPath = "/data"
 # Empty or "0" disables the reaper (all blobs kept forever).
 ReapInterval = "1h"
 
+# ReapDryRun makes every pass report what it *would* remove — one log line per
+# blob, plus a summary — without deleting anything. Set it true for a while
+# against a real store to check a retention policy before trusting the reaper
+# with data.
+ReapDryRun = false
+
 # Plain HTTP by default: the expected setup is a personal library on a single
 # PC or a small trusted LAN, bound to localhost. To serve HTTPS directly, set
 # Insecure = false and point CertFile/KeyFile at a cert pair; otherwise put a

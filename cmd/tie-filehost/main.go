@@ -61,6 +61,10 @@ type FilehostConfig struct {
 	// ReapInterval is how often expired blobs are reaped, as a Go duration
 	// string (e.g. "1h"). Empty or "0" disables the reaper.
 	ReapInterval string
+	// ReapDryRun makes each reap pass report what it would remove — per blob in
+	// the log, and as a summary — without deleting anything. Use it to check a
+	// retention policy against a real store before letting the reaper act.
+	ReapDryRun bool
 	// LogFile is the path structured JSON logs are appended to. Empty logs only
 	// to stderr (pretty).
 	LogFile string
@@ -406,7 +410,7 @@ set CertFile/KeyFile to serve HTTPS directly.
 	router := http.NewServeMux()
 	srv.routes(router, authStore)
 
-	startReaper(reapInterval, srv)
+	startReaper(reapInterval, cfg.ReapDryRun, srv)
 
 	listenOn := cfg.ListenOn
 	if cfg.Insecure {
