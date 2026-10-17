@@ -34,12 +34,6 @@ func TestingConfig() Config {
 	return config
 }
 
-// Deprecated - use LoadConfig instead
-func ReadConfig(configName string) Config {
-	c, _ := LoadConfig(configName)
-	return c
-}
-
 // ConfigFileName lets callers omit the extension: `tie -c myconf` resolves to
 // myconf.toml. A name that already ends in .toml is left as-is.
 func ConfigFileName(configName string) string {
