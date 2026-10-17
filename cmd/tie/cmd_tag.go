@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -30,7 +29,7 @@ func cmdTag(a *app) *cli.Command {
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					tags, _, err := a.tie.ListTags(ctx.Int("offset"), ctx.Int("limit"))
 					if err != nil {
-						return errors.New("Tag list Error: " + err.Error())
+						return operationalError("tag list: %v", err)
 					}
 					o, err := a.outFor(ctx, "tag")
 					if err != nil {
@@ -44,27 +43,27 @@ func cmdTag(a *app) *cli.Command {
 			},
 			{
 				Name:  "add",
-				Usage: "Register a tag name in the store (no file needed): tag add [tag]",
+				Usage: "Register a tag name in the store (no file needed): tag add TAG",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 1 {
-						return errors.New("Need 1 arg: tag")
+						return exitError{code: exitUsage, msg: "tag add takes one TAG"}
 					}
 					if err := a.tie.RegisterTag(ctx.Args().First()); err != nil {
-						return errors.New("Tag add Error: " + err.Error())
+						return operationalError("tag add: %v", err)
 					}
 					return nil
 				},
 			},
 			{
 				Name:  "del",
-				Usage: "Delete a tag from every item and the registry: tag del [tag]",
+				Usage: "Delete a tag from every item and the registry: tag del TAG",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 1 {
-						return errors.New("Need 1 arg: tag")
+						return exitError{code: exitUsage, msg: "tag del takes one TAG"}
 					}
 					n, err := a.tie.DeleteTag(ctx.Args().First())
 					if err != nil {
-						return errors.New("Tag del Error: " + err.Error())
+						return operationalError("tag del: %v", err)
 					}
 					fmt.Fprintf(os.Stderr, "Removed tag from %d item(s)\n", n)
 					return nil
@@ -72,14 +71,14 @@ func cmdTag(a *app) *cli.Command {
 			},
 			{
 				Name:  "rename",
-				Usage: "Rename a tag everywhere it is used: tag rename [tag] [newname]",
+				Usage: "Rename a tag everywhere it is used: tag rename TAG NEWNAME",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 2 {
-						return errors.New("Need 2 args: tag, newname")
+						return exitError{code: exitUsage, msg: "tag rename takes TAG and NEWNAME"}
 					}
 					n, err := a.tie.RenameTag(ctx.Args().Get(0), ctx.Args().Get(1))
 					if err != nil {
-						return errors.New("Tag rename Error: " + err.Error())
+						return operationalError("tag rename: %v", err)
 					}
 					fmt.Fprintf(os.Stderr, "Renamed tag on %d item(s)\n", n)
 					return nil
@@ -87,14 +86,14 @@ func cmdTag(a *app) *cli.Command {
 			},
 			{
 				Name:  "files",
-				Usage: "List items carrying a tag: tag files [tag]",
+				Usage: "List items carrying a tag: tag files TAG",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 1 {
-						return errors.New("Need 1 arg: tag")
+						return exitError{code: exitUsage, msg: "tag files takes one TAG"}
 					}
 					files, _, err := a.tie.FilesWithTags("", []string{ctx.Args().First()}, nil, 0, -1)
 					if err != nil {
-						return errors.New("Tag files Error: " + err.Error())
+						return operationalError("tag files: %v", err)
 					}
 					o, err := a.outFor(ctx, "hash", "filename")
 					if err != nil {
@@ -117,7 +116,7 @@ func cmdTag(a *app) *cli.Command {
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					files, _, err := a.tie.UntaggedFiles(ctx.String("type"), ctx.Int("offset"), ctx.Int("limit"))
 					if err != nil {
-						return errors.New("Tag untagged Error: " + err.Error())
+						return operationalError("tag untagged: %v", err)
 					}
 					o, err := a.outFor(ctx, "hash", "filename")
 					if err != nil {
@@ -131,14 +130,14 @@ func cmdTag(a *app) *cli.Command {
 			},
 			{
 				Name:  "show",
-				Usage: "Show the tags on a content hash: tag show [hash]",
+				Usage: "Show the tags on a content hash: tag show HASH",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 1 {
-						return errors.New("Need 1 arg: hash")
+						return exitError{code: exitUsage, msg: "tag show takes one HASH"}
 					}
 					tags, err := client.GetTags(a.tie, ctx.Args().First())
 					if err != nil {
-						return errors.New("Tag show Error: " + err.Error())
+						return operationalError("tag show: %v", err)
 					}
 					o, err := a.outFor(ctx, "tag")
 					if err != nil {
@@ -212,11 +211,11 @@ func cmdVersions(a *app) *cli.Command {
 				Usage: "List the superseded versions of a file (newest first): versions list [path]",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 1 {
-						return errors.New("Need 1 arg: path")
+						return exitError{code: exitUsage, msg: "versions list takes one PATH"}
 					}
 					versions, err := a.tie.ListVersions(ctx.Args().First())
 					if err != nil {
-						return errors.New("Versions list Error: " + err.Error())
+						return operationalError("versions list: %v", err)
 					}
 					o, err := a.outFor(ctx, "hash", "date", "size", "filename")
 					if err != nil {
@@ -233,11 +232,11 @@ func cmdVersions(a *app) *cli.Command {
 				Usage: "Restore a prior version as the live file (defaults to newest): versions restore [path] [hash]",
 				Action: func(_ context.Context, ctx *cli.Command) error {
 					if ctx.Args().Len() < 1 {
-						return errors.New("Need at least 1 arg: path (optional 2nd arg: version hash)")
+						return exitError{code: exitUsage, msg: "versions restore takes PATH, and optionally VERSION-HASH"}
 					}
 					hash, err := a.tie.RestoreVersion(ctx.Args().Get(0), ctx.Args().Get(1))
 					if err != nil {
-						return errors.New("Versions restore Error: " + err.Error())
+						return operationalError("versions restore: %v", err)
 					}
 					fmt.Println(hash)
 					return nil

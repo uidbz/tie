@@ -169,7 +169,7 @@ func (tie *TieClient) ImportFile(file string, host FileHost, tags []string, dire
 	}
 	status := putlib.Upload(host.URL, file, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 	if status.ErrorMsg != "" {
-		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
+		return fmt.Errorf("uploading %s: %s", status.LastItem.Filename, status.ErrorMsg)
 	}
 
 	return tie.executeImport(importPlan{
@@ -432,7 +432,7 @@ func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
 func (tie *TieClient) ImportDir(dir string, host FileHost, dirType string, tags []string, dest string, forcedArchive TieType) error {
 	status := putlib.Upload(host.URL, dir, putlib.PutConfig{Client: HTTPClientFor(host), Store: host.Store})
 	if status.ErrorMsg != "" {
-		return fmt.Errorf("Error uploading: %v\n%v\n", status.LastItem.Filename, status.ErrorMsg)
+		return fmt.Errorf("uploading %s: %s", status.LastItem.Filename, status.ErrorMsg)
 	}
 
 	// Each file is opened once here — classify and read its embedded tags

@@ -140,6 +140,16 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **One shape for every error**: `tie <command>: what went wrong`, in lower case,
+  with no second `Error:` inside the message. `tie: Add Error: …` and
+  `tie: Need 1 arg: tag` are gone; the command that failed is named, so a nested
+  failure reads `tie tag files: …`. `staticcheck`'s ST1005 is enabled, so the
+  style is enforced from here on.
+- **Progress bars only render on a terminal.** On a pipe, in cron or under `-q`
+  they used to write thousands of carriage-return frames to stderr; now they
+  count bytes silently and the log stays readable. `-q` had always promised this
+  in its help text.
+
 - **An empty listing no longer prints a table header**, and `--format json` on
   an empty result answers `[]` rather than `null`.
 - **`tie verify`'s duplicate-path claims printed in map order**, so the same
@@ -222,6 +232,10 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **A wrong argument list is a usage error (exit 2), not a generic failure (1)**:
+  `tie tag rename one`, `tie add k v`, `tie upload` with no file. Their messages
+  changed too — `Need 2 args: tag, newname` is now
+  `tie tag rename: tag rename takes TAG and NEWNAME`.
 - **`tie del KEY '*' '*'` no longer deletes anything.** `*` is a shell glob: an
   unquoted `tie del key * *` in a non-empty directory deleted
   `(key, first-file, second-file)`, and the quoted form printed a "not

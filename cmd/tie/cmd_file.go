@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
-	"github.com/schollz/progressbar/v3"
 	"github.com/uidbz/tie/client"
 	"github.com/urfave/cli/v3"
 )
@@ -49,26 +47,14 @@ func cmdUpload(a *app) *cli.Command {
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if ctx.Args().Len() < 1 {
-				return errors.New("Need 1 arg: file")
+				return exitError{code: exitUsage, msg: "upload takes one FILE"}
 			}
 			host, err := a.resolveFileHost(ctx)
 			if err != nil {
 				return err
 			}
 			path := ctx.Args().First()
-			bar := progressbar.NewOptions64(
-				dirTreeSize(path),
-				progressbar.OptionSetDescription("Uploading"),
-				progressbar.OptionSetWriter(os.Stderr),
-				progressbar.OptionShowBytes(true),
-				progressbar.OptionShowCount(),
-				progressbar.OptionClearOnFinish(),
-				// Without a throttle the bar re-renders the terminal line on
-				// every write it receives — one per streamed chunk — which for a
-				// multi-GB upload is millions of renders and throttles transfer
-				// to a few MB/s. Cap redraws to ~60fps; transfer stays wire-speed.
-				progressbar.OptionThrottle(16*time.Millisecond),
-			)
+			bar := newProgress(ctx, dirTreeSize(path), "Uploading")
 			result, err := client.UploadToWithProgress(host, path, bar)
 			bar.Finish()
 			if err != nil {
@@ -154,17 +140,7 @@ func downloadOne(a *app, host client.FileHost, sourceHash string, ctx *cli.Comma
 	if err != nil {
 		return err
 	}
-	bar := progressbar.NewOptions64(
-		total,
-		progressbar.OptionSetDescription("Downloading"),
-		progressbar.OptionSetWriter(os.Stderr),
-		progressbar.OptionShowBytes(true),
-		progressbar.OptionShowCount(),
-		progressbar.OptionClearOnFinish(),
-		// See the upload bar: cap redraws so per-chunk writes don't
-		// throttle the transfer to terminal-render speed.
-		progressbar.OptionThrottle(16*time.Millisecond),
-	)
+	bar := newProgress(ctx, total, "Downloading")
 	err = client.DownloadFromWithProgress(host, sourceHash, ctx.Args().Get(1), bar)
 	bar.Finish()
 	return err

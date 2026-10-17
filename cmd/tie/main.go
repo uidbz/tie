@@ -31,10 +31,55 @@ func main() {
 		a.tie = client.NewTieClientFor(config, collection)
 	}
 
-	if err := newRootCommand(a).Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, "tie:", err)
+	root := newRootCommand(a)
+	if err := root.Run(context.Background(), os.Args); err != nil {
+		// One shape for every failure: `tie <command>: what went wrong`, in
+		// lower case, with no second "Error:" inside the message (§6.8). The
+		// command comes from the tree, so a nested command names itself.
+		fmt.Fprintln(os.Stderr, errorPrefix(root, os.Args), err)
 		os.Exit(exitCodeFor(err))
 	}
+}
+
+// errorPrefix names the command that failed, so `tie tag files nope` says
+// `tie tag files: …` instead of `tie: …` and the operator knows which step to
+// re-run (§6.8).
+func errorPrefix(root *cli.Command, args []string) string {
+	if path := commandPath(root, args); path != "" {
+		return "tie " + path + ":"
+	}
+	return "tie:"
+}
+
+// globalFlagWithValues are the flags that live before the command name and take
+// a value, so the scan for the command path can step over them.
+var globalFlagWithValues = map[string]bool{
+	"-C": true, "--config": true, "-c": true, "--collection": true, "--format": true,
+}
+
+// commandPath walks the command tree along the argument list to name the command
+// the operator actually ran ("tag files"). It stops at the first token that is
+// not a subcommand, so arguments and flags are never mistaken for one.
+func commandPath(root *cli.Command, args []string) string {
+	var path []string
+	cur := root
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		if globalFlagWithValues[a] {
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "-") {
+			break
+		}
+		next := cur.Command(a)
+		if next == nil {
+			break
+		}
+		path = append(path, a)
+		cur = next
+	}
+	return strings.Join(path, " ")
 }
 
 // newRootCommand builds the whole command tree. It is a function rather than

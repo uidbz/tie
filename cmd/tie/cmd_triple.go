@@ -24,12 +24,12 @@ func cmdAdd(a *app) *cli.Command {
 
 		Action: func(_ context.Context, cCtx *cli.Command) error {
 			if cCtx.Args().Len() < 3 {
-				return errors.New("Need 3 args: Key, Value1, Value2")
+				return exitError{code: exitUsage, msg: "add takes KEY VALUE1 VALUE2"}
 			}
 			args := cCtx.Args().Slice()
 
 			if _, err := a.tie.Add(args[0], args[1], args[2]); err != nil {
-				return errors.New("Add Error: " + err.Error())
+				return operationalError("add: %v", err)
 			}
 
 			return nil

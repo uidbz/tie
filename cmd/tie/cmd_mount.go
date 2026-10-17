@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -34,7 +33,7 @@ func cmdMount(a *app) *cli.Command {
 			var what, mountpoint string
 			if ctx.Bool("db") {
 				if ctx.Args().Len() < 1 {
-					return errors.New("Need 1 arg: mountpoint")
+					return exitError{code: exitUsage, msg: "mount takes one MOUNTPOINT"}
 				}
 				mountpoint = ctx.Args().Get(0)
 				state := fuselib.NewTieDBFuse(a.tie, filehost, ctx.Int("cache"), ctx.Bool("verify"))
@@ -46,7 +45,7 @@ func cmdMount(a *app) *cli.Command {
 				server, what = s, "tag-derived filesystem"
 			} else {
 				if ctx.Args().Len() < 2 {
-					return errors.New("Need 2 args: dir-hash, mountpoint")
+					return exitError{code: exitUsage, msg: "mount needs DIR-HASH and MOUNTPOINT"}
 				}
 				hash := ctx.Args().Get(0)
 				mountpoint = ctx.Args().Get(1)

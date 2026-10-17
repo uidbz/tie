@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -65,22 +64,22 @@ func cmdDump(a *app) *cli.Command {
 			}
 			if asJSON {
 				if _, err := fmt.Fprint(bw, "["); err != nil {
-					return errors.New("Dump Error: " + err.Error())
+					return operationalError("dump: %v", err)
 				}
 			}
 
 			if path := ctx.String("file"); path != "" {
 				if err := dumpLocalFile(path, write); err != nil {
-					return errors.New("Dump Error: " + err.Error())
+					return operationalError("dump: %v", err)
 				}
 			} else {
 				if err := a.tie.DumpStream(write); err != nil {
-					return errors.New("Dump Error: " + err.Error())
+					return operationalError("dump: %v", err)
 				}
 			}
 			if asJSON {
 				if _, err := fmt.Fprint(bw, "\n]\n"); err != nil {
-					return errors.New("Dump Error: " + err.Error())
+					return operationalError("dump: %v", err)
 				}
 			}
 			return bw.Flush()
@@ -132,7 +131,7 @@ func cmdRestore(a *app) *cli.Command {
 			if path := ctx.Args().Get(0); path != "" {
 				f, err := os.Open(path)
 				if err != nil {
-					return errors.New("Error opening file: " + err.Error())
+					return operationalError("opening input: %v", err)
 				}
 				defer f.Close()
 				src, seekable = f, f
@@ -142,15 +141,15 @@ func cmdRestore(a *app) *cli.Command {
 				// collection was dropped.
 				f, err := os.CreateTemp("", "tie-restore-")
 				if err != nil {
-					return errors.New("Error spooling input: " + err.Error())
+					return operationalError("spooling input: %v", err)
 				}
 				defer os.Remove(f.Name())
 				defer f.Close()
 				if _, err := io.Copy(f, os.Stdin); err != nil {
-					return errors.New("Error reading input: " + err.Error())
+					return operationalError("reading input: %v", err)
 				}
 				if _, err := f.Seek(0, io.SeekStart); err != nil {
-					return errors.New("Error reading input: " + err.Error())
+					return operationalError("reading input: %v", err)
 				}
 				src, seekable = f, f
 			}
@@ -160,16 +159,16 @@ func cmdRestore(a *app) *cli.Command {
 				// is read twice rather than held in memory (§4.18).
 				n, err := validateTSV(src)
 				if err != nil {
-					return fmt.Errorf("Input rejected before dropping anything: %w (checked %d lines)", err, n)
+					return fmt.Errorf("input rejected before dropping anything: %w (checked %d lines)", err, n)
 				}
 				if seekable == nil {
-					return errors.New("Error: --drop needs a seekable input")
+					return exitError{code: exitUsage, msg: "--drop needs a seekable input: pass a file, or a pipe you can rewind"}
 				}
 				if _, err := seekable.Seek(0, io.SeekStart); err != nil {
-					return errors.New("Error reading input: " + err.Error())
+					return operationalError("reading input: %v", err)
 				}
 				if err := a.tie.DropCollection(); err != nil {
-					return errors.New("Drop Error: " + err.Error())
+					return operationalError("dropping the collection: %v", err)
 				}
 			}
 
@@ -186,10 +185,10 @@ func cmdRestore(a *app) *cli.Command {
 				if tty {
 					fmt.Fprint(os.Stderr, "\r")
 				}
-				return fmt.Errorf("Restore Error after %d triples: %w", total, err)
+				return operationalError("restore failed after %d triples: %v", total, err)
 			}
 			if err := a.tie.Sync(); err != nil {
-				return errors.New("Sync Error: " + err.Error())
+				return operationalError("sync: %v", err)
 			}
 			if tty {
 				fmt.Fprintf(os.Stderr, "\rRestored %d triples\n", total)

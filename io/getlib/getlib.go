@@ -279,7 +279,7 @@ func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Rea
 		return nil, err
 	}
 	if len(data) >= len(dirHeader) && string(data[:len(dirHeader)]) == dirHeader {
-		return nil, errors.New("Source is a directory; expected file.")
+		return nil, errors.New("source is a directory, expected a file")
 	}
 	return bytes.NewReader(data), nil
 }
