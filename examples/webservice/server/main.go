@@ -45,5 +45,8 @@ func main() {
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	}
 
-	ws.ListenAndServe(routes)
+	if err := ws.ListenAndServe(routes); err != nil {
+		fmt.Fprintln(os.Stderr, "server:", err)
+		os.Exit(1)
+	}
 }

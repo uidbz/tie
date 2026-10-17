@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -139,15 +140,23 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) error {
 		ws.Close()
 	}()
 
+	// Bind before announcing it. ListenAndServe logs and then binds, so a port
+	// already in use still printed "listening" and left the caller staring at a
+	// server that was never there — the example's error was unchecked, and the
+	// log said it had worked.
+	ln, err := net.Listen("tcp", ws.Config.ListenOn)
+	if err != nil {
+		return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
+	}
 	if ws.Config.Insecure {
-		slog.Info("listening", "addr", "http://"+ws.Config.ListenOn)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Info("listening", "addr", "http://"+ln.Addr().String())
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
 		}
 		return nil
 	}
-	slog.Info("listening", "addr", "https://"+ws.Config.ListenOn)
-	if err := srv.ListenAndServeTLS(ws.Config.CertFile, ws.Config.KeyFile); err != nil && err != http.ErrServerClosed {
+	slog.Info("listening", "addr", "https://"+ln.Addr().String())
+	if err := srv.ServeTLS(ln, ws.Config.CertFile, ws.Config.KeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
 	}
 	return nil

@@ -145,6 +145,11 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **A webservice that cannot bind no longer says it is listening.** The log line
+  came before the socket existed, and `examples/webservice/server` discarded the
+  error, so a port already in use looked like a server that had started. It binds
+  first, logs the address it actually got, and the example reports the failure and
+  exits 1.
 - **A re-upload racing the reaper no longer loses the blob.** A dedup upload
   checked that the bytes were on disk, and recorded their retention afterwards; a
   reap pass running in between deleted the blob and dropped its index entry, so
