@@ -201,10 +201,8 @@ func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, 
 		}
 		return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
 	}
-	if set, ok := existing[key][value1]; ok {
-		set.ForEach(func(value2 string) {
-			ic.deleteLocked(key, value1, value2)
-		})
+	for _, value2 := range existing {
+		ic.deleteLocked(key, value1, value2)
 	}
 	ic.addLocked(key, value1, newValue2)
 	return "", true
@@ -407,10 +405,8 @@ func (ic *Collection) SetValues(key string, value1 string, values []string) {
 // setValuesLocked is SetValues' body; the caller must hold changeMutex.
 func (ic *Collection) setValuesLocked(key string, value1 string, values []string) {
 	if existing, found := ic.Get(key, value1); found {
-		if set, ok := existing[key][value1]; ok {
-			set.ForEach(func(value2 string) {
-				ic.deleteLocked(key, value1, value2)
-			})
+		for _, value2 := range existing {
+			ic.deleteLocked(key, value1, value2)
 		}
 	}
 	for _, v := range values {

@@ -199,11 +199,11 @@ func TestCheckIndexRepair(t *testing.T) {
 		requireConsistent(t, col, disk, fmt.Sprintf("disk=%v after repair", disk))
 
 		// a is back in reverse parent lookups; c's phantom is gone.
-		_, _, total, _ := col.QueryTags(TagQuery{Include: []string{"d1"}, Reverse: true, Filter: "parent", Sort: SortOptions{Limit: -1}})
+		_, total, _ := col.QueryTags(TagQuery{Include: []string{"d1"}, Reverse: true, Filter: "parent", Sort: SortOptions{Limit: -1}})
 		if total != 2 {
 			t.Errorf("disk=%v: reverse parent lookup of d1 returned %d, want 2", disk, total)
 		}
-		_, _, total, _ = col.QueryTags(TagQuery{Include: []string{"file"}, Reverse: true, Filter: "tie-type", Sort: SortOptions{Limit: -1}})
+		_, total, _ = col.QueryTags(TagQuery{Include: []string{"file"}, Reverse: true, Filter: "tie-type", Sort: SortOptions{Limit: -1}})
 		if total != 0 {
 			t.Errorf("disk=%v: phantom c still returned by reverse tie-type query (%d)", disk, total)
 		}

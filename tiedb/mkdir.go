@@ -78,18 +78,12 @@ func (ic *Collection) MkDir(spec DirSpec) (uid string, existed bool, err error) 
 // damaged collection can hold — the smallest is returned, so every caller gets
 // the same answer instead of one at random from the map.
 func (ic *Collection) uidForValueLocked(value, relation string) (string, bool) {
-	set, found := ic.GetReverse(value, relation)
-	if !found || len(set) == 0 {
+	keys, found := ic.GetReverse(value, relation)
+	if !found || len(keys) == 0 {
 		return "", false
 	}
-	if len(set) == 1 {
-		for key := range set {
-			return key, true
-		}
-	}
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
+	if len(keys) == 1 {
+		return keys[0], true
 	}
 	sort.Strings(keys)
 	return keys[0], true

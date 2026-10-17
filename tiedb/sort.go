@@ -366,32 +366,11 @@ func compareTriples(a, b StringTriple) int {
 	return cmp.Compare(a.Value2, b.Value2)
 }
 
-func (ic *Collection) GetTripleSet(s *AssociationSet, value1Filter string, o SortOptions) (result TripleSet, totalCount int) {
-	result, _, totalCount = ic.GetPage(s, value1Filter, o)
-	return result, totalCount
-}
-
-// GetPage runs one Sort and returns both views of the page: the unordered
-// TripleSet map (for the existing OneKey/OneValue2 helpers and back-compat) and
-// the ordered, paginated slice (for clients that need a stable sequence),
-// together with the pre-pagination total. Building both from a single Sort
-// avoids sorting twice.
-func (ic *Collection) GetPage(s *AssociationSet, value1Filter string, o SortOptions) (result TripleSet, sorted []StringTriple, totalCount int) {
-	result = make(TripleSet)
-
-	sorted, totalCount = ic.Sort(s, value1Filter, o)
-
-	for _, t := range sorted {
-		if !result.Has(t.Key) {
-			result[t.Key] = make(Value1)
-		}
-		if !result[t.Key].Has(t.Value1) {
-			result[t.Key][t.Value1] = make(Value2)
-		}
-		if !result[t.Key][t.Value1].Has(t.Value2) {
-			result[t.Key][t.Value1][t.Value2] = Unit{}
-		}
-	}
-
-	return result, sorted, totalCount
+// GetPage runs one Sort and returns the ordered, paginated page together with
+// the pre-pagination total. It used to build a second, unordered TripleSet view
+// of the same page on the way out — nested maps allocated for every subject,
+// relation and value, only for the caller to walk them back into a list
+// (§8 S9). One view, one allocation, one sort.
+func (ic *Collection) GetPage(s *AssociationSet, value1Filter string, o SortOptions) (sorted []StringTriple, totalCount int) {
+	return ic.Sort(s, value1Filter, o)
 }

@@ -90,7 +90,7 @@ func BenchmarkGetFilteredFanIn(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		set, found := col.Get("hub", "rel-0007")
-		if !found || len(set["hub"]["rel-0007"]) != 1 {
+		if !found || len(set) != 1 {
 			b.Fatalf("Get(hub, rel-0007) = %v, %v", set, found)
 		}
 	}
@@ -129,7 +129,7 @@ func BenchmarkSortByValue(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, sorted, total := col.GetPage(dir, "", SortOptions{SortByValue: "year", Limit: -1})
+		sorted, total := col.GetPage(dir, "", SortOptions{SortByValue: "year", Limit: -1})
 		if len(sorted) != total || total != keys {
 			b.Fatalf("sorted %d of %d, want %d", len(sorted), total, keys)
 		}
@@ -204,7 +204,7 @@ func BenchmarkQueryPaged(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, page, total := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 1000})
+		page, total := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 1000})
 		if total != matches || len(page) != 1000 {
 			b.Fatalf("page = %d rows of %d, want 1000 of %d", len(page), total, matches)
 		}

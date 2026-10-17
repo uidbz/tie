@@ -22,19 +22,23 @@ func makeSortedTriples(keyCount, relCount, valsPerRel int) []StringTriple {
 	return out
 }
 
-// buildTripleSet reproduces the OLD nested-map result build (as GetPage did) so
-// the flat RowsFromSorted fold can be benchmarked against the path it replaced.
-// Memory is weighted >= load speed per CLAUDE.md, so both runs report allocs.
-func buildTripleSet(sorted []StringTriple) TripleSet {
-	result := make(TripleSet)
+// legacyTripleSet is the nested-map shape GetPage used to build for every
+// lookup. The type is gone from the package (§8 S9), but the benchmark baseline
+// it provides is worth keeping: it is the measurement that justifies the flat
+// fold. Memory is weighted >= load speed per CLAUDE.md, so both runs report
+// allocs.
+type legacyTripleSet map[string]map[string]map[string]struct{}
+
+func buildTripleSet(sorted []StringTriple) legacyTripleSet {
+	result := make(legacyTripleSet)
 	for _, t := range sorted {
-		if !result.Has(t.Key) {
-			result[t.Key] = make(Value1)
+		if result[t.Key] == nil {
+			result[t.Key] = make(map[string]map[string]struct{})
 		}
-		if !result[t.Key].Has(t.Value1) {
-			result[t.Key][t.Value1] = make(Value2)
+		if result[t.Key][t.Value1] == nil {
+			result[t.Key][t.Value1] = make(map[string]struct{})
 		}
-		result[t.Key][t.Value1][t.Value2] = Unit{}
+		result[t.Key][t.Value1][t.Value2] = struct{}{}
 	}
 	return result
 }

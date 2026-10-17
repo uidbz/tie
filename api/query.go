@@ -67,7 +67,7 @@ func queryHandler(env *ws.Environment, request *QueryRequest) (*QueryReply, erro
 		Filter:          request.Filter,
 		Sort:            request.Sort,
 	}
-	_, sorted, total, found := col.QueryTags(q)
+	sorted, total, found := col.QueryTags(q)
 	if !found || len(sorted) == 0 {
 		reply.Success = false
 		reply.Message = "Key has no associated values"

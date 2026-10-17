@@ -58,8 +58,7 @@ func TestApplyAddIfAbsent(t *testing.T) {
 	if !found {
 		t.Fatal("path triple missing")
 	}
-	n := 0
-	row["/a/b"]["path"].ForEach(func(string) { n++ })
+	n := len(row)
 	if n != 1 {
 		t.Errorf("path holds %d uids, want exactly 1 (the loser must not add)", n)
 	}
@@ -67,8 +66,7 @@ func TestApplyAddIfAbsent(t *testing.T) {
 	// A second add-if-absent against a now-populated relation is a no-op.
 	col.Apply([]Op{{Kind: OpAddIfAbsent, Key: "/a/b", Relation: "path", Values: []string{"late"}}})
 	row, _ = col.Get("/a/b", "path")
-	n = 0
-	row["/a/b"]["path"].ForEach(func(string) { n++ })
+	n = len(row)
 	if n != 1 {
 		t.Errorf("add-if-absent wrote to a populated relation: %d values", n)
 	}
@@ -88,10 +86,10 @@ func TestApplyOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	row, _ := col.Get("k", "rel")
-	if len(row["k"]["rel"]) != 1 {
-		t.Errorf("relation = %v, want exactly {new}", row["k"]["rel"])
+	if len(row) != 1 {
+		t.Errorf("relation = %v, want exactly {new}", row)
 	}
-	if _, ok := row["k"]["rel"]["new"]; !ok {
-		t.Errorf("relation does not hold 'new': %v", row["k"]["rel"])
+	if !holdsValue(row, "new") {
+		t.Errorf("relation does not hold 'new': %v", row)
 	}
 }

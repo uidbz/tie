@@ -543,7 +543,11 @@ func (tc *TieClient) Sync() error {
 	return replyError(reply.ReplyStatus)
 }
 
-// Get a TripleSet with all triples that are associated with 'key'.
+// Associated returns the subjects associated with key, each with its own
+// attributes filtered by matchValue1 — the same read as
+// Query(QuerySpec{Terms: []string{key}, Reverse: true, Filter: matchValue1,
+// Expand: true}), which is the form to prefer: it paginates, sorts and takes
+// several terms. Associated stays for callers already speaking it.
 // Returns ErrNotFound if nothing is associated with the key.
 func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 	request := tc.CollectionInfo().NewAssociatedRequest(key)

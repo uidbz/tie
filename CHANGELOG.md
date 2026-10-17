@@ -232,6 +232,19 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`Associated` answers with rows.** Its reply field was `Result`, a
+  `tiedb.TripleSet` — nested maps keyed by subject, relation and value, which
+  made the JSON order-nondeterministic and cost a map allocation per value. It is
+  now `rows`, the same `[]tiedb.Row` shape `Query`/`Expand` return, ordered by
+  subject. `client.Associated` is deprecated in favour of
+  `Query(QuerySpec{Terms: []string{key}, Reverse: true, Filter: matchValue1, Expand: true})`,
+  which is the same read with pagination and multiple terms.
+- **`tiedb` result shapes are flat.** `Get(key, relation)` returns the relation's
+  values (`[]string`) and `GetReverse` its subjects; `GetPage` returns the
+  ordered page and total; `QueryTags` drops its leading map view. `TripleSet`,
+  `Value1`, `Value2` and `Unit` are gone, along with their `Has`/`ForEach*`
+  helpers. Measured on the query path: 1.87 ms → 1.66 ms, 1.25 MB → 630 KB,
+  10 036 → 6 013 allocs; a single `Get` drops from 912 B/13 allocs to 160 B/8.
 - **`client.Config.Webservice` is gone.** It was the name of the triplestore URL
   before `TripleStoreURL`, and it was honored as an alias since v0.5.0. A config
   that still uses it is now refused with a message naming the replacement, rather

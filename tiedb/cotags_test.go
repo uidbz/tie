@@ -46,7 +46,7 @@ func TestCoTagsUsesTheSameAlgebraAsQueryTags(t *testing.T) {
 	// The one the copies disagreed on: of the subjects tagged x, keep those
 	// with no "kind" triple — that is s2 alone.
 	missing := TagQuery{Include: []string{"x"}, Reverse: true, MissingRelation: "kind"}
-	_, sorted, total, found := col.QueryTags(missing)
+	sorted, total, found := col.QueryTags(missing)
 	if !found || total != 1 || len(sorted) != 1 || sorted[0].Key != "s2" {
 		t.Errorf("QueryTags(x, missing kind) = %v/%d/%v, want s2", sorted, total, found)
 	}
@@ -56,7 +56,7 @@ func TestCoTagsUsesTheSameAlgebraAsQueryTags(t *testing.T) {
 
 	// The scope term narrows both the same way: only s1 carries kind=dog.
 	scoped := TagQuery{Include: []string{"x"}, Reverse: true, Scope: "dog"}
-	if _, _, total, _ := col.QueryTags(scoped); total != 1 {
+	if _, total, _ := col.QueryTags(scoped); total != 1 {
 		t.Errorf("QueryTags(x, scope dog) total = %d, want 1", total)
 	}
 	if got := coTagsSorted(col, scoped, "tag"); len(got) != 2 || got[0] != "x" || got[1] != "y" {

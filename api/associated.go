@@ -23,9 +23,19 @@ type AssociatedOptions struct {
 
 type AssociatedReply struct {
 	ws.ReplyStatus
-	Result tiedb.TripleSet
+	// Result is one Row per subject associated with the requested key, holding
+	// that subject's forward attributes filtered by MatchValue1. It used to be a
+	// tiedb.TripleSet — nested maps keyed by subject, relation and value, which
+	// made the JSON reply order-nondeterministic and cost a map allocation per
+	// value (§8 S9). Rows are the shape every other read returns.
+	Rows []tiedb.Row `json:"rows"`
 }
 
+// associatedHandler answers "what is associated with this key": the subjects
+// with a reverse edge to Key, each expanded with its own attributes under
+// MatchValue1. That is exactly Query{Terms: [Key], Reverse: true, Filter:
+// MatchValue1, Expand: true}, and new callers should use Query; Associated stays
+// for clients already speaking it.
 func associatedHandler(env *ws.Environment, request *AssociatedRequest) (*AssociatedReply, error) {
 	reply := AssociatedReply{}
 
@@ -34,25 +44,28 @@ func associatedHandler(env *ws.Environment, request *AssociatedRequest) (*Associ
 		return nil, err
 	}
 
-	var assPtr *tiedb.AssociationSet
+	var subjects []string
 	if found {
-		assPtr, found = col.GetReverseAssociations(request.Key)
-	}
-	if found {
-		set, _ := col.GetTripleSet(assPtr, "", tiedb.SortOptions{Limit: -1}) // unlimited: Associated has no limit parameter
-		set.ForEachKey(func(key string) {
-			if t, ok := col.GetAssociations(key); ok {
-				set2, _ := col.GetTripleSet(t, request.MatchValue1, tiedb.SortOptions{Limit: -1}) // unlimited: Associated has no limit parameter
-				set[key] = set2[key]
+		if set, ok := col.GetReverseAssociations(request.Key); ok {
+			// Unlimited: Associated has no limit parameter.
+			sorted, _ := col.GetPage(set, "", tiedb.SortOptions{Limit: -1})
+			seen := make(map[string]bool, len(sorted))
+			for _, t := range sorted {
+				if !seen[t.Key] {
+					seen[t.Key] = true
+					subjects = append(subjects, t.Key)
+				}
 			}
-		})
-		reply.Result = set
-		reply.Success = true
-		reply.OrigKey = request.Key
-
+		}
+	}
+	if len(subjects) == 0 {
+		reply.Success = false
 		return &reply, nil
 	}
-	reply.Success = false
+
+	reply.Rows = col.ExpandKeys(subjects, request.MatchValue1)
+	reply.Success = true
+	reply.OrigKey = request.Key
 
 	return &reply, nil
 }

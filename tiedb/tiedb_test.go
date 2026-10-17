@@ -73,12 +73,12 @@ func TestAddAssociation(t *testing.T) {
 	asses, found := col.GetAssociations("superkey")
 
 	if found {
-		out, _ := col.GetTripleSet(asses, "", SortOptions{Limit: -1})
-		if !out["superkey"]["value1"].Has("value2-1") {
-			t.Errorf("Error input1, didn't have %s", "value2-1")
+		out, _ := col.GetPage(asses, "", SortOptions{Limit: -1})
+		if !hasTriple(out, "superkey", "value1", "value2-1") {
+			t.Errorf("didn't have (%s, %s, %s)", "superkey", "value1", "value2-1")
 		}
-		if !out["superkey"]["value1"].Has("value2-2") {
-			t.Errorf("Error input2, didn't have %s", "value2-1")
+		if !hasTriple(out, "superkey", "value1", "value2-2") {
+			t.Errorf("didn't have (%s, %s, %s)", "superkey", "value1", "value2-2")
 		}
 	} else {
 		t.Error("Error GetAssociations, did not find", "superkey")
@@ -93,8 +93,10 @@ func reverseKeys(t *testing.T, col *Collection, value2 string) map[string]bool {
 	if !found {
 		return keys
 	}
-	set, _ := col.GetTripleSet(rev, "", SortOptions{Limit: -1})
-	set.ForEachKey(func(k string) { keys[k] = true })
+	sorted, _ := col.GetPage(rev, "", SortOptions{Limit: -1})
+	for _, tr := range sorted {
+		keys[tr.Key] = true
+	}
 	return keys
 }
 
@@ -125,8 +127,8 @@ func TestReverseRelationAllowlist(t *testing.T) {
 	if !found {
 		t.Fatal("forward lookup on hashA failed")
 	}
-	out, _ := col.GetTripleSet(fwd, "filename", SortOptions{Limit: -1})
-	if !out["hashA"]["filename"].Has("myfile.ext") {
+	out, _ := col.GetPage(fwd, "filename", SortOptions{Limit: -1})
+	if !hasTriple(out, "hashA", "filename", "myfile.ext") {
 		t.Errorf("forward filename lookup missing value, got %v", out)
 	}
 }
@@ -165,10 +167,8 @@ func getVal2s(t *testing.T, col *Collection, key, value1 string) map[string]bool
 	if !found {
 		return out
 	}
-	if v1, ok := res[key]; ok {
-		if set, ok := v1[value1]; ok {
-			set.ForEach(func(v2 string) { out[v2] = true })
-		}
+	for _, v2 := range res {
+		out[v2] = true
 	}
 	return out
 }
@@ -280,7 +280,7 @@ func TestSortedPagination(t *testing.T) {
 	}
 
 	// Full ordered result.
-	_, all, total := col.GetPage(tree, "", SortOptions{Limit: -1})
+	all, total := col.GetPage(tree, "", SortOptions{Limit: -1})
 	if total != n {
 		t.Errorf("total = %d, want %d", total, n)
 	}
@@ -294,7 +294,7 @@ func TestSortedPagination(t *testing.T) {
 	}
 
 	// A page in the middle.
-	_, page, total := col.GetPage(tree, "", SortOptions{Offset: 10, Limit: 5})
+	page, total := col.GetPage(tree, "", SortOptions{Offset: 10, Limit: 5})
 	if total != n {
 		t.Errorf("paged total = %d, want %d", total, n)
 	}
@@ -331,7 +331,7 @@ func TestSortByValue(t *testing.T) {
 		t.Fatal("GetReverseAssociations(gendb-table) not found")
 	}
 
-	_, asc, total := col.GetPage(set, "", SortOptions{SortByValue: "imported-at", Limit: -1})
+	asc, total := col.GetPage(set, "", SortOptions{SortByValue: "imported-at", Limit: -1})
 	if total != n {
 		t.Errorf("total = %d, want %d", total, n)
 	}
@@ -345,7 +345,7 @@ func TestSortByValue(t *testing.T) {
 		}
 	}
 
-	_, desc, _ := col.GetPage(set, "", SortOptions{SortByValue: "imported-at", Descending: true, Limit: -1})
+	desc, _ := col.GetPage(set, "", SortOptions{SortByValue: "imported-at", Descending: true, Limit: -1})
 	if len(desc) != n {
 		t.Fatalf("len(desc) = %d, want %d", len(desc), n)
 	}
@@ -384,7 +384,7 @@ func TestSortByValueNumeric(t *testing.T) {
 		t.Fatal("GetReverseAssociations(gendb-table) not found")
 	}
 
-	_, asc, total := col.GetPage(set, "", SortOptions{SortByValue: "count", SortByValueNumeric: true, Limit: -1})
+	asc, total := col.GetPage(set, "", SortOptions{SortByValue: "count", SortByValueNumeric: true, Limit: -1})
 	if total != n+2 {
 		t.Errorf("total = %d, want %d", total, n+2)
 	}
@@ -402,7 +402,7 @@ func TestSortByValueNumeric(t *testing.T) {
 		}
 	}
 
-	_, desc, _ := col.GetPage(set, "", SortOptions{SortByValue: "count", SortByValueNumeric: true, Descending: true, Limit: -1})
+	desc, _ := col.GetPage(set, "", SortOptions{SortByValue: "count", SortByValueNumeric: true, Descending: true, Limit: -1})
 	wantDesc := make([]string, 0, n+2)
 	for i := n - 1; i >= 0; i-- {
 		wantDesc = append(wantDesc, "key"+padded(i))
@@ -604,9 +604,11 @@ func TestNilBlobPolicyParity(t *testing.T) {
 func queryKeys(t *testing.T, col *Collection, q TagQuery) map[string]bool {
 	t.Helper()
 	q.Sort = SortOptions{Limit: -1}
-	result, _, _, _ := col.QueryTags(q)
+	sorted, _, _ := col.QueryTags(q)
 	keys := make(map[string]bool)
-	result.ForEachKey(func(k string) { keys[k] = true })
+	for _, tr := range sorted {
+		keys[tr.Key] = true
+	}
 	return keys
 }
 
@@ -751,19 +753,7 @@ func TestReadYourWritesConcurrent(t *testing.T) {
 		go func(key, val string) {
 			defer wg.Done()
 			res, found := col.Get(key, "rel")
-			ok := false
-			if found {
-				if v1, has := res[key]; has {
-					if set, has := v1["rel"]; has {
-						set.ForEach(func(v2 string) {
-							if v2 == val {
-								ok = true
-							}
-						})
-					}
-				}
-			}
-			if !ok {
+			if !found || !holdsValue(res, val) {
 				errCh <- key
 			}
 		}(key, val)
@@ -773,4 +763,14 @@ func TestReadYourWritesConcurrent(t *testing.T) {
 	if len(errCh) > 0 {
 		t.Fatalf("%d triples dropped under concurrent read-your-writes", len(errCh))
 	}
+}
+
+// hasTriple reports whether an ordered page contains one triple.
+func hasTriple(sorted []StringTriple, key, value1, value2 string) bool {
+	for _, tr := range sorted {
+		if tr.Key == key && tr.Value1 == value1 && tr.Value2 == value2 {
+			return true
+		}
+	}
+	return false
 }

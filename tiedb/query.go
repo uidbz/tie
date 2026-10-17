@@ -2,39 +2,50 @@ package tiedb
 
 // Query paths: TagQuery/QueryTags, ExpandKeys and the plain Get lookup.
 
-// Get returns the forward triples (key, value1, *) — and only those.
+// Get returns the values of one relation for one subject — the value2 list of
+// (key, value1), in no particular order. It used to return a TripleSet, a
+// three-level nested map built for one lookup that could only be consumed by
+// walking it back into a list (§8 S9).
 //
-// It used to also merge in the reverse triples whose relation is value1, keyed
-// by the other subject. That made Get unusable as a write primitive: for a
-// self-referencing triple (the root directory's own "parent" edge) the merge
-// overwrote data[key] with the reverse set, so SetValues/SimpleUpdate on the
-// root's parent could delete the wrong values. It also resolved the entire
-// reverse set for every call. Callers of Get read data[key], which is exactly
-// the forward set; anything wanting the other direction uses GetReverse.
-func (ic *Collection) Get(key string, value1 string) (TripleSet, bool) {
+// It answers only the forward triples (key, value1, *). It used to also merge in
+// the reverse triples whose relation is value1, keyed by the other subject. That
+// made Get unusable as a write primitive: for a self-referencing triple (the root
+// directory's own "parent" edge) the merge overwrote the forward set, so
+// SetValues/SimpleUpdate on the root's parent could delete the wrong values. It
+// also resolved the entire reverse set for every call. Callers of Get read the
+// forward set; anything wanting the other direction uses GetReverse.
+func (ic *Collection) Get(key string, value1 string) ([]string, bool) {
 	tree, found := ic.GetAssociations(key)
 	if !found {
 		return nil, false
 	}
-	data, _ := ic.GetTripleSet(tree, value1, SortOptions{Limit: -1})
-	if data == nil {
+	triples, total := ic.Sort(tree, value1, SortOptions{Limit: -1})
+	if total == 0 {
 		return nil, false
 	}
-	return data, true
+	values := make([]string, 0, len(triples))
+	for _, t := range triples {
+		values = append(values, t.Value2)
+	}
+	return values, true
 }
 
-// GetReverse returns the triples of relation value1 that POINT AT key, keyed by
-// their subject: the "who references me" direction.
-func (ic *Collection) GetReverse(key string, value1 string) (TripleSet, bool) {
+// GetReverse returns the subjects that hold (subject, value1, key) — the "who
+// references me" direction, as a list of subjects.
+func (ic *Collection) GetReverse(key string, value1 string) ([]string, bool) {
 	reverse, found := ic.GetReverseAssociations(key)
 	if !found {
 		return nil, false
 	}
-	data, _ := ic.GetTripleSet(reverse, value1, SortOptions{Limit: -1})
-	if data == nil {
+	triples, total := ic.Sort(reverse, value1, SortOptions{Limit: -1})
+	if total == 0 {
 		return nil, false
 	}
-	return data, true
+	subjects := make([]string, 0, len(triples))
+	for _, t := range triples {
+		subjects = append(subjects, t.Key)
+	}
+	return subjects, true
 }
 
 // TagQuery selects entries by association membership: a match must be associated
@@ -113,21 +124,20 @@ func (ic *Collection) resolveQuery(q TagQuery) (set *AssociationSet, found, empt
 	return set, true, false
 }
 
-// QueryTags resolves the include/exclude set algebra internally and returns a
-// paginated result: the unordered TripleSet, the ordered+paged slice, and the
-// pre-pagination total, plus whether the seed existed. The intermediate
-// association trees never leave tiedb.
-func (ic *Collection) QueryTags(q TagQuery) (result TripleSet, sorted []StringTriple, total int, found bool) {
+// QueryTags resolves the include/exclude set algebra internally and returns the
+// ordered, paginated matches with the pre-pagination total and whether the seed
+// existed. The intermediate association trees never leave tiedb.
+func (ic *Collection) QueryTags(q TagQuery) (sorted []StringTriple, total int, found bool) {
 	set, found, empty := ic.resolveQuery(q)
 	if !found {
-		return make(TripleSet), nil, 0, false
+		return nil, 0, false
 	}
 	if empty {
-		return make(TripleSet), nil, 0, true
+		return nil, 0, true
 	}
 
-	result, sorted, total = ic.GetPage(set, q.Filter, q.Sort)
-	return result, sorted, total, true
+	sorted, total = ic.GetPage(set, q.Filter, q.Sort)
+	return sorted, total, true
 }
 
 // filterMissingRelation returns the subset of seed whose subject carries no

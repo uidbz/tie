@@ -3,7 +3,6 @@ package tiedb
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -240,93 +239,6 @@ func RowsFromSorted(sorted []StringTriple) []Row {
 		rows[i].Attributes[t.Value1] = append(rows[i].Attributes[t.Value1], t.Value2)
 	}
 	return rows
-}
-
-type Unit struct{}
-type Value2 map[string]Unit
-type Value1 map[string]Value2
-type TripleSet map[string]Value1
-
-func (s TripleSet) Has(key string) bool {
-	_, ok := s[key]
-	return ok
-}
-
-func (s TripleSet) ForEachKey(do func(key string)) {
-	for key := range s {
-		do(key)
-	}
-}
-
-func (s TripleSet) ForEachValue1(do func(key, value1 string)) {
-	for key, keys := range s {
-		for value1 := range keys {
-			do(key, value1)
-		}
-	}
-}
-
-func (s TripleSet) ForEachValue2(do func(key, value1, value2 string)) {
-	for key, keys := range s {
-		for value1, value1s := range keys {
-			for value2 := range value1s {
-				do(key, value1, value2)
-			}
-		}
-	}
-}
-
-func (s Value1) Has(value1 string) bool {
-	_, ok := s[value1]
-	return ok
-}
-
-func (s Value1) ForEach(do func(value1 string)) {
-	for value1 := range s {
-		do(value1)
-	}
-}
-
-func (s Value1) ForEachValue2(do func(value1, value2 string)) {
-	for value1, value1s := range s {
-		for value2 := range value1s {
-			do(value1, value2)
-		}
-	}
-}
-
-// There must exist exactly 1 value2 for the provided value1! Otherwise it will return (empty string, false)")
-func (s Value2) One() (string, bool) {
-	if len(s) != 1 {
-		return "", false
-	}
-	for value2 := range s {
-		return value2, true
-	}
-	return "", false
-}
-
-func (s Value2) Has(value2 string) bool {
-	_, ok := s[value2]
-	return ok
-}
-
-func (s Value2) ToString() string {
-	return strings.Join(s.ToSlice(), ", ")
-}
-
-func (s Value2) ToSlice() []string {
-	tmp := make([]string, 0, len(s))
-	for value2 := range s {
-		tmp = append(tmp, value2)
-	}
-	return tmp
-}
-
-func (s Value2) ForEach(do func(value2 string)) {
-	for value2 := range s {
-		do(value2)
-	}
 }
 
 type FileMod struct {

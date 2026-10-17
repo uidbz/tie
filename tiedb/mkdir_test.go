@@ -66,7 +66,7 @@ func TestMkDirIsAtomic(t *testing.T) {
 	if !found || len(owners) != 1 {
 		t.Fatalf("%d subjects claim tie:/a/b, want 1", len(owners))
 	}
-	if !owners.Has(uids[0]) {
+	if !holdsValue(owners, uids[0]) {
 		t.Errorf("the owner is %v, want %s", owners, uids[0])
 	}
 	// The winner's node is complete: parent edge, path and type marker.
@@ -122,17 +122,8 @@ func TestMkDirValidatesItsSpec(t *testing.T) {
 	}
 }
 
-// hasValue checks one triple in the forward direction: TripleSet is keyed by
-// subject, then relation, then value.
+// hasValue checks one triple in the forward direction.
 func hasValue(col *Collection, key, relation, value string) bool {
-	set, found := col.Get(key, relation)
-	if !found {
-		return false
-	}
-	rels, ok := set[key]
-	if !ok {
-		return false
-	}
-	vals, ok := rels[relation]
-	return ok && vals.Has(value)
+	vals, found := col.Get(key, relation)
+	return found && holdsValue(vals, value)
 }

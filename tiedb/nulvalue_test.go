@@ -26,21 +26,21 @@ func TestValueWithNULIsBinarySafe(t *testing.T) {
 	if !found {
 		t.Fatal("relation not found")
 	}
-	got := row["k"]["rel"]
-	if len(got) != len(values) {
-		t.Fatalf("stored %d distinct values, want %d (NUL trimming collided them): %q", len(got), len(values), valueKeys(got))
+	if len(row) != len(values) {
+		t.Fatalf("stored %d distinct values, want %d (NUL trimming collided them): %q", len(row), len(values), row)
 	}
 	for _, v := range values {
-		if _, ok := got[v]; !ok {
-			t.Errorf("value %q came back mangled; got %q", v, valueKeys(got))
+		if !holdsValue(row, v) {
+			t.Errorf("value %q came back mangled; got %q", v, row)
 		}
 	}
 }
 
-func valueKeys(v Value2) []string {
-	var out []string
-	for k := range v {
-		out = append(out, k)
+func holdsValue(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
 	}
-	return out
+	return false
 }

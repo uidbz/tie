@@ -28,7 +28,7 @@ func TestRelationFilterIsExact(t *testing.T) {
 	if !found {
 		t.Fatal("Get(hub, target) found nothing")
 	}
-	if got := len(set["hub"]["target"]); got != 2 {
+	if got := len(set); got != 2 {
 		t.Errorf("Get(hub, target) holds %d values, want 2", got)
 	}
 
@@ -41,10 +41,11 @@ func TestRelationFilterIsExact(t *testing.T) {
 	if set, _ := col.Get("hub", "tar"); len(set) != 0 {
 		t.Errorf("a prefix of an interned relation matched: %v", set)
 	}
-	// The empty filter still means every relation.
+	// The empty filter still means every relation: here, one value per rel-XX
+	// plus the two under target.
 	set, _ = col.Get("hub", "")
-	if got := len(set["hub"]); got != others+1 {
-		t.Errorf("the empty filter returned %d relations, want %d", got, others+1)
+	if got := len(set); got != others+2 {
+		t.Errorf("the empty filter returned %d values, want %d", got, others+2)
 	}
 }
 
@@ -114,14 +115,16 @@ func TestRelationFilterOnReverseSet(t *testing.T) {
 	if !found {
 		t.Fatal("no reverse associations for dir")
 	}
-	set, total := col.GetTripleSet(rev, "parent", SortOptions{Limit: -1})
+	set, total := col.GetPage(rev, "parent", SortOptions{Limit: -1})
 	if total != 20 {
 		t.Errorf("reverse filter parent: total = %d, want 20", total)
 	}
-	if _, ok := set["other"]; ok {
-		t.Error("the tag reference leaked into a parent-filtered answer")
+	for _, tr := range set {
+		if tr.Key == "other" {
+			t.Error("the tag reference leaked into a parent-filtered answer")
+		}
 	}
-	if set, total = col.GetTripleSet(rev, "nope", SortOptions{Limit: -1}); total != 0 || len(set) != 0 {
+	if set, total = col.GetPage(rev, "nope", SortOptions{Limit: -1}); total != 0 || len(set) != 0 {
 		t.Errorf("reverse filter nope: total = %d, set = %d, want empty", total, len(set))
 	}
 }

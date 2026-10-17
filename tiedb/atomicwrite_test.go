@@ -40,21 +40,12 @@ func TestSetValuesAtomicUnderConcurrency(t *testing.T) {
 	if !found {
 		t.Fatal("relation missing after Sets")
 	}
-	got := map[string]bool{}
-	row["k"]["rel"].ForEach(func(v string) { got[v] = true })
-	isA := len(got) == 3 && got["a1"] && got["a2"] && got["a3"]
-	isB := len(got) == 2 && got["b1"] && got["b2"]
+	got := row
+	isA := len(got) == 3 && holdsValue(got, "a1") && holdsValue(got, "a2") && holdsValue(got, "a3")
+	isB := len(got) == 2 && holdsValue(got, "b1") && holdsValue(got, "b2")
 	if !isA && !isB {
-		t.Errorf("final relation = %v, want exactly one of the two written sets (union leak)", keysOf(got))
+		t.Errorf("final relation = %v, want exactly one of the two written sets (union leak)", got)
 	}
-}
-
-func keysOf(m map[string]bool) []string {
-	var out []string
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }
 
 // TestUpdateAtomic: concurrent Update of the same triple must never leave
@@ -80,8 +71,7 @@ func TestUpdateAtomic(t *testing.T) {
 	if !found {
 		t.Fatal("relation gone")
 	}
-	n := 0
-	row["k"]["rel"].ForEach(func(string) { n++ })
+	n := len(row)
 	if n != 1 {
 		t.Errorf("relation holds %d values, want exactly 1", n)
 	}

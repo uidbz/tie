@@ -37,7 +37,7 @@ func TestPagedQueryCoversEveryMatch(t *testing.T) {
 	seen := make(map[string]int, matches)
 	var total int
 	for offset := 0; offset < matches; offset += 1000 {
-		_, page, tot := col.GetPage(set, "", SortOptions{Offset: offset, Limit: 1000})
+		page, tot := col.GetPage(set, "", SortOptions{Offset: offset, Limit: 1000})
 		total = tot
 		if len(page) != 1000 {
 			t.Fatalf("page at %d holds %d rows, want 1000", offset, len(page))
@@ -64,8 +64,8 @@ func TestPagedQueryCoversEveryMatch(t *testing.T) {
 func TestPagedQueryIsStableAcrossRequests(t *testing.T) {
 	col, set := pagedFixture(t, 3000)
 
-	_, first, _ := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 500})
-	_, second, _ := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 500})
+	first, _ := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 500})
+	second, _ := col.GetPage(set, "", SortOptions{Offset: 1000, Limit: 500})
 	if len(first) != len(second) {
 		t.Fatalf("page sizes differ between runs: %d then %d", len(first), len(second))
 	}
@@ -89,7 +89,7 @@ func TestSmallResultKeepsAlphabeticalOrder(t *testing.T) {
 	}
 	set, _ := col.GetReverseAssociations("x")
 
-	_, page, total := col.GetPage(set, "", SortOptions{Limit: 1000})
+	page, total := col.GetPage(set, "", SortOptions{Limit: 1000})
 	if total != 4 || len(page) != 4 {
 		t.Fatalf("page = %d rows of %d, want 4", len(page), total)
 	}
@@ -119,12 +119,12 @@ func TestOrderedQueriesKeepTheirOrder(t *testing.T) {
 	}
 	set, _ := col.GetReverseAssociations("x")
 
-	_, page, _ := col.GetPage(set, "", SortOptions{Limit: 2, SortByValue: "rank", SortByValueNumeric: true})
+	page, _ := col.GetPage(set, "", SortOptions{Limit: 2, SortByValue: "rank", SortByValueNumeric: true})
 	if len(page) != 2 || page[0].Key != "victor" || page[1].Key != "whiskey" {
 		t.Errorf("value-ordered page = %v, want [victor whiskey]", pageKeys(page))
 	}
 
-	_, page, _ = col.GetPage(set, "", SortOptions{Limit: 2, SortBy: "tag"})
+	page, _ = col.GetPage(set, "", SortOptions{Limit: 2, SortBy: "tag"})
 	if len(page) != 2 || page[0].Key != "victor" || page[1].Key != "whiskey" {
 		t.Errorf("key-ordered page = %v, want [victor whiskey]", pageKeys(page))
 	}
@@ -143,7 +143,7 @@ func pageKeys(triples []StringTriple) []string {
 func TestPagedQueryOffsetBeyondEnd(t *testing.T) {
 	col, set := pagedFixture(t, 1500)
 
-	_, page, total := col.GetPage(set, "", SortOptions{Offset: 5000, Limit: 1000})
+	page, total := col.GetPage(set, "", SortOptions{Offset: 5000, Limit: 1000})
 	if len(page) != 0 {
 		t.Errorf("offset past the end returned %d rows, want 0", len(page))
 	}

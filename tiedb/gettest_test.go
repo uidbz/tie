@@ -21,7 +21,7 @@ func TestGetForwardOnlySelfReference(t *testing.T) {
 	if len(row) != 1 {
 		t.Errorf("Get returned %d subjects %v, want only the forward subject 'root'", len(row), row)
 	}
-	vals := row["root"]["parent"]
+	vals := row
 	if len(vals) != 1 {
 		t.Fatalf("forward set = %v, want exactly {root}", vals)
 	}
@@ -31,7 +31,7 @@ func TestGetForwardOnlySelfReference(t *testing.T) {
 	if !found {
 		t.Fatal("GetReverse: nothing found")
 	}
-	if _, ok := rev["child"]; !ok {
+	if !holdsValue(rev, "child") {
 		t.Errorf("GetReverse = %v, want it to include 'child'", rev)
 	}
 
@@ -41,14 +41,14 @@ func TestGetForwardOnlySelfReference(t *testing.T) {
 		t.Fatal("SimpleUpdate failed")
 	}
 	row, _ = col.Get("root", "parent")
-	if len(row["root"]["parent"]) != 1 {
-		t.Errorf("root's parent set = %v, want exactly one value", row["root"]["parent"])
+	if len(row) != 1 {
+		t.Errorf("root's parent set = %v, want exactly one value", row)
 	}
-	if _, ok := row["root"]["parent"]["newparent"]; !ok {
-		t.Errorf("root's parent set = %v, want {newparent}", row["root"]["parent"])
+	if !holdsValue(row, "newparent") {
+		t.Errorf("root's parent set = %v, want {newparent}", row)
 	}
 	row, _ = col.Get("child", "parent")
-	if _, ok := row["child"]["parent"]["root"]; !ok {
-		t.Errorf("child's parent edge was clobbered: %v", row["child"]["parent"])
+	if !holdsValue(row, "root") {
+		t.Errorf("child's parent edge was clobbered: %v", row)
 	}
 }
