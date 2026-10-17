@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -175,5 +178,121 @@ func TestDryRunLeavesShardDirsAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(shard); !os.IsNotExist(err) {
 		t.Errorf("the real pass left the empty shard directory %s", shard)
+	}
+}
+
+// TestClaimExistingBeatsTheSweep: order A of the race. A dedup re-upload claims
+// the blob (stat + record under the retention lock), and the sweep still holds
+// the stale expired-set snapshot. Its re-check must skip the blob.
+func TestClaimExistingBeatsTheSweep(t *testing.T) {
+	captureLogs(t)
+	h := newTestServer(t)
+	now := time.Now().Unix()
+
+	hash := hexHash("f1")
+	writeBlob(t, h.st, hash, []byte("valuable"))
+	setExpired(t, h.st, hash, now-10)
+
+	claimed, _, err := h.st.claimExisting(hash, now+3600, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !claimed {
+		t.Fatal("claimExisting said the blob is not on disk")
+	}
+	if n := sweepStore(h.st, []string{hash}, now, false); n != 0 {
+		t.Errorf("the sweep removed %d blobs, want 0: a re-upload had just claimed them", n)
+	}
+	if !blobExists(t, h.s, hash) {
+		t.Error("a blob re-uploaded before the sweep was reaped")
+	}
+}
+
+// TestSweepFirstThenClaim: order B. The sweep deletes first, so the claim must
+// report the blob as absent — the handler then stores the body it still has —
+// and the index must not end up claiming bytes that are gone.
+func TestSweepFirstThenClaim(t *testing.T) {
+	captureLogs(t)
+	h := newTestServer(t)
+	now := time.Now().Unix()
+
+	hash := hexHash("f2")
+	writeBlob(t, h.st, hash, []byte("valuable"))
+	setExpired(t, h.st, hash, now-10)
+
+	if n := sweepStore(h.st, []string{hash}, now, false); n != 1 {
+		t.Fatalf("the sweep removed %d blobs, want 1", n)
+	}
+	claimed, _, err := h.st.claimExisting(hash, now+3600, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed {
+		t.Error("claimExisting reported a deleted blob as present")
+	}
+	h.st.retention.mu.Lock()
+	_, hasEntry := h.st.retention.entries[hash]
+	h.st.retention.mu.Unlock()
+	if hasEntry {
+		t.Error("the index claims a blob that is not on disk")
+	}
+}
+
+// TestReuploadRacingReapKeepsTheBlob is the interleaving the review asked for,
+// end to end through the HTTP handler: every round re-uploads an expired blob
+// while a reap pass runs, in whatever order the two locks happen to take. The
+// invariant is the one a client relies on — an upload that answers 200 means the
+// bytes are on disk. Before the claim, the upload could stat the blob, watch the
+// sweep delete it, record retention for bytes that were gone, and answer 200.
+func TestReuploadRacingReapKeepsTheBlob(t *testing.T) {
+	captureLogs(t)
+	h := newTestServer(t)
+
+	for round := 0; round < 60; round++ {
+		now := time.Now().Unix()
+		body := []byte(fmt.Sprintf("payload-%03d", round))
+		// The address must be the one the filehost computes, so the handler's
+		// checksum check passes when the body really has to be stored.
+		hash, err := metadata.HashReader(bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		writeBlob(t, h.st, hash, body)
+		setExpired(t, h.st, hash, now-10)
+
+		done := make(chan int, 1)
+		go func() {
+			req, err := http.NewRequest(http.MethodPut, h.hs.URL+"/upload/"+hash, bytes.NewReader(body))
+			if err != nil {
+				done <- 0
+				return
+			}
+			req.Header.Set("Tie-Retention", "1h")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				done <- 0
+				return
+			}
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			done <- resp.StatusCode
+		}()
+		h.s.reapOnce(now, false)
+		code := <-done
+
+		if code != http.StatusOK {
+			t.Fatalf("round %d: the re-upload answered %d, want 200", round, code)
+		}
+		if !blobExists(t, h.s, hash) {
+			t.Fatalf("round %d: the upload answered 200 but the blob is gone", round)
+		}
+		// And the index must agree with the disk in both directions.
+		h.st.retention.mu.Lock()
+		e, hasEntry := h.st.retention.entries[hash]
+		h.st.retention.mu.Unlock()
+		if hasEntry && e.ExpiresAt != 0 && e.ExpiresAt < now {
+			t.Fatalf("round %d: the index still says %s expired at %d after a re-upload", round, hash, e.ExpiresAt)
+		}
 	}
 }

@@ -8,6 +8,11 @@ to follow semantic versioning.
 
 ### Added
 
+- **`ReapDryRun = true` in the filehost config**: every reap pass runs the whole
+  mark phase and logs one line per blob it *would* remove (store, hash, expiry)
+  plus a `wouldRemove`/`keptReferenced` summary, deleting nothing. The reaper is
+  destructive, time-based and cross-store; this is how you check a retention
+  policy against a real store before trusting it.
 - **`tie del` chooses its shape with flags**: `del KEY VALUE1 VALUE2`,
   `del KEY --relation VALUE1`, `del KEY --all`. It also reports how many triples
   it deleted, and a failed query or write is an error rather than a message on
@@ -140,6 +145,14 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **A re-upload racing the reaper no longer loses the blob.** A dedup upload
+  checked that the bytes were on disk, and recorded their retention afterwards; a
+  reap pass running in between deleted the blob and dropped its index entry, so
+  the upload answered 200 for bytes that were gone and the triple store kept
+  triples pointing at nothing. The check and the record now happen together under
+  the retention lock the sweep already holds, so either the upload lands first
+  (the sweep's re-check skips the blob) or the sweep does (the upload sees no file
+  and stores the body it still has).
 - **One shape for every error**: `tie <command>: what went wrong`, in lower case,
   with no second `Error:` inside the message. `tie: Add Error: …` and
   `tie: Need 1 arg: tag` are gone; the command that failed is named, so a nested

@@ -31,6 +31,38 @@ type blobStore struct {
 	dirs *dirIndex
 }
 
+// claimExisting reports whether a blob is already on disk and, when it is,
+// records the upload's retention — both while holding the retention lock. The
+// reaper's sweep deletes blobs and prunes their entries under that same lock, so
+// an upload that sees the bytes present cannot have them removed before its
+// entry is written.
+//
+// Without this, a dedup re-upload racing a sweep loses data silently: the upload
+// stats the blob (present), the sweep deletes it and drops the entry, the upload
+// then records retention for bytes that are gone and answers 200 — and the
+// triple store keeps triples pointing at nothing. With the claim, either the
+// upload lands first (the entry is re-extended and the sweep's re-check skips the
+// blob) or the sweep lands first (the claim sees no file and the caller stores
+// the body, which it still has).
+//
+// When the blob is absent nothing is recorded and the caller proceeds to write
+// the body.
+func (s *blobStore) claimExisting(hash string, expiresAt int64, token string, now int64) (claimed bool, isDir bool, err error) {
+	path, err := PathFromHash(s.path, hash)
+	if err != nil {
+		return false, false, err
+	}
+	s.retention.mu.Lock()
+	defer s.retention.mu.Unlock()
+	if _, err := os.Stat(path); err != nil {
+		return false, false, nil
+	}
+	if err := s.retention.recordUploadLocked(hash, expiresAt, token, now, true); err != nil {
+		return true, false, err
+	}
+	return true, isDirBlobAt(s, hash), nil
+}
+
 // server is the filehost: its physical stores and the read cache. Handlers are
 // methods on it, so there is no package-level state to reset between tests and
 // no way for one handler to skip a step another one does — the duplication that

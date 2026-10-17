@@ -155,6 +155,26 @@ func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request, h string)
 	}
 	token := r.Header.Get("Tie-Owner")
 
+	// A claimed hash that is already on disk is a dedup re-upload. Claim it under
+	// the retention lock before touching the body, so a reap pass cannot delete
+	// these bytes between the check and the record (see blobStore.claimExisting).
+	if h != "" {
+		claimed, claimedIsDir, errClaim := st.claimExisting(h, expiresAt, token, now.Unix())
+		switch {
+		case errClaim != nil:
+			slog.Error("claiming stored blob", "store", st.name, "err", errClaim)
+			http.Error(w, "Error saving file on server: "+errClaim.Error(), http.StatusInternalServerError)
+			return
+		case claimed:
+			if claimedIsDir {
+				st.dirs.add(h)
+			}
+			slog.Info("dedup upload", "hash", h, "store", st.name)
+			fmt.Fprint(w, h)
+			return
+		}
+	}
+
 	hashHex, existed, isDir, err := putBlob(st, r.Body, h)
 	switch {
 	case errors.Is(err, errChecksumMismatch):
