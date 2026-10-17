@@ -26,7 +26,6 @@ func handlerServer(t *testing.T, maxBytes int64, reqs ...RequestInterface) *http
 	t.Helper()
 	ws := NewWebservice(WebserviceConfig{
 		DbPath:          t.TempDir(),
-		UserNamespace:   "userdata",
 		Auth:            auth.NewStore(nil, auth.RoleWrite),
 		MaxRequestBytes: maxBytes,
 	}, reqs)

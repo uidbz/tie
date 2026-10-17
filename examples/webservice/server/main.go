@@ -28,11 +28,10 @@ func main() {
 	flag.Parse()
 
 	config := webservice.WebserviceConfig{
-		ListenOn:      *addr,
-		Insecure:      *insecure,
-		CertFile:      *certFile,
-		KeyFile:       *keyFile,
-		UserNamespace: "userdata",
+		ListenOn: *addr,
+		Insecure: *insecure,
+		CertFile: *certFile,
+		KeyFile:  *keyFile,
 		Auth: auth.NewStore(
 			map[string]auth.User{"myuser": {Password: "mypassword", Role: auth.RoleWrite}},
 			auth.RoleNone,

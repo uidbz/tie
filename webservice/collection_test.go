@@ -12,9 +12,8 @@ import (
 func newTestWebservice(t *testing.T) *Webservice {
 	t.Helper()
 	return NewWebservice(WebserviceConfig{
-		DbPath:        t.TempDir(),
-		UserNamespace: "userdata",
-		Auth:          auth.NewStore(nil, auth.RoleWrite),
+		DbPath: t.TempDir(),
+		Auth:   auth.NewStore(nil, auth.RoleWrite),
 	}, nil)
 }
 

@@ -13,13 +13,6 @@ import (
 	"time"
 )
 
-// Debug and Info are thin wrappers kept for existing call sites; they forward
-// to the process slog logger (which tie-triplestore/tie-filehost point at a log file
-// plus pretty stderr). Diagnostics stay off stdout — stdout is data.
-func Debug(value string) { slog.Debug(value) }
-
-func Info(value string) { slog.Info(value) }
-
 func (ic *Collection) bufToEntry(buf [ENTRY_SIZE]byte) (level int, entryID uint64, uv *UniqueValue) {
 	var last int = SIZE_DATATYPE
 
@@ -143,7 +136,7 @@ func (t *Collection) loadDB(filename string) error {
 	}
 	defer db.Close()
 
-	Info(dbname + "Loading DB...")
+	slog.Info(dbname + " loading db...")
 
 	// A bulk load builds a large, almost-entirely-retained heap, so the default
 	// GC pace spends cycles re-scanning a live set that never shrinks. Relax the
@@ -171,7 +164,7 @@ func (t *Collection) loadDB(filename string) error {
 		return err
 	}
 
-	Info(dbname + "Loading DB: Done!")
+	slog.Info(dbname + " loading db: done")
 	return nil
 }
 

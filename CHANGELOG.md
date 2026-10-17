@@ -232,6 +232,9 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **Dead API surface removed**: `tiedb.Debug`/`tiedb.Info` (call `slog`
+  directly), `webservice.Config.UserNamespace`, `webservice.GetAccount` and the
+  `Environment.Account` field — no request type ever read them.
 - **`putlib.PutConfig.PathToWorkdir` is gone.** It wrapped the upload in
   `os.Chdir`, which is process-global: it moved the working directory out from
   under every other goroutine, a race waiting to happen once the library runs

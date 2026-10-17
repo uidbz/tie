@@ -30,12 +30,11 @@ type Webservice struct {
 }
 
 type WebserviceConfig struct {
-	ListenOn      string
-	Insecure      bool
-	CertFile      string
-	KeyFile       string
-	UserNamespace string
-	DbPath        string
+	ListenOn string
+	Insecure bool
+	CertFile string
+	KeyFile  string
+	DbPath   string
 
 	// Auth resolves each request's role from its Basic Auth credentials and gates
 	// read vs write operations. Access management is done by populating it from
@@ -248,12 +247,6 @@ func (ws *Webservice) collectionKey(namespace, collection string) (tiedb.Collect
 	return tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}, nil
 }
 
-func (ws *Webservice) GetAccount(account string) *tiedb.Collection {
-	key := tiedb.CollectionKey{Database: ws.DbPath(ws.Config.UserNamespace), Collection: account}
-
-	return ws.db.GetCollection(key)
-}
-
 // GetCollection resolves a request's collection. Write requests may create
 // it; read requests only ever look it up, and get ErrCollectionNotFound for
 // an absent one (handlers answer that like an empty collection).
@@ -364,7 +357,7 @@ func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterf
 
 	// Write requests may create the collection; reads only look it up.
 	writable := accessFor(request.GetId()) == auth.AccessWrite
-	env := &Environment{username, ws.GetAccount, func(ns, col string) (*tiedb.Collection, error) {
+	env := &Environment{username, func(ns, col string) (*tiedb.Collection, error) {
 		return ws.GetCollection(ns, col, writable)
 	}, ws}
 

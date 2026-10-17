@@ -142,7 +142,6 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		Insecure:                   cfg.Insecure,
 		CertFile:                   cfg.CertFile,
 		KeyFile:                    cfg.KeyFile,
-		UserNamespace:              "userdata",
 		DbPath:                     cfg.DbPath,
 		Auth:                       authStore,
 		ReverseRelations:           reverseRelations,

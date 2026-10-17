@@ -4,14 +4,6 @@ import (
 	ws "github.com/uidbz/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Update to 'NewName'
-3. Implement Reply and define fields in structs
-4. Update to request slice and pass to NewWebservice on server
-*/
-
 const (
 	IdUpdate = "Update"
 )
