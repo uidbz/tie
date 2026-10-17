@@ -220,7 +220,7 @@ func (tie *TieClient) executeImport(p importPlan) error {
 		if d.TiedirHash != "" {
 			// Link the DirUID to its snapshot blob so the content-addressed
 			// snapshot stays reachable from the live node.
-			batch.Add(string(uid), str(TieTiedirHash), d.TiedirHash)
+			batch.Add(string(uid), string(RelTiedirHash), d.TiedirHash)
 		}
 		if len(batch.Ops) >= flushThreshold {
 			if err := flush(); err != nil {
@@ -528,17 +528,17 @@ func (a *albumMeta) add(m metadata.Media) {
 // using Set so a re-import replaces rather than accumulates.
 func (a *albumMeta) writeOps(batch *api.Batch, uid DirUID) {
 	if a.albumSet && !a.albumMixed {
-		batch.Set(str(uid), str(TieAlbum), []string{a.album})
+		batch.Set(str(uid), string(RelAlbum), []string{a.album})
 	}
 	if a.artistSet {
 		artist := a.artist
 		if a.artistMixed {
 			artist = "Various Artists"
 		}
-		batch.Set(str(uid), str(TieArtist), []string{artist})
+		batch.Set(str(uid), string(RelArtist), []string{artist})
 	}
 	if a.year != 0 {
-		batch.Set(str(uid), str(TieYear), []string{strconv.Itoa(a.year)})
+		batch.Set(str(uid), string(RelYear), []string{strconv.Itoa(a.year)})
 	}
 }
 

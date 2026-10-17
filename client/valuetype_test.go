@@ -127,7 +127,7 @@ func TestValueTypesUnknownTypeIgnoredOnRead(t *testing.T) {
 
 	const rel = "vt-test-fromthefuture"
 	defer func() {
-		if err := tie.Set(valueTypeRegistrySubject, rel, nil); err != nil {
+		if err := tie.Set(valueTypeRegistrySubject, string(rel), nil); err != nil {
 			t.Errorf("cleanup Set: %v", err)
 		}
 		if err := tie.Sync(); err != nil {
@@ -135,7 +135,7 @@ func TestValueTypesUnknownTypeIgnoredOnRead(t *testing.T) {
 		}
 	}()
 
-	if err := tie.Set(valueTypeRegistrySubject, rel, []string{"complex128"}); err != nil {
+	if err := tie.Set(valueTypeRegistrySubject, string(rel), []string{"complex128"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := tie.Sync(); err != nil {

@@ -57,14 +57,14 @@ func TestImportDirNamesEveryNode(t *testing.T) {
 		}
 		row := rowOf(t, tc, string(uid))
 		name := filepath.Base(vpath)
-		if !RowHas(row, str(TieFilename), name) {
-			t.Errorf("%s node is not named %q: %v", vpath, name, row.Attributes[str(TieFilename)])
+		if !RowHas(row, RelFilename, name) {
+			t.Errorf("%s node is not named %q: %v", vpath, name, row.Attributes[string(RelFilename)])
 		}
-		if len(valuesOf(row, str(TieTiedirHash))) == 0 {
+		if len(valuesOf(row, string(RelTiedirHash))) == 0 {
 			t.Errorf("%s node has no tiedir snapshot link", vpath)
 		}
-		if vpath == "tie:/trees" && !RowHas(row, str(TieTypeProperty), "audio-dir") {
-			t.Errorf("%s root is not stamped audio-dir: %v", vpath, valuesOf(row, str(TieTypeProperty)))
+		if vpath == "tie:/trees" && !RowHas(row, RelType, "audio-dir") {
+			t.Errorf("%s root is not stamped audio-dir: %v", vpath, valuesOf(row, string(RelType)))
 		}
 	}
 
@@ -80,12 +80,12 @@ func TestImportDirNamesEveryNode(t *testing.T) {
 	}
 	byName := map[string]Row{}
 	for _, f := range files {
-		byName[f.Attributes[str(TieFilename)][0]] = f
+		byName[f.Attributes[string(RelFilename)][0]] = f
 	}
-	if got := valuesOf(byName["track.flac"], str(TieParent)); len(got) != 1 || got[0] != string(subUID) {
+	if got := valuesOf(byName["track.flac"], string(RelParent)); len(got) != 1 || got[0] != string(subUID) {
 		t.Errorf("track.flac parents = %v, want [%s]", got, subUID)
 	}
-	if got := valuesOf(byName["loose.flac"], str(TieParent)); len(got) != 1 || got[0] != string(rootUID) {
+	if got := valuesOf(byName["loose.flac"], string(RelParent)); len(got) != 1 || got[0] != string(rootUID) {
 		t.Errorf("loose.flac parents = %v, want [%s]", got, rootUID)
 	}
 }
@@ -130,8 +130,8 @@ func TestImportDirReconcilesAndAlbumImportDoesNot(t *testing.T) {
 	if err != nil || uid == "" {
 		t.Fatalf("tie:/albums/shared/cd1 has no node (uid=%q, err=%v)", uid, err)
 	}
-	if row := rowOf(t, tc, string(uid)); !RowHas(row, str(TieFilename), "cd1") {
-		t.Errorf("the cd1 node is not named cd1: %v", valuesOf(row, str(TieFilename)))
+	if row := rowOf(t, tc, string(uid)); !RowHas(row, RelFilename, "cd1") {
+		t.Errorf("the cd1 node is not named cd1: %v", valuesOf(row, string(RelFilename)))
 	}
 
 	// Neither group versioned away the other's file: each placed one, and both
@@ -218,8 +218,8 @@ func TestImportReportsEachItem(t *testing.T) {
 		// A reported item is a stored item.
 		row := rowOf(t, tc, hash)
 		name := filepath.Base(path)
-		if !RowHas(row, str(TieFilename), name) {
-			t.Errorf("%s reported hash %s, which is not the row for %s: %v", path, hash, name, valuesOf(row, str(TieFilename)))
+		if !RowHas(row, RelFilename, name) {
+			t.Errorf("%s reported hash %s, which is not the row for %s: %v", path, hash, name, valuesOf(row, string(RelFilename)))
 		}
 	}
 }

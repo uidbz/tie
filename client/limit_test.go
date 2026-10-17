@@ -17,13 +17,13 @@ func TestReadTieDirBeyondDefaultLimit(t *testing.T) {
 	dirUID := DirUID(fmt.Sprintf("%064x", 1))
 
 	b := tie.NewBatch()
-	b.Add(string(dirUID), str(TieTypeProperty), str(TieDirectory))
-	b.Add(string(dirUID), str(TiePath), "/big")
+	b.Add(string(dirUID), string(RelType), str(TieDirectory))
+	b.Add(string(dirUID), string(RelPath), "/big")
 	for i := 0; i < children; i++ {
 		hash := fmt.Sprintf("%064x", i+2)
-		b.Add(hash, str(TieParent), string(dirUID))
-		b.Add(hash, str(TieTypeProperty), "file")
-		b.Add(hash, str(TieFilename), fmt.Sprintf("f%04d.txt", i))
+		b.Add(hash, string(RelParent), string(dirUID))
+		b.Add(hash, string(RelType), "file")
+		b.Add(hash, string(RelFilename), fmt.Sprintf("f%04d.txt", i))
 	}
 	if _, err := tie.Batch(b); err != nil {
 		t.Fatalf("seed: %v", err)

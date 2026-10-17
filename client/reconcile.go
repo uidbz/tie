@@ -64,7 +64,7 @@ func retentionDrops(versions []childEntry, keep int) []childEntry {
 // superseded .txt would be invisible to reconciliation). Directory-marked
 // children (subdirs) and children with no recorded filename are skipped.
 func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
-	rows, _, err := tie.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Filter: str(TieParent), Expand: true})
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Filter: string(RelParent), Expand: true})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -73,13 +73,13 @@ func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 	}
 	var out []childEntry
 	for _, row := range rows {
-		if RowHas(row, str(TieTypeProperty), str(TieDirectory)) {
+		if RowHas(row, RelType, str(TieDirectory)) {
 			continue // subdir, not a file
 		}
 		// A hash can carry several filenames (identical bytes shared under
 		// different names). Pick one deterministically for display and the
 		// version location key; reconciliation itself keys on the hash.
-		names := RowValues(row, str(TieFilename))
+		names := RowValues(row, RelFilename)
 		if len(names) == 0 {
 			continue // cannot reconcile a child with no recorded name
 		}
@@ -87,7 +87,7 @@ func fileChildren(tie *TieClient, uid DirUID) ([]childEntry, error) {
 		out = append(out, childEntry{
 			Hash:     row.Key,
 			Filename: names[0],
-			TagDate:  parseTagDate(RowFirst(row, str(TieTagDate))),
+			TagDate:  parseTagDate(RowFirst(row, RelTagDate)),
 		})
 	}
 	return out, nil
@@ -102,7 +102,7 @@ func parentCount(tie *TieClient, hash string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return len(RowValues(row, str(TieParent))), nil
+	return len(RowValues(row, RelParent)), nil
 }
 
 // detachChild removes the (hash,"parent",fromDir) edge. If that was the hash's
@@ -112,7 +112,7 @@ func parentCount(tie *TieClient, hash string) (int, error) {
 // detachChild runs in the scoped client's collection.
 func detachChild(tie *TieClient, hash string, fromDir DirUID) error {
 	b := tie.NewBatch()
-	b.Delete(hash, str(TieParent), str(fromDir))
+	b.Delete(hash, string(RelParent), str(fromDir))
 	if _, err := tie.Batch(b); err != nil {
 		return err
 	}
@@ -194,19 +194,19 @@ func (tc *TieClient) RepairNames() (int, error) {
 	fixed := 0
 	b := tc.NewBatch()
 	for _, row := range rows {
-		filename := RowFirst(row, str(TieFilename))
+		filename := RowFirst(row, RelFilename)
 		if filename == "" {
 			continue
 		}
 		want := nameFromFilename(filename)
-		names := RowValues(row, str(TieName))
+		names := RowValues(row, RelName)
 		if len(names) == 1 && names[0] == want {
 			continue
 		}
 		if len(names) == 0 && want == "" {
 			continue
 		}
-		b.Set(row.Key, str(TieName), []string{want})
+		b.Set(row.Key, string(RelName), []string{want})
 		fixed++
 		if len(b.Ops) >= historyFlush {
 			if _, err := tc.Batch(b); err != nil {

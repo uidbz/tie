@@ -16,11 +16,11 @@ import (
 const typeRegistrySubject = "types"
 
 func (tie *TieClient) SetDirType(uid DirUID, dirType string) error {
-	if _, err := tie.Add(str(uid), str(TieTypeProperty), dirType); err != nil {
+	if _, err := tie.Add(str(uid), string(RelType), dirType); err != nil {
 		return err
 	}
 	if dirType != str(TieDirectory) {
-		if _, err := tie.Add(typeRegistrySubject, str(TieAll), dirType); err != nil {
+		if _, err := tie.Add(typeRegistrySubject, string(RelAll), dirType); err != nil {
 			return err
 		}
 	}
@@ -41,7 +41,7 @@ func GetDirType(tie *TieClient, uid DirUID) ([]string, error) {
 		return nil, err
 	}
 	var labels []string
-	for _, t := range RowValues(row, str(TieTypeProperty)) {
+	for _, t := range RowValues(row, RelType) {
 		if t != str(TieDirectory) {
 			labels = append(labels, t)
 		}
@@ -77,14 +77,14 @@ func SetDirTypes(tie *TieClient, uid DirUID, newLabels []string) error {
 	changed := false
 	for t := range want {
 		if !have[t] {
-			batch.Add(string(uid), str(TieTypeProperty), t)
-			batch.Add(typeRegistrySubject, str(TieAll), t)
+			batch.Add(string(uid), string(RelType), t)
+			batch.Add(typeRegistrySubject, string(RelAll), t)
 			changed = true
 		}
 	}
 	for t := range have {
 		if !want[t] {
-			batch.Delete(string(uid), str(TieTypeProperty), t)
+			batch.Delete(string(uid), string(RelType), t)
 			changed = true
 		}
 	}
@@ -107,12 +107,12 @@ func (tie *TieClient) ListDirTypes() ([]string, error) {
 	for t := TieImageDir; t <= TieDirectory; t++ {
 		set[t.String()] = true
 	}
-	rows, _, err := tie.Query(QuerySpec{Terms: []string{typeRegistrySubject}, Filter: str(TieAll)})
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{typeRegistrySubject}, Filter: string(RelAll)})
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return nil, err
 	}
 	for _, row := range rows {
-		for _, value2 := range RowValues(row, str(TieAll)) {
+		for _, value2 := range RowValues(row, RelAll) {
 			set[value2] = true
 		}
 	}

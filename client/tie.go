@@ -84,21 +84,21 @@ type QuerySpec struct {
 }
 
 // RowValues returns all values a row holds under relation, or nil.
-func RowValues(r Row, relation string) []string {
-	return r.Attributes[relation]
+func RowValues(r Row, relation Relation) []string {
+	return r.Attributes[string(relation)]
 }
 
 // RowFirst returns the first value under relation, or "" when absent.
-func RowFirst(r Row, relation string) string {
-	if v := r.Attributes[relation]; len(v) > 0 {
+func RowFirst(r Row, relation Relation) string {
+	if v := r.Attributes[string(relation)]; len(v) > 0 {
 		return v[0]
 	}
 	return ""
 }
 
 // RowHas reports whether relation holds value.
-func RowHas(r Row, relation, value string) bool {
-	for _, v := range r.Attributes[relation] {
+func RowHas(r Row, relation Relation, value string) bool {
+	for _, v := range r.Attributes[string(relation)] {
 		if v == value {
 			return true
 		}

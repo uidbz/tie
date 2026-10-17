@@ -17,7 +17,7 @@ import (
 // Writing both directions makes the relation browsable from either media item
 // with a plain forward lookup. relation must not be one of the reserved metadata
 // relations (filename, tag, parent, ...).
-func (tie *TieClient) RelateFiles(fromHash, relation, toHash string) error {
+func (tie *TieClient) RelateFiles(fromHash string, relation Relation, toHash string) error {
 	if !metadata.IsHexHash(fromHash) || !metadata.IsHexHash(toHash) {
 		return errors.New("RelateFiles: both endpoints must be content hashes")
 	}
@@ -25,8 +25,8 @@ func (tie *TieClient) RelateFiles(fromHash, relation, toHash string) error {
 		return errors.New("RelateFiles: relation must not be empty")
 	}
 	b := tie.NewBatch()
-	b.Add(fromHash, relation, toHash)
-	b.Add(toHash, relation, fromHash)
+	b.Add(fromHash, string(relation), toHash)
+	b.Add(toHash, string(relation), fromHash)
 	if _, err := tie.Batch(b); err != nil {
 		return err
 	}
@@ -50,7 +50,7 @@ func (tie *TieClient) RelationsFrom(hash string) ([]MediaRelation, error) {
 	for relation, values := range row.Attributes {
 		for _, value2 := range values {
 			if metadata.IsHexHash(value2) {
-				rels = append(rels, MediaRelation{FromHash: hash, Relation: relation, ToHash: value2})
+				rels = append(rels, MediaRelation{FromHash: hash, Relation: Relation(relation), ToHash: value2})
 			}
 		}
 	}

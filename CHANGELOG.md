@@ -232,6 +232,12 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **One vocabulary for relations.** `client.TieProperty` (the stringer-generated
+  int enum), its `tieproperty_string.go` and the `str()` helper for it are gone;
+  relations are typed string constants — `const RelTag Relation = "tag"`. Library
+  signatures that take a relation now take `Relation` (`RowValues`, `RowFirst`,
+  `RowHas`, `RelateFiles`, `MediaRelation.Relation`). **Stored data is unchanged**:
+  the constants render exactly the strings the enum produced, pinned by a test.
 - **Dead API surface removed**: `tiedb.Debug`/`tiedb.Info` (call `slog`
   directly), `webservice.Config.UserNamespace`, `webservice.GetAccount` and the
   `Environment.Account` field — no request type ever read them.

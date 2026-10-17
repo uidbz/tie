@@ -9,18 +9,24 @@ import (
 	"github.com/uidbz/tie/metadata"
 )
 
-// The client's vocabulary: the dir-type and property enums, DirUID, and the
-// shapes the rest of the package passes around — TagInfo, the directory tree
-// read shapes, TaggedFile, MediaRelation. Split out of tag.go (§7.11).
+// The client's vocabulary: the Relation constants that name every predicate the
+// client writes, the TieType enum for dir/file kinds, DirUID, and the shapes the
+// rest of the package passes around — TagInfo, the directory tree read shapes,
+// TaggedFile, MediaRelation. Split out of tag.go (§7.11).
 
 //go:generate stringer -type=TieType -linecomment
-//go:generate stringer -type=TieProperty -linecomment
 
 type TieType int
 
-type TieProperty int
-
-type TieCategory int
+// Relation names the predicate column of a triple — what is said about a
+// subject. It used to be a stringer-generated int enum (TieProperty), which
+// meant adding a relation required editing the enum and re-running go generate;
+// people added relations as bare strings instead, and the package ended up with
+// two vocabularies for the same thing (§7.10). A typed string keeps one
+// vocabulary, is the value that goes on the wire, and needs no code generation.
+// The stored strings are unchanged: these are exactly the names the enum
+// rendered.
+type Relation string
 
 type DirUID string
 
@@ -43,31 +49,34 @@ const (
 	TieFile                           // file
 )
 
+// The relations tie itself writes: the graph edges, the file facts recorded at
+// import, and the version chain. Media relations shared between the indexer and
+// the readers are in media.go.
 const (
-	TieUid          TieProperty = iota // tie-uid
-	TieFilename                        // filename
-	TieFilesize                        // filesize
-	TieName                            // name
-	TieMediaType                       // media-type
-	TieFileHost                        // filehost
-	TieTag                             // tag
-	TiePath                            // path
-	TieParent                          // parent
-	TieTags                            // tags
-	TieTagDate                         // tag-date
-	TieCollection                      // collection
-	TieTypeProperty                    // tie-type
-	TieAll                             // all
-	TieTitle                           // title
-	TieArtist                          // artist
-	TieAlbum                           // album
-	TieYear                            // year
-	TieTrack                           // track
-	TieTiedirHash                      // tiedir-hash
-	TieDirUID                          // dir-uid
-	TieVersionOf                       // version-of
-	TieVersionDate                     // version-date
-	TieFavorite                        // favorite
+	RelUID         Relation = "tie-uid"
+	RelFilename    Relation = "filename"
+	RelFilesize    Relation = "filesize"
+	RelName        Relation = "name"
+	RelMediaType   Relation = "media-type"
+	RelFileHost    Relation = "filehost"
+	RelTag         Relation = "tag"
+	RelPath        Relation = "path"
+	RelParent      Relation = "parent"
+	RelTags        Relation = "tags"
+	RelTagDate     Relation = "tag-date"
+	RelCollection  Relation = "collection"
+	RelType        Relation = "tie-type"
+	RelAll         Relation = "all"
+	RelTitle       Relation = "title"
+	RelArtist      Relation = "artist"
+	RelAlbum       Relation = "album"
+	RelYear        Relation = "year"
+	RelTrack       Relation = "track"
+	RelTiedirHash  Relation = "tiedir-hash"
+	RelDirUID      Relation = "dir-uid"
+	RelVersionOf   Relation = "version-of"
+	RelVersionDate Relation = "version-date"
+	RelFavorite    Relation = "favorite"
 )
 
 // FileURIScheme prefixes the virtual path stored in every (uid, "path", …)
@@ -241,6 +250,6 @@ type TaggedFile struct {
 // both identified by content hash (e.g. {hashA, "sampled-from", hashB}).
 type MediaRelation struct {
 	FromHash string
-	Relation string
+	Relation Relation
 	ToHash   string
 }

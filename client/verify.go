@@ -111,7 +111,7 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	var dirs []Row
 	files := fileRows
 	for _, row := range dirRows {
-		if len(RowValues(row, str(TiePath))) > 0 {
+		if len(RowValues(row, RelPath)) > 0 {
 			dirs = append(dirs, row)
 		} else {
 			files = append(files, row) // tiedir blob: a directory's content, not a node
@@ -127,7 +127,7 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	pathClaim := make(map[string][]DirUID)
 	for _, row := range dirs {
 		dirByUID[row.Key] = row
-		for _, p := range RowValues(row, str(TiePath)) {
+		for _, p := range RowValues(row, RelPath) {
 			pathClaim[p] = append(pathClaim[p], DirUID(row.Key))
 		}
 	}
@@ -141,8 +141,8 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	// Structural checks on directories.
 	for _, row := range dirs {
 		uid := row.Key
-		parents := RowValues(row, str(TieParent))
-		isRoot := RowHas(row, str(TiePath), rootPathValue)
+		parents := RowValues(row, RelParent)
+		isRoot := RowHas(row, RelPath, rootPathValue)
 
 		if !isRoot && len(parents) == 0 {
 			rep.OrphanDirs = append(rep.OrphanDirs, DirUID(uid))
@@ -161,7 +161,7 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 
 	// Structural + metadata checks on files.
 	for _, row := range files {
-		parents := RowValues(row, str(TieParent))
+		parents := RowValues(row, RelParent)
 		if len(parents) == 0 {
 			rep.OrphanFiles = append(rep.OrphanFiles, row.Key)
 		}
@@ -202,7 +202,7 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 func (tie *TieClient) allOfType(typeValue string) ([]Row, error) {
 	rows, _, err := tie.Query(QuerySpec{
 		Terms:   []string{typeValue},
-		Filter:  str(TieTypeProperty),
+		Filter:  string(RelType),
 		Reverse: true,
 		Expand:  true,
 		Limit:   -1, // no limit: verify must see the whole universe
@@ -235,25 +235,25 @@ func (rep *VerifyReport) checkDirMetadata(row Row) {
 // likewise only applied to real files, which should carry a concrete media
 // tie-type beyond the structural "file" marker.
 func (rep *VerifyReport) checkFileMetadata(row Row) {
-	isTiedir := RowHas(row, str(TieTypeProperty), str(TieDirectory)) ||
-		RowFirst(row, str(TieMediaType)) == "inode/directory"
+	isTiedir := RowHas(row, RelType, str(TieDirectory)) ||
+		RowFirst(row, RelMediaType) == "inode/directory"
 	var missing []string
-	required := []TieProperty{TieFilename, TieFilesize}
+	required := []Relation{RelFilename, RelFilesize}
 	if !isTiedir {
-		required = append(required, TieMediaType)
+		required = append(required, RelMediaType)
 	}
 	for _, rel := range required {
-		if len(RowValues(row, str(rel))) == 0 {
-			missing = append(missing, str(rel))
+		if len(RowValues(row, rel)) == 0 {
+			missing = append(missing, string(rel))
 		}
 	}
 	if !isTiedir {
 		// A real file should carry a concrete media tie-type beyond the
 		// structural "file" marker (image-file, audio-file, ...); only the
 		// marker means the type was never classified.
-		types := RowValues(row, str(TieTypeProperty))
+		types := RowValues(row, RelType)
 		if len(types) == 0 || (len(types) == 1 && types[0] == str(TieFile)) {
-			missing = append(missing, str(TieTypeProperty))
+			missing = append(missing, string(RelType))
 		}
 	}
 	if len(missing) > 0 {
@@ -268,7 +268,7 @@ func (rep *VerifyReport) checkFileMetadata(row Row) {
 func detectCycles(dirByUID map[string]Row) [][]DirUID {
 	parents := make(map[string][]string, len(dirByUID))
 	for uid, row := range dirByUID {
-		for _, p := range RowValues(row, str(TieParent)) {
+		for _, p := range RowValues(row, RelParent) {
 			if p != uid { // skip the root self-edge
 				parents[uid] = append(parents[uid], p)
 			}
@@ -449,11 +449,11 @@ func (tie *TieClient) RepairOrphans(rep *VerifyReport, destDir string) (int, err
 	batch := tie.NewBatch()
 	n := 0
 	for _, uid := range rep.OrphanDirs {
-		batch.Add(string(uid), str(TieParent), string(parentUID))
+		batch.Add(string(uid), string(RelParent), string(parentUID))
 		n++
 	}
 	for _, hash := range rep.OrphanFiles {
-		batch.Add(hash, str(TieParent), string(parentUID))
+		batch.Add(hash, string(RelParent), string(parentUID))
 		n++
 	}
 	if _, err := tie.Batch(batch); err != nil {

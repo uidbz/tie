@@ -41,7 +41,7 @@ func TestMkTieDirAllConcurrent(t *testing.T) {
 	}
 
 	for _, p := range []string{"tie:/race", "tie:/race/album", "tie:/race/album/disc1"} {
-		rows, _, err := tie.Query(QuerySpec{Terms: []string{p}, Reverse: true, Filter: str(TiePath)})
+		rows, _, err := tie.Query(QuerySpec{Terms: []string{p}, Reverse: true, Filter: string(RelPath)})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +82,7 @@ func TestMkTieDirNeedsItsParent(t *testing.T) {
 	if _, err := tie.MkTieDir("tie:/no-such-parent/child"); err == nil {
 		t.Error("creating under a missing parent succeeded")
 	}
-	rows, _, err := tie.Query(QuerySpec{Terms: []string{"tie:/no-such-parent/child"}, Reverse: true, Filter: str(TiePath)})
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{"tie:/no-such-parent/child"}, Reverse: true, Filter: string(RelPath)})
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}

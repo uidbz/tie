@@ -61,10 +61,10 @@ func TestRepairJournalOnlyRecordsAppliedOps(t *testing.T) {
 	}
 	// A blobless leftover: repair's plan is to delete its triples.
 	bare := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if _, err := tie.Add(bare, str(TieTypeProperty), str(TieFile)); err != nil {
+	if _, err := tie.Add(bare, string(RelType), str(TieFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tie.Add(bare, str(TieParent), string(root)); err != nil {
+	if _, err := tie.Add(bare, string(RelParent), string(root)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tie.Sync(); err != nil {
@@ -116,10 +116,10 @@ func TestRepairJournalIsEscapedTSV(t *testing.T) {
 		t.Fatalf("DirUIDFromPath: uid=%q err=%v", root, err)
 	}
 	bare := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if _, err := tie.Add(bare, str(TieTypeProperty), str(TieFile)); err != nil {
+	if _, err := tie.Add(bare, string(RelType), str(TieFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tie.Add(bare, str(TieParent), string(root)); err != nil {
+	if _, err := tie.Add(bare, string(RelParent), string(root)); err != nil {
 		t.Fatal(err)
 	}
 	if err := tie.Sync(); err != nil {

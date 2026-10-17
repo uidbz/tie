@@ -24,7 +24,7 @@ func (tie *TieClient) DirUIDFromPath(path string) (DirUID, error) {
 	if !strings.HasPrefix(path, FileURIScheme) {
 		path = FileURIScheme + path
 	}
-	rows, _, err := tie.Query(QuerySpec{Terms: []string{path}, Reverse: true, Filter: str(TiePath)})
+	rows, _, err := tie.Query(QuerySpec{Terms: []string{path}, Reverse: true, Filter: string(RelPath)})
 	if errors.Is(err, ErrNotFound) {
 		return "", nil // path not tied to any UID yet
 	}
@@ -78,8 +78,8 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 		return dir, errors.New("error:'" + err.Error() + "'")
 	}
 	dir.Uid = uid
-	dir.Paths = RowValues(self, str(TiePath))
-	parents := RowValues(self, str(TieParent))
+	dir.Paths = RowValues(self, RelPath)
+	parents := RowValues(self, RelParent)
 	dir.ParentUIDs = make([]DirUID, 0, len(parents))
 	for _, x := range parents {
 		dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
@@ -93,18 +93,18 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 		return dir, errors.New("error:'" + err.Error() + "'")
 	}
 	for _, row := range rows {
-		types := row.Attributes[str(TieTypeProperty)]
+		types := row.Attributes[string(RelType)]
 		switch true {
 		case slices.Contains(types, str(TieDirectory)):
 			subDir := SubDirectory{
 				Uid:      DirUID(row.Key),
-				Paths:    RowValues(row, str(TiePath)),
+				Paths:    RowValues(row, RelPath),
 				DirTypes: SliceToTieType(types),
 			}
 			dir.SubDirs = append(dir.SubDirs, subDir)
 		case containsArchiveType(types):
-			size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
-			filename := RowFirst(row, str(TieFilename))
+			size, _ := strconv.Atoi(RowFirst(row, RelFilesize))
+			filename := RowFirst(row, RelFilename)
 			if filename == "" {
 				filename = row.Key
 			}
@@ -113,7 +113,7 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 				Hash:     row.Key,
 				TieType:  archiveTypeOf(types),
 				Size:     size,
-				TagDate:  parseTagDate(RowFirst(row, str(TieTagDate))),
+				TagDate:  parseTagDate(RowFirst(row, RelTagDate)),
 			})
 		default:
 			// Any child that is neither a subdirectory nor a browsable archive is
@@ -123,8 +123,8 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 			// invisible in every listing. Since children reach a DirUID only via a
 			// parent edge (dir/archive/file), a default match cannot pick up a
 			// non-child row.
-			size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
-			filename := RowFirst(row, str(TieFilename))
+			size, _ := strconv.Atoi(RowFirst(row, RelFilesize))
+			filename := RowFirst(row, RelFilename)
 			if filename == "" {
 				filename = row.Key // fall back to the hash when no filename is recorded
 			}
@@ -132,9 +132,9 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 				Uid:       row.Key,
 				Filename:  filename,
 				TieType:   StringToTieType(strings.Join(types, ", ")),
-				MediaType: RowFirst(row, str(TieMediaType)),
+				MediaType: RowFirst(row, RelMediaType),
 				Size:      size,
-				TagDate:   parseTagDate(RowFirst(row, str(TieTagDate))),
+				TagDate:   parseTagDate(RowFirst(row, RelTagDate)),
 			}
 			dir.Files = append(dir.Files, f)
 		}
@@ -189,26 +189,26 @@ func RenameFile(tie *TieClient, hash string, oldParent, newParent DirUID, newNam
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
-	oldFilename := RowFirst(row, str(TieFilename))
-	oldName := RowFirst(row, str(TieName))
+	oldFilename := RowFirst(row, RelFilename)
+	oldName := RowFirst(row, RelName)
 
 	batch := tie.NewBatch()
 	if newName != oldFilename {
 		newBase := nameFromFilename(newName)
 		// AddOnFailure so a file that never recorded a filename (the
 		// hash-fallback case in ReadTieDir) still gets one.
-		fn := tie.NewUpdate(hash, str(TieFilename), oldFilename, newName)
+		fn := tie.NewUpdate(hash, string(RelFilename), oldFilename, newName)
 		fn.AddOnFailure = true
 		batch.Update(fn)
-		nm := tie.NewUpdate(hash, str(TieName), oldName, newBase)
+		nm := tie.NewUpdate(hash, string(RelName), oldName, newBase)
 		nm.AddOnFailure = true
 		batch.Update(nm)
 	}
 	if newParent != oldParent {
 		// parent is potentially multi-valued (same content in several dirs),
 		// so delete the specific old edge rather than blanket-updating.
-		batch.Delete(hash, str(TieParent), str(oldParent))
-		batch.Add(hash, str(TieParent), str(newParent))
+		batch.Delete(hash, string(RelParent), str(oldParent))
+		batch.Add(hash, string(RelParent), str(newParent))
 	}
 	if _, err := tie.Batch(batch); err != nil {
 		return err
@@ -229,7 +229,7 @@ func RenameDir(tie *TieClient, uid DirUID, oldPath, newPath string, oldParent, n
 	}
 
 	batch := tie.NewBatch()
-	own := tie.NewUpdate(str(uid), str(TiePath), oldPath, newPath)
+	own := tie.NewUpdate(str(uid), string(RelPath), oldPath, newPath)
 	own.AddOnFailure = true
 	batch.Update(own)
 
@@ -239,15 +239,15 @@ func RenameDir(tie *TieClient, uid DirUID, oldPath, newPath string, oldParent, n
 				continue
 			}
 			np := newPath + strings.TrimPrefix(p, oldPath)
-			du := tie.NewUpdate(str(d.Uid), str(TiePath), p, np)
+			du := tie.NewUpdate(str(d.Uid), string(RelPath), p, np)
 			du.AddOnFailure = true
 			batch.Update(du)
 		}
 	}
 
 	if newParent != oldParent {
-		batch.Delete(str(uid), str(TieParent), str(oldParent))
-		batch.Add(str(uid), str(TieParent), str(newParent))
+		batch.Delete(str(uid), string(RelParent), str(oldParent))
+		batch.Add(str(uid), string(RelParent), str(newParent))
 	}
 
 	if _, err := tie.Batch(batch); err != nil {
@@ -303,9 +303,9 @@ func DeleteDir(tie *TieClient, uid DirUID, parent DirUID) error {
 	}
 
 	batch := tie.NewBatch()
-	batch.Delete(str(uid), str(TieParent), str(parent))
+	batch.Delete(str(uid), string(RelParent), str(parent))
 	for _, p := range dir.Paths {
-		batch.Delete(str(uid), str(TiePath), p)
+		batch.Delete(str(uid), string(RelPath), p)
 	}
 	if _, err := tie.Batch(batch); err != nil {
 		return err
@@ -429,9 +429,9 @@ func (tie *TieClient) mkdir(parentUID DirUID, dirPath string, newUID DirUID) (Di
 		Path:           dirPath,
 		NewUID:         string(newUID),
 		ParentUID:      string(parentUID),
-		PathRelation:   str(TiePath),
-		ParentRelation: str(TieParent),
-		TypeRelation:   str(TieTypeProperty),
+		PathRelation:   string(RelPath),
+		ParentRelation: string(RelParent),
+		TypeRelation:   string(RelType),
 		TypeValue:      str(TieDirectory),
 	})
 	reply, err := run[api.MkDirReply](tie, request)

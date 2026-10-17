@@ -73,29 +73,29 @@ func PlaylistTracks(r Row) []string {
 
 // IsPlaylistRow reports whether r is a playlist, current or legacy.
 func IsPlaylistRow(r Row) bool {
-	return RowHas(r, str(TieTypeProperty), TypePlaylist) || isLegacyPlaylistRow(r)
+	return RowHas(r, RelType, TypePlaylist) || isLegacyPlaylistRow(r)
 }
 
 func isLegacyPlaylistRow(r Row) bool {
-	return !RowHas(r, str(TieTypeProperty), TypePlaylist) && len(RowValues(r, RelPlaylistTrack)) > 0
+	return !RowHas(r, RelType, TypePlaylist) && len(RowValues(r, RelPlaylistTrack)) > 0
 }
 
 // PlaylistFromRow parses an expanded playlist row.
 func PlaylistFromRow(r Row) Playlist {
 	p := Playlist{
 		UID:       r.Key,
-		Name:      RowFirst(r, str(TieName)),
+		Name:      RowFirst(r, RelName),
 		Tracks:    PlaylistTracks(r),
-		Tags:      RowValues(r, str(TieTag)),
+		Tags:      RowValues(r, RelTag),
 		Thumbnail: RowFirst(r, RelThumbnail),
 		Legacy:    isLegacyPlaylistRow(r),
 	}
 	if p.Name == "" {
-		p.Name = RowFirst(r, str(TieAlbum))
+		p.Name = RowFirst(r, RelAlbum)
 	}
 	p.AddedAt, _ = ParseMediaTime(RowFirst(r, RelAddedAt))
 	if p.AddedAt.IsZero() {
-		p.AddedAt, _ = ParseMediaTime(RowFirst(r, str(TieTagDate)))
+		p.AddedAt, _ = ParseMediaTime(RowFirst(r, RelTagDate))
 	}
 	p.UpdatedAt, _ = ParseMediaTime(RowFirst(r, RelUpdatedAt))
 	if p.UpdatedAt.IsZero() {
@@ -134,28 +134,28 @@ func (tc *TieClient) CreatePlaylist(name string, hashes []string, tags []string)
 	uid := newSubjectUID()
 	now := FormatMediaTime(time.Now())
 	b := tc.NewBatch()
-	b.Add(uid, str(TieTypeProperty), TypePlaylist)
-	b.Set(uid, str(TieName), []string{name})
-	b.Set(uid, str(TieAlbum), []string{name})
-	b.Set(uid, RelAddedAt, []string{now})
-	b.Set(uid, RelUpdatedAt, []string{now})
-	b.Set(uid, RelTrackCount, []string{strconv.Itoa(len(hashes))})
-	b.Set(uid, str(TieTagDate), []string{time.Now().Format(tagDateFormat)})
+	b.Add(uid, string(RelType), TypePlaylist)
+	b.Set(uid, string(RelName), []string{name})
+	b.Set(uid, string(RelAlbum), []string{name})
+	b.Set(uid, string(RelAddedAt), []string{now})
+	b.Set(uid, string(RelUpdatedAt), []string{now})
+	b.Set(uid, string(RelTrackCount), []string{strconv.Itoa(len(hashes))})
+	b.Set(uid, string(RelTagDate), []string{time.Now().Format(tagDateFormat)})
 	for _, t := range append([]string{PlaylistTag}, tags...) {
 		if t = strings.TrimSpace(t); t != "" {
-			b.Add(uid, str(TieTag), t)
-			b.Add(str(TieTags), str(TieAll), t)
+			b.Add(uid, string(RelTag), t)
+			b.Add(string(RelTags), string(RelAll), t)
 		}
 	}
 	entries := make([]string, len(hashes))
 	for i, h := range hashes {
 		entries[i] = PlaylistEntry(i, h)
 	}
-	b.Set(uid, RelPlaylistTrack, entries)
+	b.Set(uid, string(RelPlaylistTrack), entries)
 	for _, h := range distinct(hashes) {
-		b.Add(h, RelMemberOf, uid)
+		b.Add(h, string(RelMemberOf), uid)
 	}
-	b.Add(typeRegistrySubject, str(TieAll), TypePlaylist)
+	b.Add(typeRegistrySubject, string(RelAll), TypePlaylist)
 	if err := tc.EnsureMediaSchema(); err != nil {
 		return "", err
 	}
@@ -182,8 +182,8 @@ func (tc *TieClient) ReadPlaylist(uid string) (Playlist, error) {
 func (tc *TieClient) ListPlaylists() ([]Playlist, error) {
 	byUID := map[string]Playlist{}
 	for _, spec := range []QuerySpec{
-		{Terms: []string{TypePlaylist}, Filter: str(TieTypeProperty), Reverse: true, Expand: true, Limit: -1},
-		{Terms: []string{PlaylistTag}, Filter: str(TieTag), Reverse: true, Expand: true, Limit: -1},
+		{Terms: []string{TypePlaylist}, Filter: string(RelType), Reverse: true, Expand: true, Limit: -1},
+		{Terms: []string{PlaylistTag}, Filter: string(RelTag), Reverse: true, Expand: true, Limit: -1},
 	} {
 		rows, _, err := tc.Query(spec)
 		if err != nil && !errors.Is(err, ErrNotFound) {
@@ -225,9 +225,9 @@ func (tc *TieClient) SetPlaylistTracks(uid string, hashes []string) error {
 	for i, h := range hashes {
 		entries[i] = PlaylistEntry(i, h)
 	}
-	b.Set(uid, RelPlaylistTrack, entries)
-	b.Set(uid, RelTrackCount, []string{strconv.Itoa(len(hashes))})
-	b.Set(uid, RelUpdatedAt, []string{FormatMediaTime(time.Now())})
+	b.Set(uid, string(RelPlaylistTrack), entries)
+	b.Set(uid, string(RelTrackCount), []string{strconv.Itoa(len(hashes))})
+	b.Set(uid, string(RelUpdatedAt), []string{FormatMediaTime(time.Now())})
 	want := map[string]bool{}
 	for _, h := range distinct(hashes) {
 		want[h] = true
@@ -236,12 +236,12 @@ func (tc *TieClient) SetPlaylistTracks(uid string, hashes []string) error {
 	for _, h := range distinct(p.Tracks) {
 		had[h] = true
 		if !want[h] {
-			b.Delete(h, RelMemberOf, uid)
+			b.Delete(h, string(RelMemberOf), uid)
 		}
 	}
 	for h := range want {
 		if !had[h] {
-			b.Add(h, RelMemberOf, uid)
+			b.Add(h, string(RelMemberOf), uid)
 		}
 	}
 	if _, err := tc.Batch(b); err != nil {
@@ -260,9 +260,9 @@ func (tc *TieClient) RenamePlaylist(uid, name string) error {
 		return err
 	}
 	b := tc.NewBatch()
-	b.Set(uid, str(TieName), []string{name})
-	b.Set(uid, str(TieAlbum), []string{name})
-	b.Set(uid, RelUpdatedAt, []string{FormatMediaTime(time.Now())})
+	b.Set(uid, string(RelName), []string{name})
+	b.Set(uid, string(RelAlbum), []string{name})
+	b.Set(uid, string(RelUpdatedAt), []string{FormatMediaTime(time.Now())})
 	_, err := tc.Batch(b)
 	return err
 }
@@ -279,14 +279,14 @@ func (tc *TieClient) DeletePlaylist(uid string) error {
 	}
 	b := tc.NewBatch()
 	for _, h := range distinct(PlaylistTracks(r)) {
-		b.Delete(h, RelMemberOf, uid)
+		b.Delete(h, string(RelMemberOf), uid)
 		if isLegacyPlaylistRow(r) {
-			b.Delete(h, str(TieParent), uid)
+			b.Delete(h, string(RelParent), uid)
 		}
 	}
 	for rel, vals := range r.Attributes {
 		for _, v := range vals {
-			b.Delete(uid, rel, v)
+			b.Delete(uid, string(rel), v)
 		}
 	}
 	if _, err := tc.Batch(b); err != nil {
@@ -325,24 +325,24 @@ func (tc *TieClient) migratePlaylists(legacy []Playlist) (int, error) {
 	for _, p := range legacy {
 		uid := p.UID
 		for _, h := range distinct(p.Tracks) {
-			b.Delete(h, str(TieParent), uid)
-			b.Add(h, RelMemberOf, uid)
+			b.Delete(h, string(RelParent), uid)
+			b.Add(h, string(RelMemberOf), uid)
 		}
-		b.Delete(uid, str(TieTypeProperty), str(TieAudioDir))
-		b.Delete(uid, str(TieTypeProperty), str(TieDirectory))
-		b.Add(uid, str(TieTypeProperty), TypePlaylist)
+		b.Delete(uid, string(RelType), str(TieAudioDir))
+		b.Delete(uid, string(RelType), str(TieDirectory))
+		b.Add(uid, string(RelType), TypePlaylist)
 		added := p.AddedAt
 		if added.IsZero() {
 			added = time.Now()
 		}
-		b.Set(uid, RelAddedAt, []string{FormatMediaTime(added)})
+		b.Set(uid, string(RelAddedAt), []string{FormatMediaTime(added)})
 		updated := p.UpdatedAt
 		if updated.IsZero() {
 			updated = added
 		}
-		b.Set(uid, RelUpdatedAt, []string{FormatMediaTime(updated)})
-		b.Set(uid, RelTrackCount, []string{strconv.Itoa(len(p.Tracks))})
-		b.Set(uid, str(TieFilesize), nil) // legacy abused filesize as the track count
+		b.Set(uid, string(RelUpdatedAt), []string{FormatMediaTime(updated)})
+		b.Set(uid, string(RelTrackCount), []string{strconv.Itoa(len(p.Tracks))})
+		b.Set(uid, string(RelFilesize), nil) // legacy abused filesize as the track count
 		if len(b.Ops) >= historyFlush {
 			if _, err := tc.Batch(b); err != nil {
 				return 0, err
@@ -350,7 +350,7 @@ func (tc *TieClient) migratePlaylists(legacy []Playlist) (int, error) {
 			b = tc.NewBatch()
 		}
 	}
-	b.Add(typeRegistrySubject, str(TieAll), TypePlaylist)
+	b.Add(typeRegistrySubject, string(RelAll), TypePlaylist)
 	if _, err := tc.Batch(b); err != nil {
 		return 0, fmt.Errorf("migrate playlists: %w", err)
 	}

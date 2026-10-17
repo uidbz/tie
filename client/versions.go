@@ -77,15 +77,15 @@ func supersedeToPrev(tc *TieClient, parentUID DirUID, name, oldHash string) erro
 	//    parent edge.
 	b := prev.NewBatch()
 	for relation, values := range oldRow.Attributes {
-		if relation == str(TieParent) {
+		if relation == string(RelParent) {
 			continue
 		}
 		for _, v := range values {
 			b.Add(oldHash, relation, v)
 		}
 	}
-	b.Add(oldHash, str(TieVersionOf), locKey)
-	b.Set(oldHash, str(TieVersionDate), []string{time.Now().Format(tagDateFormat)})
+	b.Add(oldHash, string(RelVersionOf), locKey)
+	b.Set(oldHash, string(RelVersionDate), []string{time.Now().Format(tagDateFormat)})
 	if _, err := prev.Batch(b); err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func supersedeToPrev(tc *TieClient, parentUID DirUID, name, oldHash string) erro
 func listVersionRecords(prev *TieClient, locKey string) ([]childEntry, error) {
 	rows, _, err := prev.Query(QuerySpec{
 		Terms:   []string{locKey},
-		Filter:  str(TieVersionOf),
+		Filter:  string(RelVersionOf),
 		Reverse: true,
 		Expand:  true,
 	})
@@ -124,8 +124,8 @@ func listVersionRecords(prev *TieClient, locKey string) ([]childEntry, error) {
 	for _, row := range rows {
 		out = append(out, childEntry{
 			Hash:     row.Key,
-			Filename: RowFirst(row, str(TieFilename)),
-			TagDate:  parseTagDate(RowFirst(row, str(TieVersionDate))),
+			Filename: RowFirst(row, RelFilename),
+			TagDate:  parseTagDate(RowFirst(row, RelVersionDate)),
 		})
 	}
 	return out, nil
@@ -153,7 +153,7 @@ func trimVersions(prev *TieClient, locKey string, keep int) error {
 // stay intact. This mirrors detachChild's shared-content guard, for version-of.
 func dropVersion(prev *TieClient, hash, locKey string) error {
 	edge := prev.NewBatch()
-	edge.Delete(hash, str(TieVersionOf), locKey)
+	edge.Delete(hash, string(RelVersionOf), locKey)
 	if _, err := prev.Batch(edge); err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func dropVersion(prev *TieClient, hash, locKey string) error {
 	if err != nil {
 		return err
 	}
-	if len(RowValues(row, str(TieVersionOf))) > 0 {
+	if len(RowValues(row, RelVersionOf)) > 0 {
 		return nil // still a version of another location; keep its metadata
 	}
 	meta := prev.NewBatch()
@@ -213,7 +213,7 @@ func (tc *TieClient) ListVersions(virtualPath string) ([]VersionInfo, error) {
 	}
 	rows, _, err := tc.In(tc.prevCollectionFor("")).Query(QuerySpec{
 		Terms:   []string{versionLocKey(parentUID, name)},
-		Filter:  str(TieVersionOf),
+		Filter:  string(RelVersionOf),
 		Reverse: true,
 		Expand:  true,
 	})
@@ -225,13 +225,13 @@ func (tc *TieClient) ListVersions(virtualPath string) ([]VersionInfo, error) {
 	}
 	out := make([]VersionInfo, 0, len(rows))
 	for _, row := range rows {
-		size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
+		size, _ := strconv.Atoi(RowFirst(row, RelFilesize))
 		out = append(out, VersionInfo{
 			Hash:     row.Key,
-			Filename: RowFirst(row, str(TieFilename)),
+			Filename: RowFirst(row, RelFilename),
 			Size:     size,
-			TieType:  StringToTieType(RowFirst(row, str(TieTypeProperty))),
-			Date:     parseTagDate(RowFirst(row, str(TieVersionDate))),
+			TieType:  StringToTieType(RowFirst(row, RelType)),
+			Date:     parseTagDate(RowFirst(row, RelVersionDate)),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -307,17 +307,17 @@ func (tc *TieClient) RestoreVersion(virtualPath, versionHash string) (string, er
 	}
 	b := tc.NewBatch()
 	for relation, values := range prevRow.Attributes {
-		if relation == str(TieVersionOf) || relation == str(TieVersionDate) {
+		if relation == string(RelVersionOf) || relation == string(RelVersionDate) {
 			continue
 		}
 		for _, v := range values {
 			b.Add(target, relation, v)
-			if relation == str(TieTag) {
-				b.Add(str(TieTags), str(TieAll), v) // keep the tag registry consistent
+			if relation == string(RelTag) {
+				b.Add(string(RelTags), string(RelAll), v) // keep the tag registry consistent
 			}
 		}
 	}
-	b.Add(target, str(TieParent), str(parentUID))
+	b.Add(target, string(RelParent), str(parentUID))
 	if _, err := tc.Batch(b); err != nil {
 		return "", err
 	}

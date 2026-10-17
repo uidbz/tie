@@ -35,13 +35,13 @@ func TestRepairNames(t *testing.T) {
 	tie := NewTieClient(TestingConfig())
 	requireServer(t, tie)
 	const subj = "repairnames-map-mp3"
-	if _, err := tie.Add(subj, str(TieTypeProperty), str(TieFile)); err != nil {
+	if _, err := tie.Add(subj, string(RelType), str(TieFile)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tie.Add(subj, str(TieFilename), "map.mp3"); err != nil {
+	if _, err := tie.Add(subj, string(RelFilename), "map.mp3"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tie.Add(subj, str(TieName), "ma"); err != nil { // the old corruption
+	if _, err := tie.Add(subj, string(RelName), "ma"); err != nil { // the old corruption
 		t.Fatal(err)
 	}
 	if err := tie.Sync(); err != nil {
@@ -54,7 +54,7 @@ func TestRepairNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := RowValues(row, str(TieName))
+	names := RowValues(row, RelName)
 	if len(names) != 1 || names[0] != "map" {
 		t.Errorf("name after repair = %v, want [map]", names)
 	}

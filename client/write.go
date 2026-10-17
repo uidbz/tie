@@ -89,13 +89,13 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, parent DirUID, name, s
 	// skipping the fields recomputed above (and parent, written by appendTagOps).
 	if hasOld {
 		recomputed := map[string]bool{
-			str(TieFilename):     true,
-			str(TieName):         true,
-			str(TieFilesize):     true,
-			str(TieTagDate):      true,
-			str(TieMediaType):    true,
-			str(TieTypeProperty): true,
-			str(TieParent):       true,
+			string(RelFilename):  true,
+			string(RelName):      true,
+			string(RelFilesize):  true,
+			string(RelTagDate):   true,
+			string(RelMediaType): true,
+			string(RelType):      true,
+			string(RelParent):    true,
 		}
 		oldRow, err := tc.Get(oldHash)
 		if err != nil && !errors.Is(err, ErrNotFound) {
@@ -107,8 +107,8 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, parent DirUID, name, s
 			}
 			for _, v := range values {
 				batch.Add(newHash, relation, v)
-				if relation == str(TieTag) {
-					batch.Add(str(TieTags), str(TieAll), v) // keep the tag registry consistent
+				if relation == string(RelTag) {
+					batch.Add(string(RelTags), string(RelAll), v) // keep the tag registry consistent
 				}
 			}
 		}

@@ -82,7 +82,7 @@ func (tc *TieClient) ValueTypes() (map[string]ValueType, error) {
 	}
 	types := make(map[string]ValueType, len(row.Attributes))
 	for relation := range row.Attributes {
-		t := ValueType(RowFirst(row, relation))
+		t := ValueType(RowFirst(row, Relation(relation)))
 		if !t.Valid() {
 			continue
 		}

@@ -142,7 +142,7 @@ func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*Repair
 		if err != nil {
 			continue // raced away; the final verify will report what's left
 		}
-		if RowHas(row, str(TieTypeProperty), str(TieDirectory)) && len(RowValues(row, str(TiePath))) == 0 {
+		if RowHas(row, RelType, str(TieDirectory)) && len(RowValues(row, RelPath)) == 0 {
 			r.ghosts[gap.Subject] = true
 		} else {
 			files = append(files, gap)
@@ -259,11 +259,11 @@ func (r *repairSession) progress(format string, args ...any) {
 // reparentOps drops child's edge to the dead parent and adds one to the
 // nearest live ancestor (or the DEST placeholder).
 func (r *repairSession) reparentOps(child, parent string) []RepairOp {
-	ops := []RepairOp{{api.BatchDelete, child, str(TieParent), parent, "dangling ref"}}
+	ops := []RepairOp{{api.BatchDelete, child, string(RelParent), parent, "dangling ref"}}
 	if anc := r.nearestLiveAncestor(parent, child); anc != "" && anc != child {
-		ops = append(ops, RepairOp{api.BatchAdd, child, str(TieParent), anc, "re-parent to live ancestor of " + short(parent)})
+		ops = append(ops, RepairOp{api.BatchAdd, child, string(RelParent), anc, "re-parent to live ancestor of " + short(parent)})
 	} else {
-		ops = append(ops, RepairOp{api.BatchAdd, child, str(TieParent), "DEST", "re-parent to " + r.opts.Dest + " (no live ancestor)"})
+		ops = append(ops, RepairOp{api.BatchAdd, child, string(RelParent), "DEST", "re-parent to " + r.opts.Dest + " (no live ancestor)"})
 	}
 	return ops
 }
@@ -272,13 +272,13 @@ func (r *repairSession) reparentOps(child, parent string) []RepairOp {
 // universe Verify partitions on).
 func (r *repairSession) loadLiveDirs() error {
 	rows, _, err := r.tie.Query(QuerySpec{
-		Terms: []string{str(TieDirectory)}, Filter: str(TieTypeProperty), Reverse: true, Expand: true, Limit: -1,
+		Terms: []string{str(TieDirectory)}, Filter: string(RelType), Reverse: true, Expand: true, Limit: -1,
 	})
 	if err != nil && err != ErrNotFound {
 		return err
 	}
 	for _, row := range rows {
-		if len(RowValues(row, str(TiePath))) > 0 {
+		if len(RowValues(row, RelPath)) > 0 {
 			r.liveDir[row.Key] = true
 		}
 	}
@@ -288,17 +288,17 @@ func (r *repairSession) loadLiveDirs() error {
 // fileLike reports whether a row carries the metadata of a real file (as
 // opposed to a ghost node, which holds structural triples at most).
 func fileLike(row Row) bool {
-	return len(RowValues(row, str(TieFilename))) > 0 ||
-		len(RowValues(row, str(TieName))) > 0 ||
-		len(RowValues(row, str(TieFilesize))) > 0 ||
-		len(RowValues(row, str(TieMediaType))) > 0 ||
-		RowHas(row, str(TieTypeProperty), str(TieFile))
+	return len(RowValues(row, RelFilename)) > 0 ||
+		len(RowValues(row, RelName)) > 0 ||
+		len(RowValues(row, RelFilesize)) > 0 ||
+		len(RowValues(row, RelMediaType)) > 0 ||
+		RowHas(row, RelType, str(TieFile))
 }
 
 // childrenOf returns the keys of every node with a parent edge to uid.
 func (r *repairSession) childrenOf(uid string) []string {
 	rows, _, err := r.tie.Query(QuerySpec{
-		Terms: []string{uid}, Filter: str(TieParent), Reverse: true, Limit: -1,
+		Terms: []string{uid}, Filter: string(RelParent), Reverse: true, Limit: -1,
 	})
 	if err != nil {
 		return nil
@@ -334,7 +334,7 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 		if err != nil {
 			break
 		}
-		cur = RowFirst(row, str(TieParent))
+		cur = RowFirst(row, RelParent)
 	}
 	r.ancestor[uid] = ""
 	return ""
@@ -345,7 +345,7 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 // ghost.
 func (r *repairSession) noTiedirRefs(uid string) bool {
 	rows, _, err := r.tie.Query(QuerySpec{
-		Terms: []string{uid}, Filter: str(TieTiedirHash), Reverse: true, Limit: -1,
+		Terms: []string{uid}, Filter: string(RelTiedirHash), Reverse: true, Limit: -1,
 	})
 	if err == nil && len(rows) > 0 {
 		r.protected[uid] = true
@@ -382,8 +382,8 @@ func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
 	if err != nil {
 		return nil, err
 	}
-	filename := RowFirst(row, str(TieFilename))
-	name := RowFirst(row, str(TieName))
+	filename := RowFirst(row, RelFilename)
+	name := RowFirst(row, RelName)
 
 	exists, size, err := r.statBlob(subject)
 	if err != nil {
@@ -395,13 +395,13 @@ func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
 	}
 
 	var ops []RepairOp
-	if len(RowValues(row, str(TieFilesize))) == 0 {
-		ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieFilesize), strconv.FormatInt(size, 10), "size from blob HEAD"})
+	if len(RowValues(row, RelFilesize)) == 0 {
+		ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelFilesize), strconv.FormatInt(size, 10), "size from blob HEAD"})
 	}
-	needMedia := len(RowValues(row, str(TieMediaType))) == 0
+	needMedia := len(RowValues(row, RelMediaType)) == 0
 	// Mirror Verify's rule: a real file needs a concrete media tie-type beyond
 	// the structural "file" marker.
-	types := RowValues(row, str(TieTypeProperty))
+	types := RowValues(row, RelType)
 	needType := len(types) == 0 || (len(types) == 1 && types[0] == str(TieFile))
 	var mediaType string
 	if needMedia || needType {
@@ -418,17 +418,17 @@ func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
 			return nil, err
 		}
 		if needMedia {
-			ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieMediaType), mediaType, "sniffed from blob"})
+			ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelMediaType), mediaType, "sniffed from blob"})
 		}
 		if needType {
-			ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieTypeProperty), tieType.String(), "sniffed from blob"})
+			ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelType), tieType.String(), "sniffed from blob"})
 		}
 	}
 	if filename == "" && name != "" {
 		if mediaType == "" {
-			mediaType = RowFirst(row, str(TieMediaType))
+			mediaType = RowFirst(row, RelMediaType)
 		}
-		ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieFilename), name + extFor(mediaType), "reconstructed from name"})
+		ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelFilename), name + extFor(mediaType), "reconstructed from name"})
 	}
 	return ops, nil
 }

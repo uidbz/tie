@@ -32,77 +32,74 @@ func appendTagOps(batch *api.Batch, info TagInfo) {
 	filename := filepath.Base(info.File)
 	hash := info.Hash
 	name := nameFromFilename(filename) // Remove extension
-	batch.Add(hash, str(TieFilename), filename)
-	batch.Add(hash, str(TieName), name)
-	batch.Add(hash, str(TieMediaType), info.MediaType)
-	batch.Add(hash, str(TieTypeProperty), str(info.TieType))
-	batch.Add(hash, str(TieFilesize), strconv.Itoa(info.Size))
+	batch.Add(hash, string(RelFilename), filename)
+	batch.Add(hash, string(RelName), name)
+	batch.Add(hash, string(RelMediaType), info.MediaType)
+	batch.Add(hash, string(RelType), str(info.TieType))
+	batch.Add(hash, string(RelFilesize), strconv.Itoa(info.Size))
 	// tag-date is single-valued (the last import time). Re-tagging the same hash
 	// must not accumulate dates, so replace the whole relation in one op.
-	batch.Set(hash, str(TieTagDate), []string{time.Now().Format(tagDateFormat)})
+	batch.Set(hash, string(RelTagDate), []string{time.Now().Format(tagDateFormat)})
 	for _, tag := range info.Tags {
 		if len(tag) > 0 {
 			if tag[0] == '-' {
-				batch.Delete(hash, str(TieTag), tag[1:])
+				batch.Delete(hash, string(RelTag), tag[1:])
 			} else {
-				batch.Add(hash, str(TieTag), tag)
-				batch.Add(str(TieTags), str(TieAll), tag)
+				batch.Add(hash, string(RelTag), tag)
+				batch.Add(string(RelTags), string(RelAll), tag)
 			}
 		}
 	}
 	if info.Metadata.Title != "" {
-		batch.Add(hash, str(TieTitle), info.Metadata.Title)
+		batch.Add(hash, string(RelTitle), info.Metadata.Title)
 	}
 	if info.Metadata.Artist != "" {
-		batch.Add(hash, str(TieArtist), info.Metadata.Artist)
+		batch.Add(hash, string(RelArtist), info.Metadata.Artist)
 	}
-	// Album artist (e.g. "Various Artists"). Written under a raw "album-artist"
-	// property so no stringer-backed TieProperty enum value has to be
-	// regenerated (same approach as "duration" below).
+	// Album artist (e.g. "Various Artists").
 	if info.Metadata.AlbumArtist != "" {
-		batch.Add(hash, "album-artist", info.Metadata.AlbumArtist)
+		batch.Add(hash, string(RelAlbumArtist), info.Metadata.AlbumArtist)
 	}
 	if info.Metadata.Album != "" {
-		batch.Add(hash, str(TieAlbum), info.Metadata.Album)
+		batch.Add(hash, string(RelAlbum), info.Metadata.Album)
 	}
 	if info.Metadata.Year != 0 {
-		batch.Add(hash, str(TieYear), strconv.Itoa(info.Metadata.Year))
+		batch.Add(hash, string(RelYear), strconv.Itoa(info.Metadata.Year))
 	}
 	if info.Metadata.Track != 0 {
-		batch.Add(hash, str(TieTrack), strconv.Itoa(info.Metadata.Track))
+		batch.Add(hash, string(RelTrack), strconv.Itoa(info.Metadata.Track))
 	}
 	// Media-vocabulary fields (media.go). Set, so a re-tag replaces values
 	// instead of accumulating a stale disc number or genre spelling.
 	if info.Metadata.TrackTotal != 0 {
-		batch.Set(hash, RelTrackTotal, []string{strconv.Itoa(info.Metadata.TrackTotal)})
+		batch.Set(hash, string(RelTrackTotal), []string{strconv.Itoa(info.Metadata.TrackTotal)})
 	}
 	if info.Metadata.Disc != 0 {
-		batch.Set(hash, RelDisc, []string{strconv.Itoa(info.Metadata.Disc)})
+		batch.Set(hash, string(RelDisc), []string{strconv.Itoa(info.Metadata.Disc)})
 	}
 	if info.Metadata.DiscTotal != 0 {
-		batch.Set(hash, RelDiscTotal, []string{strconv.Itoa(info.Metadata.DiscTotal)})
+		batch.Set(hash, string(RelDiscTotal), []string{strconv.Itoa(info.Metadata.DiscTotal)})
 	}
 	if g := SplitGenres(info.Metadata.Genre); len(g) > 0 {
-		batch.Set(hash, RelGenre, g)
+		batch.Set(hash, string(RelGenre), g)
 	}
 	if info.Metadata.Composer != "" {
-		batch.Set(hash, RelComposer, []string{info.Metadata.Composer})
+		batch.Set(hash, string(RelComposer), []string{info.Metadata.Composer})
 	}
 	if info.TieType == TieAudioFile {
-		batch.Set(hash, RelMetaVersion, []string{MetaVersion})
+		batch.Set(hash, string(RelMetaVersion), []string{MetaVersion})
 	}
-	// Audio playing time in seconds. Written under a raw "duration" property so
-	// no stringer-backed TieProperty enum value has to be regenerated.
+	// Audio playing time in seconds.
 	if info.Metadata.Duration > 0 {
-		batch.Add(hash, "duration", strconv.FormatFloat(info.Metadata.Duration, 'f', 3, 64))
+		batch.Add(hash, string(RelDuration), strconv.FormatFloat(info.Metadata.Duration, 'f', 3, 64))
 	}
 	if info.IsDir {
-		batch.Add(hash, str(TieTypeProperty), str(TieDirectory))
+		batch.Add(hash, string(RelType), str(TieDirectory))
 	} else {
-		batch.Add(hash, str(TieTypeProperty), str(TieFile))
+		batch.Add(hash, string(RelType), str(TieFile))
 	}
 	if info.Directory != "" {
-		batch.Add(hash, str(TieParent), str(info.Directory))
+		batch.Add(hash, string(RelParent), str(info.Directory))
 	}
 }
 
@@ -110,19 +107,19 @@ func appendTagOps(batch *api.Batch, info TagInfo) {
 // without sending. The semantics are described on appendTagDirOps' callers;
 // ImportDir reuses one batch across many directories to cut round-trips.
 func appendTagDirOps(batch *api.Batch, uid DirUID, dirname string, size int, tags []string) {
-	batch.Add(str(uid), str(TieFilename), dirname)
-	batch.Add(str(uid), str(TieName), dirname)
-	batch.Add(str(uid), str(TieFilesize), strconv.Itoa(size))
+	batch.Add(str(uid), string(RelFilename), dirname)
+	batch.Add(str(uid), string(RelName), dirname)
+	batch.Add(str(uid), string(RelFilesize), strconv.Itoa(size))
 	// tag-date is single-valued; replace the whole relation so re-import does not
 	// accumulate dates on the DirUID.
-	batch.Set(str(uid), str(TieTagDate), []string{time.Now().Format(tagDateFormat)})
+	batch.Set(str(uid), string(RelTagDate), []string{time.Now().Format(tagDateFormat)})
 	for _, tag := range tags {
 		if len(tag) > 0 {
 			if tag[0] == '-' {
-				batch.Delete(str(uid), str(TieTag), tag[1:])
+				batch.Delete(str(uid), string(RelTag), tag[1:])
 			} else {
-				batch.Add(str(uid), str(TieTag), tag)
-				batch.Add(str(TieTags), str(TieAll), tag)
+				batch.Add(str(uid), string(RelTag), tag)
+				batch.Add(string(RelTags), string(RelAll), tag)
 			}
 		}
 	}
@@ -139,7 +136,7 @@ func GetTags(tie *TieClient, hash string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	tags := RowValues(row, str(TieTag))
+	tags := RowValues(row, RelTag)
 	sort.Strings(tags)
 	return tags, nil
 }
@@ -173,14 +170,14 @@ func SetTags(tie *TieClient, hash string, newTags []string) error {
 	changed := false
 	for t := range want {
 		if !have[t] {
-			batch.Add(hash, str(TieTag), t)
-			batch.Add(str(TieTags), str(TieAll), t)
+			batch.Add(hash, string(RelTag), t)
+			batch.Add(string(RelTags), string(RelAll), t)
 			changed = true
 		}
 	}
 	for t := range have {
 		if !want[t] {
-			batch.Delete(hash, str(TieTag), t)
+			batch.Delete(hash, string(RelTag), t)
 			changed = true
 		}
 	}
@@ -199,8 +196,8 @@ func SetTags(tie *TieClient, hash string, newTags []string) error {
 // total number of tags before pagination.
 func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
 	rows, total, err := tie.Query(QuerySpec{
-		Terms:  []string{str(TieTags)},
-		Filter: str(TieAll),
+		Terms:  []string{string(RelTags)},
+		Filter: string(RelAll),
 		Offset: offset,
 		Limit:  limit,
 	})
@@ -212,7 +209,7 @@ func (tie *TieClient) ListTags(offset, limit int) ([]string, int, error) {
 	}
 	var tags []string
 	for _, row := range rows {
-		tags = append(tags, RowValues(row, str(TieAll))...)
+		tags = append(tags, RowValues(row, RelAll)...)
 	}
 	return tags, total, nil
 }
@@ -230,7 +227,7 @@ const tagBatchChunk = 1000
 func (tie *TieClient) taggedSubjects(tag string) ([]string, error) {
 	rows, _, err := tie.Query(QuerySpec{
 		Terms:   []string{tag},
-		Filter:  str(TieTag),
+		Filter:  string(RelTag),
 		Reverse: true,
 		Limit:   -1,
 	})
@@ -256,7 +253,7 @@ func (tie *TieClient) RegisterTag(tag string) error {
 	if tag == "" {
 		return errors.New("RegisterTag: tag must not be empty")
 	}
-	if _, err := tie.Add(str(TieTags), str(TieAll), tag); err != nil {
+	if _, err := tie.Add(string(RelTags), string(RelAll), tag); err != nil {
 		return err
 	}
 	return nil
@@ -282,14 +279,14 @@ func (tie *TieClient) DeleteTag(tag string) (int, error) {
 		end := min(i+tagBatchChunk, len(subjects))
 		b := tie.NewBatch()
 		for _, subject := range subjects[i:end] {
-			b.Delete(subject, str(TieTag), tag)
+			b.Delete(subject, string(RelTag), tag)
 		}
 		if _, err := tie.Batch(b); err != nil {
 			return 0, err
 		}
 	}
 	reg := tie.NewBatch()
-	reg.Delete(str(TieTags), str(TieAll), tag)
+	reg.Delete(string(RelTags), string(RelAll), tag)
 	if _, err := tie.Batch(reg); err != nil {
 		return 0, err
 	}
@@ -323,16 +320,16 @@ func (tie *TieClient) RenameTag(oldTag, newTag string) (int, error) {
 		for _, subject := range subjects[i:end] {
 			// A batch runs deletes before adds; oldTag and newTag differ, so
 			// there is no self-conflict on a subject.
-			b.Delete(subject, str(TieTag), oldTag)
-			b.Add(subject, str(TieTag), newTag)
+			b.Delete(subject, string(RelTag), oldTag)
+			b.Add(subject, string(RelTag), newTag)
 		}
 		if _, err := tie.Batch(b); err != nil {
 			return 0, err
 		}
 	}
 	reg := tie.NewBatch()
-	reg.Delete(str(TieTags), str(TieAll), oldTag)
-	reg.Add(str(TieTags), str(TieAll), newTag)
+	reg.Delete(string(RelTags), string(RelAll), oldTag)
+	reg.Add(string(RelTags), string(RelAll), newTag)
 	if _, err := tie.Batch(reg); err != nil {
 		return 0, err
 	}
@@ -364,7 +361,7 @@ func (tie *TieClient) FilesWithTags(scope string, include, exclude []string, off
 		Terms:   include,
 		Exclude: exclude,
 		Scope:   scope,
-		Filter:  str(TieTag),
+		Filter:  string(RelTag),
 		Reverse: true,
 		Expand:  true,
 		Offset:  offset,
@@ -390,7 +387,7 @@ func (tie *TieClient) FilesWithTags(scope string, include, exclude []string, off
 func (tie *TieClient) filesOfType(scope string, offset, limit int) ([]TaggedFile, int, error) {
 	rows, total, err := tie.Query(QuerySpec{
 		Terms:   []string{scope},
-		Filter:  str(TieTypeProperty),
+		Filter:  string(RelType),
 		Reverse: true,
 		Expand:  true,
 		Offset:  offset,
@@ -474,8 +471,8 @@ func (tie *TieClient) UntaggedFiles(scope string, offset, limit int) ([]TaggedFi
 func (tie *TieClient) untaggedOfType(scope string, offset, limit int) ([]TaggedFile, int, error) {
 	rows, total, err := tie.Query(QuerySpec{
 		Terms:           []string{scope},
-		Filter:          str(TieTypeProperty),
-		MissingRelation: str(TieTag),
+		Filter:          string(RelType),
+		MissingRelation: string(RelTag),
 		Reverse:         true,
 		Expand:          true,
 		Offset:          offset,
@@ -496,13 +493,13 @@ func (tie *TieClient) untaggedOfType(scope string, offset, limit int) ([]TaggedF
 
 // taggedFileFrom builds a TaggedFile from a hash and its next-level metadata,
 // falling back to the hash as the display name when no filename is recorded.
-// For directories, tries TieFilename first, then TiePath (for DirUIDs), extracting
+// For directories, tries RelFilename first, then RelPath (for DirUIDs), extracting
 // the basename from either.
 func taggedFileFrom(row Row) TaggedFile {
-	isDir := RowHas(row, str(TieTypeProperty), str(TieDirectory))
-	types := row.Attributes[str(TieTypeProperty)]
+	isDir := RowHas(row, RelType, str(TieDirectory))
+	types := row.Attributes[string(RelType)]
 	isArchive := !isDir && containsArchiveType(types)
-	filename := RowFirst(row, str(TieFilename))
+	filename := RowFirst(row, RelFilename)
 
 	// If filename contains a path separator, extract just the basename.
 	// This handles both old imports (full paths) and ensures consistency.
@@ -511,8 +508,8 @@ func taggedFileFrom(row Row) TaggedFile {
 	}
 
 	if filename == "" && isDir {
-		// Directories (especially DirUIDs) might use TiePath; extract the basename.
-		if paths := RowValues(row, str(TiePath)); len(paths) > 0 {
+		// Directories (especially DirUIDs) might use RelPath; extract the basename.
+		if paths := RowValues(row, RelPath); len(paths) > 0 {
 			// Use the first path's basename as the display name.
 			p := paths[0]
 			p = strings.TrimPrefix(p, FileURIScheme)
@@ -530,7 +527,7 @@ func taggedFileFrom(row Row) TaggedFile {
 		filename = row.Key
 	}
 
-	size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
+	size, _ := strconv.Atoi(RowFirst(row, RelFilesize))
 	tf := TaggedFile{Hash: row.Key, Filename: filename, Size: size, IsDir: isDir, IsArchive: isArchive}
 	if isArchive {
 		tf.TieType = archiveTypeOf(types)
