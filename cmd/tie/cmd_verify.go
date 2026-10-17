@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/uidbz/tie/client"
@@ -24,7 +22,7 @@ func (a *app) findingsOut(ctx *cli.Command) (*out, error) {
 func cmdVerify(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "verify",
-		Usage: "Check the collection's index and virtual file tree for lost/incomplete nodes (fsck); exits non-zero if any problem is found",
+		Usage: "Check the collection's index and virtual file tree for lost/incomplete nodes (fsck); findings go to stdout as TSV",
 		Description: "Verify first cross-checks the triplestore's forward and reverse association\n" +
 			"indexes server-side (a divergence makes reverse queries — and therefore the tree\n" +
 			"scan itself — unreliable), then scans the whole collection and reports structural\n" +
@@ -37,11 +35,18 @@ func cmdVerify(a *app) *cli.Command {
 			"repairs: dangling parent refs are re-parented to the nearest live ancestor, ghost\n" +
 			"nodes (dir-typed, no path, no children, no tiedir-hash referrer, no blob) are\n" +
 			"deleted, files get missing size/media-type/tie-type/filename re-derived from their\n" +
-			"blob, and nameless leftovers or files whose blob is gone are deleted. Use\n" +
-			"--fix --dry-run to see the plan first; every applied --fix mutation is journaled\n" +
-			"as TSV (--journal). Take a `tie dump` before --fix. Cycles and duplicate paths\n" +
-			"are always reported, never auto-fixed. --index runs only the index check; --deep\n" +
-			"also validates every index position against its on-disk record (slow).",
+			"blob, and nameless leftovers or files whose blob is gone are deleted. Take a\n" +
+			"`tie dump` before any repair. Cycles and duplicate paths are always reported,\n" +
+			"never auto-fixed. --index runs only the index check; --deep also validates every\n" +
+			"index position against its on-disk record (slow).\n" +
+			"\n" +
+			"Findings are rows on stdout — kind, subject, value1, value2 — so they pipe:\n" +
+			"    tie verify | tie repair plan | tee plan.tsv | tie repair apply\n" +
+			"--fix/--dry-run/--journal are the old single-command form of that pipeline, kept\n" +
+			"for one release; `tie repair` is how it is done from now on.\n" +
+			"\n" +
+			"Exit codes follow fsck: 0 clean, 1 problems found, 2 usage error, 4 could not\n" +
+			"run (server unreachable, partial report).",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "collection", Usage: "Collection to verify (default: config Collection)"},
 			&cli.BoolFlag{Name: "repair", Usage: "Repair the index in memory and re-home orphaned files/dirs under a restored/ directory (default: report only)"},
@@ -49,9 +54,9 @@ func cmdVerify(a *app) *cli.Command {
 			&cli.BoolFlag{Name: "index", Usage: "Only cross-check the forward/reverse indexes; skip the tree scan"},
 			&cli.BoolFlag{Name: "deep", Usage: "Index check also resolves every position against its on-disk record (slow; blocks writers meanwhile)"},
 			&cli.StringFlag{Name: "dest", Usage: "Directory to restore orphans into (default: tie:/restored/<today>)"},
-			&cli.BoolFlag{Name: "fix", Usage: "Also apply the destructive repairs (dangling refs, ghost nodes, file metadata, unrecoverable leftovers); implies --repair"},
-			&cli.BoolFlag{Name: "dry-run", Usage: "With --fix: print the planned mutations and change nothing"},
-			&cli.StringFlag{Name: "journal", Usage: "With --fix: TSV file receiving every applied mutation (default: tie-fix-journal-<collection>-<date>.tsv)"},
+			&cli.BoolFlag{Name: "fix", Usage: "Deprecated: apply the destructive repairs in one go; use `tie verify | tie repair plan | tie repair apply`"},
+			&cli.BoolFlag{Name: "dry-run", Usage: "Deprecated: with --fix, print the plan and change nothing; use `tie repair plan`"},
+			&cli.StringFlag{Name: "journal", Usage: "Deprecated: with --fix, TSV file receiving every applied mutation; `tie repair apply` echoes the journal on stdout"},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			collection := ctx.String("collection")
@@ -61,7 +66,7 @@ func cmdVerify(a *app) *cli.Command {
 			fix := ctx.Bool("fix")
 			dryRun := ctx.Bool("dry-run")
 			if dryRun && !fix {
-				return errors.New("--dry-run only applies to --fix")
+				return exitError{code: exitUsage, msg: "--dry-run only applies to --fix"}
 			}
 			// --fix implies the additive repairs; a dry run applies nothing at all.
 			repair := (ctx.Bool("repair") || fix) && !dryRun
@@ -72,7 +77,7 @@ func cmdVerify(a *app) *cli.Command {
 			// orphan re-homing never acts on a phantom.
 			idx, err := scoped.CheckIndex(ctx.Bool("deep"), repair)
 			if err != nil {
-				return errors.New("Index Check Error: " + err.Error())
+				return operationalError("index check: %v", err)
 			}
 			o, err := a.findingsOut(ctx)
 			if err != nil {
@@ -92,7 +97,7 @@ func cmdVerify(a *app) *cli.Command {
 			}
 			if ctx.Bool("index") {
 				if indexProblems > 0 {
-					return cli.Exit(fmt.Sprintf("verify: %d index problem(s) found", indexProblems), 1)
+					return exitError{code: exitProblems, msg: fmt.Sprintf("verify: %d index problem(s) found", indexProblems)}
 				}
 				fmt.Fprintf(os.Stderr, "OK: index consistent (%d forward, %d reverse entries)\n", idx.ForwardEntries, idx.ReverseEntries)
 				return nil
@@ -103,7 +108,7 @@ func cmdVerify(a *app) *cli.Command {
 
 			rep, err := scoped.Verify(ctx.Bool("check-blobs"))
 			if err != nil && rep == nil {
-				return errors.New("Verify Error: " + err.Error())
+				return operationalError("verify: %v", err)
 			}
 			o, err = a.findingsOut(ctx)
 			if err != nil {
@@ -114,25 +119,27 @@ func cmdVerify(a *app) *cli.Command {
 				return err
 			}
 			if err != nil {
-				// Partial report (blob check failed after structural checks).
-				return errors.New("Verify Error: " + err.Error())
+				// Partial report (blob check failed after structural checks):
+				// the report is incomplete, which is an operational failure,
+				// not a clean answer (§6.5).
+				return operationalError("verify: partial report: %v", err)
 			}
 			// Guard-rail: the tree scan is seeded by reverse queries, and
 			// repair's heuristics depend on it being complete. With the index
 			// still inconsistent, a destructive repair could act on phantoms
 			// or miss children, so refuse it here (§9).
 			if repairBlockedByIndex(indexProblems, repair, fix, dryRun) {
-				return cli.Exit(fmt.Sprintf(
+				return exitError{code: exitProblems, msg: fmt.Sprintf(
 					"verify: refusing to repair: the index check reported %d problem(s). "+
 						"Fix the index first (`tie verify --index --repair`): repairing on an "+
-						"inconsistent index can act on phantoms or miss children.", indexProblems), 1)
+						"inconsistent index can act on phantoms or miss children.", indexProblems)}
 			}
 
 			changed := false
 			if repair {
 				n, rerr := scoped.RepairOrphans(rep, ctx.String("dest"))
 				if rerr != nil {
-					return errors.New("Repair Error: " + rerr.Error())
+					return operationalError("repair: %v", rerr)
 				}
 				if n > 0 {
 					fmt.Fprintf(os.Stderr, "Restored %d orphaned node(s) under %s\n", n, restoreDestDisplay(ctx.String("dest")))
@@ -152,7 +159,7 @@ func cmdVerify(a *app) *cli.Command {
 					}
 					f, ferr := os.Create(path)
 					if ferr != nil {
-						return errors.New("Fix Error: creating journal: " + ferr.Error())
+						return operationalError("creating journal: %v", ferr)
 					}
 					defer f.Close()
 					opts.Journal = f
@@ -179,7 +186,7 @@ func cmdVerify(a *app) *cli.Command {
 					changed = true
 				}
 				if ferr != nil {
-					return errors.New("Fix Error: " + ferr.Error())
+					return operationalError("fix: %v", ferr)
 				}
 			}
 			if changed {
@@ -187,7 +194,7 @@ func cmdVerify(a *app) *cli.Command {
 				// reflect the post-repair state, not the pre-repair scan.
 				rep, err = scoped.Verify(ctx.Bool("check-blobs"))
 				if err != nil {
-					return errors.New("Verify Error: " + err.Error())
+					return operationalError("re-verify after repair: %v", err)
 				}
 				o, err = a.findingsOut(ctx)
 				if err != nil {
@@ -199,7 +206,7 @@ func cmdVerify(a *app) *cli.Command {
 				}
 			}
 			if total := rep.Problems() + indexProblems; total > 0 {
-				return cli.Exit(fmt.Sprintf("verify: %d problem(s) found", total), 1)
+				return exitError{code: exitProblems, msg: fmt.Sprintf("verify: %d problem(s) found", total)}
 			}
 			fmt.Fprintf(os.Stderr, "OK: %d directories, %d files — no problems\n", rep.DirCount, rep.FileCount)
 			return nil
@@ -212,6 +219,11 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// pluralWith is the same with the count in front: "2 operations".
+func pluralWith(n int, one, many string) string {
+	return fmt.Sprintf("%d %s", n, plural(n, one, many))
 }
 
 // repairBlockedByIndex decides whether `tie verify` may run a destructive
@@ -271,43 +283,10 @@ func restoreDestDisplay(dest string) string {
 // not be piped; and the classes came out of maps in whatever order Go iterated
 // them, so two runs of one store did not agree.
 func verifyReportRows(rep *client.VerifyReport) [][]string {
-	var rows [][]string
-	for _, u := range rep.OrphanDirs {
-		rows = append(rows, []string{"orphan-dir", string(u), "", ""})
-	}
-	for _, h := range rep.OrphanFiles {
-		rows = append(rows, []string{"orphan-file", h, "", ""})
-	}
-	for _, e := range rep.DanglingParentRefs {
-		rows = append(rows, []string{"dangling-parent", e.Child, e.Parent, ""})
-	}
-	for _, c := range rep.Cycles {
-		parts := make([]string, len(c))
-		for i, u := range c {
-			parts[i] = string(u)
-		}
-		subject := ""
-		if len(parts) > 0 {
-			subject = parts[0]
-		}
-		rows = append(rows, []string{"cycle", subject, strings.Join(parts, " -> "), ""})
-	}
-	for p, uids := range rep.DuplicatePaths {
-		parts := make([]string, len(uids))
-		for i, u := range uids {
-			parts[i] = string(u)
-		}
-		rows = append(rows, []string{"duplicate-path", p, strings.Join(parts, ", "), ""})
-	}
-	for _, g := range rep.MissingMetadata {
-		kind := "file"
-		if g.IsDir {
-			kind = "dir"
-		}
-		rows = append(rows, []string{"missing-metadata", string(g.Subject), kind, strings.Join(g.Missing, ", ")})
-	}
-	for _, h := range rep.MissingBlobs {
-		rows = append(rows, []string{"missing-blob", h, "", ""})
+	findings := rep.Findings()
+	rows := make([][]string, 0, len(findings))
+	for _, f := range findings {
+		rows = append(rows, []string{f.Kind, f.Subject, f.Value1, f.Value2})
 	}
 	sortRows(rows)
 	return rows

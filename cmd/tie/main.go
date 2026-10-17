@@ -31,7 +31,17 @@ func main() {
 		a.tie = client.NewTieClientFor(config, collection)
 	}
 
-	cmd := &cli.Command{
+	if err := newRootCommand(a).Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, "tie:", err)
+		os.Exit(exitCodeFor(err))
+	}
+}
+
+// newRootCommand builds the whole command tree. It is a function rather than
+// inline in main so a test can run the real tree — the same Before hook, the
+// same global flags, the same exit codes (§6.5).
+func newRootCommand(a *app) *cli.Command {
+	return &cli.Command{
 		Name:    "tie",
 		Version: version.String(),
 		Usage:   "Manage a tie triple-store and its content-addressed filehost",
@@ -70,21 +80,31 @@ func main() {
 			cmdDump(a),
 			cmdRestore(a),
 			cmdVerify(a),
+			cmdRepair(a),
 			cmdStat(a),
 			cmdMedia(a),
 			cmdHistory(a),
 			cmdPlaylist(a),
 		},
 	}
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
-		var ee exitError
-		if errors.As(err, &ee) {
-			fmt.Fprintln(os.Stderr, "tie:", ee.msg)
-			os.Exit(ee.code)
-		}
-		fmt.Fprintln(os.Stderr, "tie:", err)
-		os.Exit(1)
+}
+
+// exitCodeFor maps a command's failure to the process status. An exitError
+// carries its own (the fsck codes of §6.5: 1 problems, 2 usage, 4 could not
+// run); anything else is the generic failure.
+func exitCodeFor(err error) int {
+	if err == nil {
+		return 0
 	}
+	var ee exitError
+	if errors.As(err, &ee) {
+		return ee.code
+	}
+	var ec cli.ExitCoder
+	if errors.As(err, &ec) {
+		return ec.ExitCode()
+	}
+	return 1
 }
 
 // parseGlobalFlags extracts the global -C/--config and -c/--collection values

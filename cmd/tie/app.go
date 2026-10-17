@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -80,6 +81,21 @@ func (a *app) outFor(ctx *cli.Command, header ...string) (*out, error) {
 		return nil, exitError{code: 2, msg: err.Error()}
 	}
 	return newOut(format, os.Stdout, header...), nil
+}
+
+// The fsck exit codes (§6.5): 0 clean, 1 problems found, 2 usage error, 4
+// operational failure. A script has to tell a broken store from a broken
+// network, and both used to be 1.
+const (
+	exitProblems    = 1
+	exitUsage       = 2
+	exitOperational = 4
+)
+
+// operationalError reports a failure to *run* rather than a finding: exit 4, so
+// cron can tell a damaged store (1) from an unreachable server (4) (§6.5).
+func operationalError(format string, args ...any) error {
+	return exitError{code: exitOperational, msg: fmt.Sprintf(format, args...)}
 }
 
 // exitError carries the exit code a failure should produce, so a command can

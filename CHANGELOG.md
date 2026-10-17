@@ -8,6 +8,13 @@ to follow semantic versioning.
 
 ### Added
 
+- **`tie repair plan` and `tie repair apply` — the fsck pipeline.** Each stage
+  reads the previous one's stdout, so the plan can be inspected, saved, edited
+  or replayed before anything destructive runs:
+  `tie verify | tie repair plan | tee plan.tsv | tie repair apply`. A journal is
+  a plan record with a timestamp in front, so `repair apply` accepts a journal
+  and replays it. This replaces `verify --fix --dry-run --journal`, which stays
+  working for one release but is deprecated.
 - **Global `--format tsv|json|table` on `tie`.** One format for every listing
   command — `get`, `dump`, `upload`, `stat`, `tag list|files|untagged|show`,
   `versions list`, `media index|backfill|restat`, `import` — instead of `--json`
@@ -192,6 +199,11 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie verify` follows the fsck exit codes**: 0 clean, 1 problems found, 2
+  usage error, 4 could not run. An unreachable triplestore or filehost, and a
+  partial report, now exit **4** instead of 1, so a cron job can tell a damaged
+  store from a damaged network. `--dry-run` without `--fix` is a usage error
+  (2).
 - **`tie verify`'s report is rows on stdout, not prose on stderr.** Both the
   index cross-check and the tree scan answer four tab-separated columns —
   `kind`, `subject`, `value1`, `value2` — sorted, so `tie verify | sort | cut -f1
