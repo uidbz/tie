@@ -25,7 +25,8 @@ The code uses both words deliberately; they are not synonyms:
 
 - A **triple** is the stored data record — the `Triple` struct
   `(key, value1, value2)`. It is what gets serialized (`toBytes`), held in the
-  arena/cache, and returned from queries (`TripleSet`, `StringTriple`).
+  arena/cache, and returned from queries as flat results: `[]StringTriple` for
+  the ordered page, `[]Row` (subject + its attributes) for the row-shaped reads.
 - An **association** is an *index* over triples — the structures that link entry
   IDs so a triple can be found from one of its members. `associations` /
   `reverseAssociations`, `AssociationSet`, and `insertAssociation` are all index

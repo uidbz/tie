@@ -94,6 +94,13 @@ tie verify --repair
 # Restore into a specific directory instead.
 tie verify --repair --dest /recovered/2026-08
 
+# The two halves as separate commands, so a plan can be reviewed or edited
+# before anything runs. `repair plan` reads verify's findings, `repair apply`
+# runs the operations and echoes the journal (which replays with `apply`).
+tie verify | tie repair plan > plan.tsv
+less plan.tsv
+tie repair apply < plan.tsv
+
 # Destructive fixes (dangling refs, ghosts, file metadata, leftovers): plan,
 # then apply with a TSV journal of every mutation. Take a dump first.
 tie dump > backup.tsv
@@ -260,9 +267,14 @@ one host is what matters for reachability.
   per-check helpers (`detectCycles`, `checkFileMetadata`, `checkBlobsExist`,
   `blobExists`).
 - `client/repair.go` — `RepairTree`, the plan-first destructive fixer behind
-  `--fix`; `TestRepairTree` in `client/verify_test.go` covers it end to end.
-- `cmd/tie/commands.go` — the `cmdVerify` command and report rendering
-  (`printIndexReport`, `printVerifyReport`).
+  `--fix`; `client/repair_test.go` covers it end to end.
+- `client/pipeline.go` — the fsck's data half: the finding, plan and journal row
+  codecs (`ParseFinding`, `ReadFindings`, `ParsePlanRow`, `ReadPlan`) and
+  `ApplyPlan`, which runs a plan — or a journal, since a journal is a plan with a
+  timestamp in front. `tie repair plan|apply` is these over stdin/stdout.
+- `cmd/tie/cmd_verify.go` — the `cmdVerify` command and report rendering
+  (`printIndexReport`, `printVerifyReport`); `cmd/tie/cmd_repair.go` — the
+  `repair plan` / `repair apply` subcommands.
 - `cmd/tie-filehost/routes.go` + `main.go` — the `HEAD /{hash}` route and
   `StatHandler`.
 - `client/verify_test.go` — integration tests against the test-env triplestore

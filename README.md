@@ -327,8 +327,10 @@ dangling parents, cycles, duplicate paths and missing metadata; `--repair` fixes
 the index in memory and re-homes orphans (additive), `--fix [--dry-run]`
 also applies the journaled destructive repairs (dangling refs, ghost nodes,
 file metadata, unrecoverable leftovers), `--index` runs the index check alone,
-`--deep` validates every index position against its on-disk record. See
-`docs/verify.md`.
+`--deep` validates every index position against its on-disk record. The two
+halves are also separate commands, so a plan can be reviewed before anything
+runs: `tie verify | tie repair plan > plan.tsv`, then `tie repair apply <
+plan.tsv` (its journal replays with `apply`). See `docs/verify.md`.
 
 `tie version` shows the client build and the builds the configured triplestore
 and filehosts are running; both servers also log their version at startup.

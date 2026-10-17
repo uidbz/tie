@@ -25,11 +25,14 @@ Shape:
   fields fell out naturally from the set semantics).
 - `GetAll` did a two-step read: `Get(collectionUid)` to list object UIDs, then a
   single `Batch` of `Get(uid)` for each — one round trip for the whole set.
-- `ResultToMap` / `ResultToSlice` turned a `TripleSet` into typed objects.
+- `ResultToMap` / `ResultToSlice` turned a `TripleSet` (the nested
+  subject→relation→value result map since removed in favour of flat `Row`/`StringTriple`
+  results) into typed objects.
 
 The genuinely good part — **`Upsert` set-diff** (worth keeping if reintroduced):
 
-- Read the stored object into a `TripleSet` (`origObject`).
+- Read the stored object into a result map (`origObject`) — today that is a
+  `Row`, or the `[]string` one `Get` answers for a single relation.
 - For each struct field value: if `origObject` already has that exact
   `(uid, property, value)`, remove it from `origObject` (so it survives) and skip
   the Add; otherwise queue an `Add`.
@@ -62,7 +65,7 @@ supported `addOnFail` (upsert) semantics.
 
 Open question the original author left in a comment: an assertion that
 `len(set.Value1) == len(set.Value2)` — the parallel-slice representation that
-predates the current `TripleSet` map model, so the idea needs re-derivation
+predates the `TripleSet` map model (itself since removed), so the idea needs re-derivation
 against the current data structures before reuse. "First occurrence" is also
 ill-defined given map iteration order is undefined — a real version should target
 the whole set or take an explicit selector.
@@ -87,8 +90,8 @@ Removed: `client/output.go` (a lone `TODO` plus a large commented-out block; the
 Intent: render a query result as an aligned table for the CLI's `--table`/`-t`
 flag, instead of the current one-triple-per-line TSV. `TieOutput` was a
 `map[string]map[string]map[string]bool` (`key → value1 → set of value2`), the
-same shape as today's `TripleSet` but with a `bool` set instead of the current
-set type.
+same shape as the `TripleSet` the store used to return, with a `bool` set where
+the value set went.
 
 The pieces:
 
@@ -105,10 +108,10 @@ The pieces:
   (note: `ByFileName.Len` returned `len(a[1])`, i.e. the row count of column 1 —
   fragile, and it assumed at least two columns exist).
 
-Why removed: dead since the result model moved to `TripleSet`, never wired to a
+Why removed: dead once the result model changed, never wired to a
 current code path, and the "columns discovered from `value1`" approach is
 awkward for wide/sparse result sets (every distinct relation becomes a column,
-most cells empty). If revived: build it on `TripleSet` directly, take an explicit
+most cells empty). If revived: build it on `[]Row` directly, take an explicit
 column selector (and sort key) rather than inferring, and pick a table library
 instead of hand-aligning with tabs.
 
