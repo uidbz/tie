@@ -145,6 +145,11 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **The module now requires Go 1.27.2.** `govulncheck` flagged ten standard
+  library vulnerabilities the code does reach — `net/http`,
+  `net/http/internal/http2`, `net/textproto` and `crypto/tls`, which is most of
+  what tie is made of — all fixed in that release. CI reads the version from
+  `go.mod`, so the gate and the build cannot drift apart.
 - **A webservice that cannot bind no longer says it is listening.** The log line
   came before the socket existed, and `examples/webservice/server` discarded the
   error, so a port already in use looked like a server that had started. It binds
