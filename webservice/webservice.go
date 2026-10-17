@@ -99,7 +99,7 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 		}
 		ws.db.SetReverseRelationsOverrides(overrides)
 	}
-	ws.db.SetBlobPolicy(metadata.HexHashBlobPolicy())
+	ws.db.SetBlobPolicy(tiedb.HexHashBlobPolicy(metadata.IsHexHash))
 	if config.MaxConcurrentRequests > 0 {
 		ws.sem = make(chan struct{}, config.MaxConcurrentRequests)
 	}

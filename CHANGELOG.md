@@ -232,6 +232,9 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`metadata.HexHashBlobPolicy` is now `tiedb.HexHashBlobPolicy(metadata.IsHexHash)`.**
+  `metadata` describes formats and had no business importing the storage engine;
+  the engine offers the policy and the caller supplies the hash-shape rule.
 - **`client.InitKey` and the unused `Config.key` field are gone.** The
   content-address key now exists once, in `metadata`; everything that needs an
   address goes through `metadata.NewHash` / `metadata.HashReader`.

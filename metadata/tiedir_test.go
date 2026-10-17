@@ -156,3 +156,26 @@ func moduleRoot() (string, error) {
 		dir = parent
 	}
 }
+
+// TestMetadataDoesNotImportTiedb guards the layering: metadata describes the
+// on-disk and wire formats, so it must not depend on the storage engine. The
+// blob policy that used to live here needed tiedb for it; the engine now offers
+// the policy and the caller supplies the shape rule (§5.1 L21).
+func TestMetadataDoesNotImportTiedb(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(".", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue // this file names the import path on purpose
+		}
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"github.com/uidbz/tie/tiedb"`) {
+			t.Errorf("%s imports the storage engine; metadata must not depend on tiedb", name)
+		}
+	}
+}

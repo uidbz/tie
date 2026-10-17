@@ -2,6 +2,7 @@ package tiedb
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -172,6 +173,33 @@ type UniqueValue struct {
 type BlobPolicy struct {
 	Encode func(value string) (raw []byte, ok bool)
 	Decode func(raw []byte) string
+}
+
+// HexHashBlobPolicy stores content-address hashes as raw 32-byte entries
+// instead of chunking their 64-char hex form into the trie. A hash is the worst
+// case for the chunk trie (no shared prefixes, 3 entries per hash); this
+// collapses it to one. Encode matches only well-formed hex hashes; Decode
+// re-hex-encodes the raw bytes back to the stored string.
+//
+// isContentAddress is supplied by the caller rather than imported: the shape
+// rule belongs to the format package (metadata.IsHexHash), and the storage
+// engine must not depend on it (§5.1 L21).
+func HexHashBlobPolicy(isContentAddress func(string) bool) *BlobPolicy {
+	return &BlobPolicy{
+		Encode: func(value string) ([]byte, bool) {
+			if !isContentAddress(value) {
+				return nil, false
+			}
+			raw, err := hex.DecodeString(value)
+			if err != nil {
+				return nil, false
+			}
+			return raw, true
+		},
+		Decode: func(raw []byte) string {
+			return hex.EncodeToString(raw)
+		},
+	}
 }
 
 type UniqueAssociation struct {

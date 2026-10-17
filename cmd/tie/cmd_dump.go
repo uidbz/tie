@@ -101,7 +101,7 @@ func dumpLocalFile(path string, write func(tiedb.StringTriple) error) error {
 	dir := filepath.Dir(path)
 	name := strings.TrimSuffix(filepath.Base(path), ".tie")
 	db := tiedb.NewDB(true)
-	db.SetBlobPolicy(metadata.HexHashBlobPolicy())
+	db.SetBlobPolicy(tiedb.HexHashBlobPolicy(metadata.IsHexHash))
 	col := db.GetCollection(tiedb.CollectionKey{Database: dir, Collection: name})
 	var writeErr error
 	col.ForEachTriple(func(t tiedb.StringTriple) {

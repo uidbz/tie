@@ -1,8 +1,8 @@
 package tiedb
 
 import (
-	"encoding/hex"
 	"fmt"
+	"github.com/uidbz/tie/metadata"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -456,35 +456,11 @@ func padded(i int) string {
 	return s
 }
 
-// hexHashPolicy is a test blob policy matching 64-char lowercase hex strings and
-// storing them as their raw 32 bytes. It mirrors metadata.HexHashBlobPolicy
-// without importing that package (which would create a cycle back into tiedb).
+// hexHashPolicy is the production policy, so the tests exercise the same code
+// the servers install. metadata supplies the shape rule — a test-only import,
+// and legal because metadata no longer depends on tiedb (§5.1 L21).
 func hexHashPolicy() *BlobPolicy {
-	isHex := func(s string) bool {
-		if len(s) != 64 {
-			return false
-		}
-		for i := 0; i < len(s); i++ {
-			c := s[i]
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
-				return false
-			}
-		}
-		return true
-	}
-	return &BlobPolicy{
-		Encode: func(v string) ([]byte, bool) {
-			if !isHex(v) {
-				return nil, false
-			}
-			raw, err := hex.DecodeString(v)
-			if err != nil {
-				return nil, false
-			}
-			return raw, true
-		},
-		Decode: func(raw []byte) string { return hex.EncodeToString(raw) },
-	}
+	return HexHashBlobPolicy(metadata.IsHexHash)
 }
 
 // hashN returns a distinct well-formed 64-char hex hash for index n.
