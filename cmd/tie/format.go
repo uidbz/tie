@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -39,6 +40,21 @@ func tsvLine(fields ...string) string { return client.TSVRecord(fields...) }
 // `tie dump` wrote before §6.4.
 func splitTSVLine(line string, want int) ([]string, error) {
 	return client.SplitTSVRecord(line, want)
+}
+
+// sortRows orders records field by field, so two runs of one command agree byte
+// for byte. The reports used to iterate maps, which made the same store print in
+// a different order every run and broke diff, comm and golden tests (§6.4).
+func sortRows(rows [][]string) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		for k := 0; k < len(a) && k < len(b); k++ {
+			if a[k] != b[k] {
+				return a[k] < b[k]
+			}
+		}
+		return len(a) < len(b)
+	})
 }
 
 // outputFormat resolves the global --format flag. An explicit choice wins;
@@ -104,12 +120,22 @@ func (o *out) row(fields ...string) {
 func (o *out) flush() error {
 	switch o.format {
 	case "json":
+		if o.jsonRows == nil {
+			// An empty result is an empty array, not `null`: a consumer can
+			// iterate it without a special case.
+			o.jsonRows = []map[string]string{}
+		}
 		enc := json.NewEncoder(o.w)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(o.jsonRows); err != nil {
 			return err
 		}
 	case "table":
+		if len(o.rows) == 0 {
+			// No result, no table: a header on nothing would print a header
+			// for every empty section of a multi-part report.
+			return o.err
+		}
 		tw := tabwriter.NewWriter(o.w, 0, 2, 2, ' ', 0)
 		if len(o.header) > 0 {
 			hdr := make([]string, len(o.header))

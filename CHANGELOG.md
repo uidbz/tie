@@ -110,6 +110,11 @@ to follow semantic versioning.
 
 ### Fixed
 
+- **An empty listing no longer prints a table header**, and `--format json` on
+  an empty result answers `[]` rather than `null`.
+- **`tie verify`'s duplicate-path claims printed in map order**, so the same
+  store reported differently from run to run.
+
 - **`--collection X` now means X everywhere.** The client is bound to one
   collection, and the extra `collection` argument that many methods took was
   honoured by only some of their internal calls: `tie import --collection X`
@@ -187,6 +192,14 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie verify`'s report is rows on stdout, not prose on stderr.** Both the
+  index cross-check and the tree scan answer four tab-separated columns —
+  `kind`, `subject`, `value1`, `value2` — sorted, so `tie verify | sort | cut -f1
+  | uniq -c` works and two runs against one store agree. Index count rows carry
+  `(count)` as their subject. The summary lines (`OK: …`, `Repaired N …`,
+  `Journal: …`) stay on stderr. `--fix --dry-run` prints its plan as
+  `op key relation value note` rows with the values untruncated, and the fix
+  journal uses the escaped codec instead of csv quoting.
 - **`tie dump` writes escaped TSV, not quoted TSV.** A field containing a tab,
   newline, carriage return or backslash is written with the PostgreSQL COPY
   escapes (`\t`, `\n`, `\r`, `\\`) instead of being wrapped in quotes with

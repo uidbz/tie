@@ -100,3 +100,60 @@ func TestRepairJournalOnlyRecordsAppliedOps(t *testing.T) {
 		t.Errorf("Applied = %d, want 0 after a failed batch", res.Applied)
 	}
 }
+
+// TestRepairJournalIsEscapedTSV: the journal is a file an operator greps and a
+// script replays, so it uses the store's text format (§6.4) — one record per
+// line, the COPY escapes, never csv quoting — and reads back exactly.
+func TestRepairJournalIsEscapedTSV(t *testing.T) {
+	tie := freshVerifyClient(t)
+	dir := t.TempDir()
+	writeFile(t, dir+"/a.txt", "keep me")
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
+		t.Fatalf("ImportDir: %v", err)
+	}
+	root, err := tie.DirUIDFromPath(FileURIScheme + dir)
+	if err != nil || root == "" {
+		t.Fatalf("DirUIDFromPath: uid=%q err=%v", root, err)
+	}
+	bare := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	if _, err := tie.Add(bare, str(TieTypeProperty), str(TieFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tie.Add(bare, str(TieParent), string(root)); err != nil {
+		t.Fatal(err)
+	}
+	if err := tie.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := tie.Verify(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var journal bytes.Buffer
+	res, err := tie.RepairTree(rep, RepairOptions{Apply: true, Journal: &journal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Applied == 0 {
+		t.Fatal("nothing was applied; the test would prove nothing")
+	}
+
+	lines := strings.Split(strings.TrimSuffix(journal.String(), "\n"), "\n")
+	if len(lines) != res.Applied {
+		t.Errorf("journal has %d lines for %d applied operations", len(lines), res.Applied)
+	}
+	for i, line := range lines {
+		if strings.Contains(line, "\"") {
+			t.Errorf("journal line %d is csv-quoted, not escaped: %q", i+1, line)
+		}
+		rec, err := SplitTSVRecord(line, 6)
+		if err != nil {
+			t.Errorf("journal line %d does not read back: %v (%q)", i+1, err, line)
+			continue
+		}
+		if rec[1] != "add" && rec[1] != "delete" {
+			t.Errorf("journal line %d has op %q", i+1, rec[1])
+		}
+	}
+}

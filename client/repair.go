@@ -31,7 +31,6 @@ package client
 
 import (
 	"bytes"
-	"encoding/csv"
 	"fmt"
 	"io"
 	"sort"
@@ -78,10 +77,13 @@ type RepairResult struct {
 
 // repairSession carries the per-run caches of RepairTree.
 type repairSession struct {
-	tie     *TieClient // scoped to the collection being repaired
-	opts    RepairOptions
-	res     *RepairResult
-	journal *csv.Writer
+	tie  *TieClient // scoped to the collection being repaired
+	opts RepairOptions
+	res  *RepairResult
+	// journal receives one escaped TSV record per applied operation (§6.4):
+	// time, op, key, relation, value, note. It is a file an operator reads and
+	// greps, so it uses the same codec as `tie dump`, not csv quoting.
+	journal io.Writer
 
 	liveDir   map[string]bool   // DirUIDs carrying a path triple
 	ghosts    map[string]bool   // ghost candidates
@@ -115,9 +117,7 @@ func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*Repair
 		protected: map[string]bool{}, ancestor: map[string]string{}, handled: map[string]bool{},
 	}
 	if opts.Apply && opts.Journal != nil {
-		r.journal = csv.NewWriter(opts.Journal)
-		r.journal.Comma = '\t'
-		defer r.journal.Flush()
+		r.journal = opts.Journal
 	}
 	if rep == nil {
 		return r.res, nil
@@ -551,13 +551,19 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 		}
 		for _, line := range pending {
 			if r.journal != nil {
-				r.journal.Write(line)
+				if _, err := fmt.Fprintln(r.journal, TSVRecord(line...)); err != nil {
+					return fmt.Errorf("journaling in phase %q: %w", label, err)
+				}
 			}
 		}
 		if r.journal != nil {
 			// Flush per chunk: if the run dies later, the journal still holds a
 			// complete record of everything that was applied.
-			r.journal.Flush()
+			if f, ok := r.journal.(interface{ Flush() error }); ok {
+				if err := f.Flush(); err != nil {
+					return fmt.Errorf("flushing journal in phase %q: %w", label, err)
+				}
+			}
 		}
 		r.res.Applied += len(pending)
 	}

@@ -179,3 +179,26 @@ func TestTableKeepsOneLinePerRecord(t *testing.T) {
 		}
 	}
 }
+
+// TestEmptyResultRendersNothing: a command with no rows must not print a header
+// for an empty table (a multi-section report would repeat it), and its JSON is
+// an empty array a consumer can iterate without a special case.
+func TestEmptyResultRendersNothing(t *testing.T) {
+	var table bytes.Buffer
+	o := newOut("table", &table, "kind", "subject")
+	if err := o.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if table.String() != "" {
+		t.Errorf("an empty table printed %q, want nothing", table.String())
+	}
+
+	var js bytes.Buffer
+	o = newOut("json", &js, "kind", "subject")
+	if err := o.flush(); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(js.String()) != "[]" {
+		t.Errorf("an empty json result printed %q, want []", js.String())
+	}
+}

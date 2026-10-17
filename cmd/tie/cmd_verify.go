@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +13,13 @@ import (
 	"github.com/uidbz/tie/tiedb"
 	"github.com/urfave/cli/v3"
 )
+
+// findingsOut is the renderer for `tie verify`'s report rows: kind, subject and
+// two detail columns, the same schema for the index check and the tree scan so
+// one stream can be cut, sorted and diffed (§8 S12).
+func (a *app) findingsOut(ctx *cli.Command) (*out, error) {
+	return a.outFor(ctx, "kind", "subject", "value1", "value2")
+}
 
 func cmdVerify(a *app) *cli.Command {
 	return &cli.Command{
@@ -67,7 +74,14 @@ func cmdVerify(a *app) *cli.Command {
 			if err != nil {
 				return errors.New("Index Check Error: " + err.Error())
 			}
-			printIndexReport(idx)
+			o, err := a.findingsOut(ctx)
+			if err != nil {
+				return err
+			}
+			printIndexReport(o, idx)
+			if err := o.flush(); err != nil {
+				return err
+			}
 			indexProblems := idx.Problems()
 			if repair && idx.Repaired > 0 {
 				fmt.Fprintf(os.Stderr, "Repaired %d index entr%s\n", idx.Repaired, plural(idx.Repaired, "y", "ies"))
@@ -91,7 +105,14 @@ func cmdVerify(a *app) *cli.Command {
 			if err != nil && rep == nil {
 				return errors.New("Verify Error: " + err.Error())
 			}
-			printVerifyReport(rep)
+			o, err = a.findingsOut(ctx)
+			if err != nil {
+				return err
+			}
+			printVerifyReport(o, rep)
+			if err := o.flush(); err != nil {
+				return err
+			}
 			if err != nil {
 				// Partial report (blob check failed after structural checks).
 				return errors.New("Verify Error: " + err.Error())
@@ -139,8 +160,18 @@ func cmdVerify(a *app) *cli.Command {
 				}
 				res, ferr := scoped.RepairTree(rep, opts)
 				if dryRun {
-					for _, o := range res.Planned {
-						fmt.Printf("%-6s %s %-11s %s   # %s\n", o.Kind, o.Key, o.Relation, shortVal(o.Value), o.Note)
+					// The plan is data: it goes to stdout through the same
+					// encoder, untruncated, and `tie verify --fix --dry-run |
+					// tie repair apply` is the point (§6.5).
+					plan, perr := a.outFor(ctx, "op", "key", "relation", "value", "note")
+					if perr != nil {
+						return perr
+					}
+					for _, op := range res.Planned {
+						plan.row(op.Kind, op.Key, op.Relation, op.Value, op.Note)
+					}
+					if perr := plan.flush(); perr != nil {
+						return perr
 					}
 					fmt.Fprintf(os.Stderr, "dry-run: %d mutation(s) planned; re-run without --dry-run to apply\n", len(res.Planned))
 				} else if res.Applied > 0 {
@@ -158,7 +189,14 @@ func cmdVerify(a *app) *cli.Command {
 				if err != nil {
 					return errors.New("Verify Error: " + err.Error())
 				}
-				printVerifyReport(rep)
+				o, err = a.findingsOut(ctx)
+				if err != nil {
+					return err
+				}
+				printVerifyReport(o, rep)
+				if err := o.flush(); err != nil {
+					return err
+				}
 			}
 			if total := rep.Problems() + indexProblems; total > 0 {
 				return cli.Exit(fmt.Sprintf("verify: %d problem(s) found", total), 1)
@@ -167,13 +205,6 @@ func cmdVerify(a *app) *cli.Command {
 			return nil
 		},
 	}
-}
-
-func shortVal(s string) string {
-	if len(s) > 48 {
-		return s[:48] + "…"
-	}
-	return s
 }
 
 func plural(n int, one, many string) string {
@@ -197,37 +228,36 @@ func repairBlockedByIndex(indexProblems int, repair, fix, dryRun bool) bool {
 	return repair || (fix && !dryRun)
 }
 
-// printIndexReport writes the server-side index cross-check to stderr: one
-// line per problem class with a count, then the sampled entries.
-func printIndexReport(rep *tiedb.IndexReport) {
-	w := os.Stderr
-	if rep.Problems() == 0 {
-		return
-	}
-	mode := ""
-	if rep.Deep {
-		mode = ", deep"
-	}
-	fmt.Fprintf(w, "Index inconsistencies (%d forward, %d reverse entries%s):\n", rep.ForwardEntries, rep.ReverseEntries, mode)
-	line := func(label string, n int) {
+// printIndexReport writes the server-side index cross-check as findings rows
+// (§8 S12): the same four columns the tree report uses, so one `tie verify`
+// stream can be cut, sorted and diffed. A count row carries "(count)" as its
+// subject; the samples that follow carry the offending triple.
+func indexReportRows(rep *tiedb.IndexReport) [][]string {
+	var rows [][]string
+	count := func(kind string, n int) {
 		if n > 0 {
-			fmt.Fprintf(w, "  %-52s %d\n", label, n)
+			rows = append(rows, []string{kind, "(count)", strconv.Itoa(n), ""})
 		}
 	}
-	line("forward triples missing their reverse entry:", rep.MissingReverse)
-	line("reverse-only entries (phantoms, no forward triple):", rep.ReverseOnly)
-	line("forward/reverse position mismatches:", rep.PositionMismatch)
-	line("index positions whose record does not match:", rep.Misresolved)
-	if len(rep.Samples) > 0 {
-		fmt.Fprintf(w, "  samples (%d):\n", len(rep.Samples))
-		for _, s := range rep.Samples {
-			fmt.Fprintf(w, "    %-18s %s  %s  %s\n", s.Kind, s.Key, s.Value1, s.Value2)
-		}
+	count(tiedb.IndexMissingReverse, rep.MissingReverse)
+	count(tiedb.IndexReverseOnly, rep.ReverseOnly)
+	count(tiedb.IndexPositionMismatch, rep.PositionMismatch)
+	count(tiedb.IndexMisresolved, rep.Misresolved)
+	for _, s := range rep.Samples {
+		rows = append(rows, []string{s.Kind, s.Key, s.Value1, s.Value2})
+	}
+	sortRows(rows)
+	return rows
+}
+
+func printIndexReport(o *out, rep *tiedb.IndexReport) {
+	for _, row := range indexReportRows(rep) {
+		o.row(row...)
 	}
 }
 
-// restoreDestDisplay renders the effective restore directory for the summary
-// line, mirroring RepairOrphans' default when --dest is empty.
+// restoreDestDisplay names the directory orphans are re-homed under, for the
+// progress line that tells the operator where they went.
 func restoreDestDisplay(dest string) string {
 	if dest != "" {
 		return dest
@@ -235,62 +265,56 @@ func restoreDestDisplay(dest string) string {
 	return "tie:/restored/" + time.Now().Format("2006-01-02")
 }
 
-// printVerifyReport writes each non-empty problem class to stderr. The summary
-// counts and OK line are printed separately by the caller; a fully-clean report
-// prints nothing here.
-func printVerifyReport(rep *client.VerifyReport) {
-	w := os.Stderr
-	section := func(title string, n int) {
-		if n > 0 {
-			fmt.Fprintf(w, "%s (%d):\n", title, n)
-		}
-	}
-	section("Orphaned directories (no parent — unreachable)", len(rep.OrphanDirs))
+// printVerifyReport writes the tree findings as rows — kind, subject, value1,
+// value2 — through the shared renderer (§8 S12). They used to be hand-aligned
+// prose on stderr, which meant the report, the command's actual product, could
+// not be piped; and the classes came out of maps in whatever order Go iterated
+// them, so two runs of one store did not agree.
+func verifyReportRows(rep *client.VerifyReport) [][]string {
+	var rows [][]string
 	for _, u := range rep.OrphanDirs {
-		fmt.Fprintf(w, "  %s\n", u)
+		rows = append(rows, []string{"orphan-dir", string(u), "", ""})
 	}
-	section("Orphaned files (no parent — unreachable)", len(rep.OrphanFiles))
 	for _, h := range rep.OrphanFiles {
-		fmt.Fprintf(w, "  %s\n", h)
+		rows = append(rows, []string{"orphan-file", h, "", ""})
 	}
-	section("Dangling parent references (parent no longer exists)", len(rep.DanglingParentRefs))
 	for _, e := range rep.DanglingParentRefs {
-		fmt.Fprintf(w, "  %s -> %s\n", e.Child, e.Parent)
+		rows = append(rows, []string{"dangling-parent", e.Child, e.Parent, ""})
 	}
-	section("Parent cycles (a directory is its own ancestor)", len(rep.Cycles))
 	for _, c := range rep.Cycles {
 		parts := make([]string, len(c))
 		for i, u := range c {
 			parts[i] = string(u)
 		}
-		fmt.Fprintf(w, "  %s\n", strings.Join(parts, " -> "))
-	}
-	if len(rep.DuplicatePaths) > 0 {
-		fmt.Fprintf(w, "Duplicate path claims (%d paths):\n", len(rep.DuplicatePaths))
-		paths := make([]string, 0, len(rep.DuplicatePaths))
-		for p := range rep.DuplicatePaths {
-			paths = append(paths, p)
+		subject := ""
+		if len(parts) > 0 {
+			subject = parts[0]
 		}
-		sort.Strings(paths)
-		for _, p := range paths {
-			uids := rep.DuplicatePaths[p]
-			parts := make([]string, len(uids))
-			for i, u := range uids {
-				parts[i] = string(u)
-			}
-			fmt.Fprintf(w, "  %s : %s\n", p, strings.Join(parts, ", "))
-		}
+		rows = append(rows, []string{"cycle", subject, strings.Join(parts, " -> "), ""})
 	}
-	section("Missing metadata (incomplete import)", len(rep.MissingMetadata))
+	for p, uids := range rep.DuplicatePaths {
+		parts := make([]string, len(uids))
+		for i, u := range uids {
+			parts[i] = string(u)
+		}
+		rows = append(rows, []string{"duplicate-path", p, strings.Join(parts, ", "), ""})
+	}
 	for _, g := range rep.MissingMetadata {
 		kind := "file"
 		if g.IsDir {
-			kind = "dir "
+			kind = "dir"
 		}
-		fmt.Fprintf(w, "  %s %s : missing %s\n", kind, g.Subject, strings.Join(g.Missing, ", "))
+		rows = append(rows, []string{"missing-metadata", string(g.Subject), kind, strings.Join(g.Missing, ", ")})
 	}
-	section("Missing blobs (content absent from filehost)", len(rep.MissingBlobs))
 	for _, h := range rep.MissingBlobs {
-		fmt.Fprintf(w, "  %s\n", h)
+		rows = append(rows, []string{"missing-blob", h, "", ""})
+	}
+	sortRows(rows)
+	return rows
+}
+
+func printVerifyReport(o *out, rep *client.VerifyReport) {
+	for _, row := range verifyReportRows(rep) {
+		o.row(row...)
 	}
 }
