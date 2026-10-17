@@ -31,8 +31,22 @@ func retryBackoff(attempt int) time.Duration {
 // then fails with "Did not find ..." — the client would report an error for a
 // write that succeeded (§4.11). A Batch containing an update has the same
 // problem, so it is not retried either.
+// readOnlyRequests are the request ids that change nothing server-side. The
+// server records access when a request is registered, but retrying is a client
+// decision, so the client keeps its own list — deliberately narrower in spirit:
+// Sync is idempotent too, and a Batch that contains an update is not.
+var readOnlyRequests = map[string]bool{
+	"Dummy":      true,
+	"Query":      true,
+	"Expand":     true,
+	"Associated": true,
+	"CoTags":     true,
+	"Dump":       true,
+	"Version":    true,
+}
+
 func retrySafe(reqID string) bool {
-	return readRequests[reqID] || reqID == "Sync"
+	return readOnlyRequests[reqID] || reqID == "Sync"
 }
 
 // defaultRequestTimeout bounds one non-streaming request. Without any timeout a
@@ -112,29 +126,51 @@ func (c *Client) effectiveTimeout() time.Duration {
 	}
 }
 
-// Run sends the request with a background context.
-func (c *Client) Run(request RequestInterface) (*Reply, error) {
-	return c.RunContext(context.Background(), request)
+// Call sends req and decodes the reply as Rep. The reply type is a parameter,
+// so nothing has to keep a prototype of the reply in sync with the handler:
+// disagreeing types are a compile error at the call site, not a wrong-shaped
+// decode at runtime.
+func Call[Req RequestID, Rep any](c *Client, req Req) (*Rep, error) {
+	return CallContext[Req, Rep](context.Background(), c, req)
 }
 
-// RunContext sends the request, honoring ctx and the client's per-request
-// timeout (whichever is shorter). Only requests classified by retrySafe are
-// replayed after a transport failure.
-func (c *Client) RunContext(ctx context.Context, request RequestInterface) (*Reply, error) {
-	body, errMarshal := json.Marshal(request)
-	if errMarshal != nil {
-		e := Reply{ReplyTypeEmpty, nil}
-		return &e, errMarshal
+// CallContext sends req honoring ctx and the client's per-request timeout
+// (whichever is shorter). Only requests classified by retrySafe are replayed
+// after a transport failure.
+func CallContext[Req RequestID, Rep any](ctx context.Context, c *Client, req Req) (*Rep, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
 	}
+	resp, err := c.send(ctx, req.GetId(), body)
+	if err != nil {
+		return nil, err
+	}
+	rep := new(Rep)
+	if err := json.Unmarshal(resp.body, rep); err != nil {
+		return nil, fmt.Errorf("webservice returned %s: %s", resp.status, snippet(resp.body))
+	}
+	return rep, nil
+}
 
+// response is one answered request: the status line and the body the server
+// wrote.
+type response struct {
+	code   int
+	status string
+	body   []byte
+}
+
+// send POSTs body to /<id> and returns the answer. Retry only transport-level
+// failures (Do error, response-body read error): a Do that returns a *response*
+// means the server was reached, so the answer — including an auth rejection —
+// is final.
+func (c *Client) send(ctx context.Context, id string, body []byte) (*response, error) {
 	attempts := maxAttempts
-	if !retrySafe(request.GetId()) {
+	if !retrySafe(id) {
 		attempts = 1
 	}
 
-	// Retry only transport-level failures (Do error, response-body read error).
-	// A Do that returns a *response* means the server was reached, so the
-	// answer — including an auth rejection — is final.
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if attempt > 1 {
@@ -149,7 +185,7 @@ func (c *Client) RunContext(ctx context.Context, request RequestInterface) (*Rep
 		if err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.server+"/"+id, bytes.NewReader(body))
 		if err != nil {
 			cancel()
 			return nil, err
@@ -173,18 +209,10 @@ func (c *Client) RunContext(ctx context.Context, request RequestInterface) (*Rep
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, c.statusError(request.GetId(), resp, respBody)
+			return nil, c.statusError(id, resp, respBody)
 		}
 
-		replyStructPtr := request.GetReplyStructPtr()
-		if errUnmarshal := json.Unmarshal(respBody, replyStructPtr); errUnmarshal != nil {
-			return nil, fmt.Errorf("webservice returned %s: %s", resp.Status, snippet(respBody))
-		}
-
-		return &Reply{
-			RequestName:    request.GetId(),
-			ReplyStructPtr: replyStructPtr,
-		}, nil
+		return &response{code: resp.StatusCode, status: resp.Status, body: respBody}, nil
 	}
 
 	return nil, lastErr
@@ -232,7 +260,7 @@ func snippet(b []byte) string {
 
 // RunStream POSTs the request with a background context and hands the raw,
 // unparsed response body to consume.
-func (c *Client) RunStream(request RequestInterface, consume func(io.Reader) error) error {
+func (c *Client) RunStream(request RequestID, consume func(io.Reader) error) error {
 	return c.RunStreamContext(context.Background(), request, consume)
 }
 
@@ -242,7 +270,7 @@ func (c *Client) RunStream(request RequestInterface, consume func(io.Reader) err
 // consume is called; a failure mid-stream surfaces as a read error inside
 // consume. No per-request timeout is imposed: a large stream is legitimate, so
 // callers that need a deadline pass a context with one.
-func (c *Client) RunStreamContext(ctx context.Context, request RequestInterface, consume func(io.Reader) error) error {
+func (c *Client) RunStreamContext(ctx context.Context, request RequestID, consume func(io.Reader) error) error {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return err

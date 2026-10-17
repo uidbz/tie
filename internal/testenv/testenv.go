@@ -21,7 +21,6 @@ import (
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/metadata"
-	tiedb "github.com/uidbz/tie/tiedb"
 	"github.com/uidbz/tie/webservice"
 )
 
@@ -45,29 +44,11 @@ func Start() (*Env, func(), error) {
 		return nil, nil, err
 	}
 
-	c := api.CollectionInfo{}
-	requests := []webservice.RequestInterface{
-		c.NewDummyRequest(),
-		c.NewQueryRequest(),
-		c.NewExpandRequest(nil, ""),
-		c.NewSetRequest("", "", nil),
-		c.NewAddRequest("", "", ""),
-		c.NewDeleteRequest("", "", ""),
-		c.NewUpdateRequest(api.Update{}),
-		api.NewBatchRequest(&api.Batch{}),
-		c.NewAssociatedRequest(""),
-		c.NewSyncRequest(),
-		c.NewDumpRequest(),
-		c.NewDropRequest(),
-		c.NewCoTagsRequest(nil, nil, ""),
-		c.NewCheckIndexRequest(false, false),
-		c.NewMkDirRequest(tiedb.DirSpec{}),
-		api.NewVersionRequest(),
-	}
 	ws := webservice.NewWebservice(webservice.WebserviceConfig{
 		DbPath: dbDir,
 		Auth:   auth.NewStore(nil, auth.RoleWrite),
-	}, requests)
+	})
+	api.RegisterAll(ws)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	wsSrv := httptest.NewServer(mux)

@@ -14,7 +14,7 @@ func newTestWebservice(t *testing.T) *Webservice {
 	return NewWebservice(WebserviceConfig{
 		DbPath: t.TempDir(),
 		Auth:   auth.NewStore(nil, auth.RoleWrite),
-	}, nil)
+	})
 }
 
 // TestCollectionKeyRejectsTraversal pins the namespace/collection validation:
@@ -85,7 +85,7 @@ func TestReadDoesNotCreateCollection(t *testing.T) {
 	}
 
 	// A fresh webservice (cold cache) also finds the on-disk collection on read.
-	ws2 := NewWebservice(WebserviceConfig{DbPath: ws.Config.DbPath, Auth: auth.NewStore(nil, auth.RoleWrite)}, nil)
+	ws2 := NewWebservice(WebserviceConfig{DbPath: ws.Config.DbPath, Auth: auth.NewStore(nil, auth.RoleWrite)})
 	col, err = ws2.GetCollection("Collections", "probe-me", false)
 	if err != nil || col == nil {
 		t.Fatalf("cold read of existing collection failed: %v", err)

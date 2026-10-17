@@ -89,16 +89,16 @@ func (batch *Batch) AddIfAbsent(key, relation string, values []string) {
 	batch.Ops = append(batch.Ops, BatchOp{Op: BatchAddIfAbsent, Key: key, Relation: relation, Values: values})
 }
 
-func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func batchHandler(env *ws.Environment, request *BatchRequest) (*BatchReply, error) {
 	reply := BatchReply{}
 	if request.Batch == nil {
 		reply.Success = false
 		reply.Message = "batch: no batch in request"
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, errors.New(reply.Message)
+		return &reply, errors.New(reply.Message)
 	}
 	col, err := env.Collection(request.Batch.Collection.Namespace, request.Batch.Collection.CollectionId)
 	if err != nil {
-		return ws.Reply{}, err
+		return nil, err
 	}
 
 	// Apply runs the whole batch under one changeMutex hold, validating every
@@ -120,17 +120,13 @@ func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	if _, err := col.Apply(ops); err != nil {
 		reply.Success = false
 		reply.Message = err.Error()
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, errors.New(reply.Message)
+		return &reply, errors.New(reply.Message)
 	}
 
 	col.Sync()
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *BatchRequest) New() ws.RequestInterface {
-	return NewBatchRequest(&Batch{})
+	return &reply, nil
 }
 
 func NewBatchRequest(batch *Batch) *BatchRequest {
@@ -139,7 +135,6 @@ func NewBatchRequest(batch *Batch) *BatchRequest {
 	}
 	request := &BatchRequest{}
 	request.Id = IdBatch
-	request.ReplyStructPtr = &BatchReply{}
 	request.Batch = batch
 
 	return request

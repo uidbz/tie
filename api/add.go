@@ -23,18 +23,18 @@ type AddReply struct {
 	OrigValue2 string
 }
 
-func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func addHandler(env *ws.Environment, request *AddRequest) (*AddReply, error) {
 	reply := AddReply{}
 
 	col, err := env.Collection(request.Namespace, request.CollectionId)
 	if err != nil {
-		return ws.Reply{}, err
+		return nil, err
 	}
 
 	if err := col.Add(request.Key, request.Value1, request.Value2); err != nil {
 		reply.Success = false
 		reply.Message = err.Error()
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, err
+		return &reply, err
 	}
 
 	reply.Success = true
@@ -42,11 +42,7 @@ func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply.OrigValue1 = request.Value1
 	reply.OrigValue2 = request.Value2
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *AddRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewAddRequest("", "", "")
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewAddRequest(key, value1, value2 string) *AddRequest {
@@ -54,7 +50,6 @@ func (c CollectionInfo) NewAddRequest(key, value1, value2 string) *AddRequest {
 	request.Id = IdAdd
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &AddReply{}
 	request.Key = key
 	request.Value1 = value1
 	request.Value2 = value2

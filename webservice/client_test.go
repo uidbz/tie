@@ -20,22 +20,15 @@ type testRequest struct {
 	Request
 }
 
-func (r *testRequest) Reply(*Environment) (Reply, error) { return Reply{}, nil }
-func (r *testRequest) New() RequestInterface             { return &testRequest{} }
-
 // readRequest carries an Id the server classifies as a read, so it is safe to
 // replay after a transport failure.
 type readRequest struct {
 	Request
 }
 
-func (r *readRequest) Reply(*Environment) (Reply, error) { return Reply{}, nil }
-func (r *readRequest) New() RequestInterface             { return &readRequest{} }
-
 func newReadRequest() *readRequest {
 	r := &readRequest{}
 	r.Id = "Query"
-	r.ReplyStructPtr = &testReply{}
 	return r
 }
 
@@ -46,20 +39,21 @@ type caseRequest struct {
 	caseName string
 }
 
-func (r *caseRequest) Reply(*Environment) (Reply, error) { return Reply{}, nil }
-func (r *caseRequest) New() RequestInterface             { return &caseRequest{caseName: r.caseName} }
-
 func newCaseRequest(name string) *caseRequest {
 	r := &caseRequest{caseName: name}
 	r.Id = name
-	r.ReplyStructPtr = &ReplyStatus{}
 	return r
+}
+
+// testHandler answers the test request, so the registry path can be exercised
+// end to end.
+func testHandler(env *Environment, req *testRequest) (*testReply, error) {
+	return &testReply{Value: "ok"}, nil
 }
 
 func newTestRequest() *testRequest {
 	r := &testRequest{}
 	r.Id = "test"
-	r.ReplyStructPtr = &testReply{}
 	return r
 }
 
@@ -95,11 +89,11 @@ func TestRunRetriesTransientFailure(t *testing.T) {
 	}
 
 	// A read: replaying it after a dropped connection is safe.
-	reply, err := c.Run(newReadRequest())
+	reply, err := Call[*readRequest, testReply](c, newReadRequest())
 	if err != nil {
 		t.Fatalf("Run returned error despite retry: %v", err)
 	}
-	got := reply.ReplyStructPtr.(*testReply).Value
+	got := reply.Value
 	if got != "ok" {
 		t.Fatalf("reply value = %q, want %q", got, "ok")
 	}
@@ -121,7 +115,7 @@ func TestRunFailsAfterMaxAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := c.Run(newReadRequest()); err == nil {
+	if _, err := Call[*readRequest, testReply](c, newReadRequest()); err == nil {
 		t.Fatal("Run returned nil error, want transport failure after exhausting retries")
 	}
 	if n := hits.Load(); n != maxAttempts {
@@ -154,7 +148,7 @@ func TestWriteIsNotRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	// newTestRequest has Id "test", which is not a read: not retry-safe.
-	if _, err := c.Run(newTestRequest()); err == nil {
+	if _, err := Call[*testRequest, testReply](c, newTestRequest()); err == nil {
 		t.Error("a dropped write reported success")
 	}
 	if n := hits.Load(); n != 1 {
@@ -176,11 +170,11 @@ func TestReadIsRetried(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reply, err := c.Run(newReadRequest())
+	reply, err := Call[*readRequest, testReply](c, newReadRequest())
 	if err != nil {
 		t.Fatalf("read should survive one dropped connection: %v", err)
 	}
-	if got := reply.ReplyStructPtr.(*testReply).Value; got != "ok" {
+	if got := reply.Value; got != "ok" {
 		t.Errorf("reply = %q", got)
 	}
 	if n := hits.Load(); n != 2 {
@@ -204,7 +198,7 @@ func TestRequestTimesOut(t *testing.T) {
 	c.SetTimeout(200 * time.Millisecond)
 
 	start := time.Now()
-	if _, err := c.Run(newReadRequest()); err == nil {
+	if _, err := Call[*readRequest, testReply](c, newReadRequest()); err == nil {
 		t.Error("a stalled server must not return success")
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
@@ -232,7 +226,7 @@ func TestContextCancellationStopsRequest(t *testing.T) {
 		cancel()
 	}()
 	start := time.Now()
-	if _, err := c.RunContext(ctx, newReadRequest()); err == nil {
+	if _, err := CallContext[*readRequest, testReply](ctx, c, newReadRequest()); err == nil {
 		t.Error("a cancelled request must report an error")
 	}
 	if elapsed := time.Since(start); elapsed > 1500*time.Millisecond {
@@ -295,7 +289,7 @@ func TestStatusErrorsAreTyped(t *testing.T) {
 		{"404-json", nil, "collection not found"},
 	} {
 		req := newCaseRequest(tc.name)
-		_, err := c.Run(req)
+		_, err := Call[*caseRequest, ReplyStatus](c, req)
 		if err == nil {
 			t.Errorf("%s: expected an error", tc.name)
 			continue
@@ -319,11 +313,11 @@ func TestStatusErrorsAreTyped(t *testing.T) {
 	// A 200 whose reply says Success:false is not an HTTP error: the reply has
 	// to reach the client layer, which maps its message (ErrNotFound and
 	// friends).
-	reply, err := c.Run(newCaseRequest("200-fail"))
+	reply, err := Call[*caseRequest, ReplyStatus](c, newCaseRequest("200-fail"))
 	if err != nil {
 		t.Fatalf("a Success:false reply must not become a transport error: %v", err)
 	}
-	st := reply.ReplyStructPtr.(*ReplyStatus)
+	st := reply
 	if st.Success || !strings.Contains(st.Message, "no associated values") {
 		t.Errorf("reply = %+v, want the server's Success:false body", st)
 	}

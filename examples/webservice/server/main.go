@@ -38,11 +38,8 @@ func main() {
 		),
 	}
 
-	requests := []webservice.RequestInterface{
-		api.NewDummyRequest(),
-	}
-
-	ws := webservice.NewWebservice(config, requests)
+	ws := webservice.NewWebservice(config)
+	api.Register(ws)
 
 	routes := func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)

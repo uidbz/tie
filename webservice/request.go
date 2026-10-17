@@ -1,36 +1,20 @@
 package webservice
 
 import (
-	"io"
-
 	"github.com/uidbz/tie/tiedb"
 )
 
-const (
-	ReplyTypeEmpty = "Empty"
-)
-
-type RequestInterface interface {
+// RequestID is all the transport needs from a request: it names itself, and it
+// marshals to JSON. The reply type is a type parameter at the call site, so a
+// request no longer carries a prototype of its own reply — the old
+// GetReplyStructPtr() meant a request whose prototype disagreed with its
+// handler's reply decoded into the wrong shape on the client, quietly.
+type RequestID interface {
 	GetId() string
-	GetReplyStructPtr() interface{}
-	Reply(environment *Environment) (Reply, error)
-	// New returns a fresh, zero-valued instance of the same concrete request
-	// type. RequestHandler unmarshals each incoming request into its own New()
-	// instance so concurrent requests never share mutable state.
-	New() RequestInterface
 }
 
-// StreamingRequestInterface is an optional interface a request may implement to
-// write its reply directly to the response writer (e.g. NDJSON, one record per
-// line) instead of returning a fully-buffered Reply. AnswerRequest prefers this
-// path when present, so neither the server nor the client materializes the whole
-// reply in memory. Once the first byte is written the HTTP status is committed,
-// so a mid-stream error cannot change it (it can only be logged).
-type StreamingRequestInterface interface {
-	RequestInterface
-	StreamReply(environment *Environment, w io.Writer) error
-}
-
+// Environment is what a handler may reach: the authenticated user, and the
+// collections.
 type Environment struct {
 	Username string
 	// Collection resolves the request's namespace/collection. It returns an
@@ -40,30 +24,20 @@ type Environment struct {
 	Webservice *Webservice
 }
 
+// Request is the part of a request every type shares: the id it is registered
+// under, which is also the URL it is POSTed to.
 type Request struct {
-	Id             string
-	ReplyStructPtr interface{}
+	Id string
 }
 
 func (r *Request) GetId() string {
 	return r.Id
 }
 
-func (r *Request) GetReplyStructPtr() interface{} {
-	return r.ReplyStructPtr
-}
-
-type Reply struct {
-	RequestName    string
-	ReplyStructPtr interface{}
-}
-
+// ReplyStatus is the field block every reply carries: whether the operation
+// succeeded, a message when it did not, and the key it was about.
 type ReplyStatus struct {
 	Success bool
 	Message string
 	OrigKey string
-}
-
-func ReadReply[T any](reply *Reply) *T {
-	return reply.ReplyStructPtr.(*T)
 }

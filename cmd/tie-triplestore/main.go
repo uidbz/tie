@@ -9,7 +9,6 @@ import (
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/internal/daemon"
-	tiedb "github.com/uidbz/tie/tiedb"
 	"github.com/uidbz/tie/webservice"
 )
 
@@ -151,28 +150,8 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		MaxRequestBytes:            int64(cfg.MaxRequestBytesMB) * 1024 * 1024,
 	}
 
-	c := api.CollectionInfo{}
-
-	requests := []webservice.RequestInterface{
-		c.NewDummyRequest(),
-		c.NewQueryRequest(),
-		c.NewExpandRequest(nil, ""),
-		c.NewSetRequest("", "", nil),
-		c.NewAddRequest("", "", ""),
-		c.NewDeleteRequest("", "", ""),
-		c.NewUpdateRequest(api.Update{}),
-		api.NewBatchRequest(&api.Batch{}),
-		c.NewAssociatedRequest(""),
-		c.NewSyncRequest(),
-		c.NewDumpRequest(),
-		c.NewDropRequest(),
-		c.NewCoTagsRequest(nil, nil, ""),
-		c.NewCheckIndexRequest(false, false),
-		c.NewMkDirRequest(tiedb.DirSpec{}),
-		api.NewVersionRequest(),
-	}
-
-	ws := webservice.NewWebservice(config, requests)
+	ws := webservice.NewWebservice(config)
+	api.RegisterAll(ws)
 
 	routes := func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)

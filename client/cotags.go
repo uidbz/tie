@@ -20,7 +20,7 @@ func (tc *TieClient) CoTagsForQuery(include, exclude []string, scope string) ([]
 	col := tc.CollectionInfo()
 	request := col.NewCoTagsRequest(include, exclude, scope)
 
-	reply, err := run[api.CoTagsReply](tc, request)
+	reply, err := call[*api.CoTagsRequest, api.CoTagsReply](tc, request)
 	if err != nil {
 		return nil, err
 	}

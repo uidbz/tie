@@ -18,14 +18,16 @@ func main() {
 	request := api.NewDummyRequest()
 	request.SomeData = "Test"
 
-	if reply, err := client.Run(request); err != nil {
+	// The reply type is a parameter of the call, so there is nothing to cast
+	// and no prototype to keep in step with the handler.
+	reply, err := ws.Call[*api.DummyRequest, api.DummyReply](client, request)
+	if err != nil {
 		fmt.Println(err)
+		return
+	}
+	if reply.Success {
+		fmt.Println(reply.Hello)
 	} else {
-		data := ws.ReadReply[api.DummyReply](reply)
-		if data.Success {
-			fmt.Println(data.Hello)
-		} else {
-			fmt.Println("Request failed")
-		}
+		fmt.Println("Request failed")
 	}
 }

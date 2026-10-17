@@ -17,20 +17,16 @@ type SyncReply struct {
 	ws.ReplyStatus
 }
 
-func (request *SyncRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func syncHandler(env *ws.Environment, request *SyncRequest) (*SyncReply, error) {
 	reply := SyncReply{}
 	col, err := env.Collection(request.Namespace, request.CollectionId)
 	if err != nil {
-		return ws.Reply{}, err
+		return nil, err
 	}
 	col.Sync()
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *SyncRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewSyncRequest()
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewSyncRequest() *SyncRequest {
@@ -38,7 +34,6 @@ func (c CollectionInfo) NewSyncRequest() *SyncRequest {
 	request.Id = IdSync
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &SyncReply{}
 
 	return request
 }

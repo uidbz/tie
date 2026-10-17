@@ -25,23 +25,19 @@ type SetReply struct {
 	ws.ReplyStatus
 }
 
-func (request *SetRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func setHandler(env *ws.Environment, request *SetRequest) (*SetReply, error) {
 	reply := SetReply{}
 
 	col, err := env.Collection(request.Namespace, request.CollectionId)
 	if err != nil {
-		return ws.Reply{}, err
+		return nil, err
 	}
 	col.SetValues(request.Key, request.Relation, request.Values)
 
 	reply.Success = true
 	reply.OrigKey = request.Key
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *SetRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewSetRequest("", "", nil)
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewSetRequest(key, relation string, values []string) *SetRequest {
@@ -49,7 +45,6 @@ func (c CollectionInfo) NewSetRequest(key, relation string, values []string) *Se
 	request.Id = IdSet
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &SetReply{}
 	request.Key = key
 	request.Relation = relation
 	request.Values = values

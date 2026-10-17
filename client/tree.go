@@ -434,7 +434,7 @@ func (tie *TieClient) mkdir(parentUID DirUID, dirPath string, newUID DirUID) (Di
 		TypeRelation:   string(RelType),
 		TypeValue:      str(TieDirectory),
 	})
-	reply, err := run[api.MkDirReply](tie, request)
+	reply, err := call[*api.MkDirRequest, api.MkDirReply](tie, request)
 	if err != nil {
 		return "", false, err
 	}

@@ -12,23 +12,31 @@ import (
 	"github.com/uidbz/tie/auth"
 )
 
-// failingRequest answers with an application error, so the handler's error
+// failingRequest answers with an application error, so the registry's error
 // status codes can be observed.
 type failingRequest struct {
 	Request
-	err error
 }
 
-func (r *failingRequest) Reply(*Environment) (Reply, error) { return Reply{}, r.err }
-func (r *failingRequest) New() RequestInterface             { return &failingRequest{err: r.err} }
+func failingHandler(err error) Handler[failingRequest, ReplyStatus] {
+	return func(env *Environment, req *failingRequest) (*ReplyStatus, error) {
+		return nil, err
+	}
+}
 
-func handlerServer(t *testing.T, maxBytes int64, reqs ...RequestInterface) *httptest.Server {
+// handlerServer serves a webservice with the given registrations. A
+// registration is a function because Register is generic: the request and reply
+// types are chosen at the call site, not passed as values.
+func handlerServer(t *testing.T, maxBytes int64, regs ...func(*Webservice)) *httptest.Server {
 	t.Helper()
 	ws := NewWebservice(WebserviceConfig{
 		DbPath:          t.TempDir(),
 		Auth:            auth.NewStore(nil, auth.RoleWrite),
 		MaxRequestBytes: maxBytes,
-	}, reqs)
+	})
+	for _, reg := range regs {
+		reg(ws)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	srv := httptest.NewServer(mux)
@@ -74,7 +82,9 @@ func TestUnknownRequestIs404(t *testing.T) {
 // TestOversizedBodyIsRejected: the body used to be read with no limit, so one
 // oversized request exhausted memory.
 func TestOversizedBodyIsRejected(t *testing.T) {
-	srv := handlerServer(t, 64, newTestRequest())
+	srv := handlerServer(t, 64, func(ws *Webservice) {
+		Register(ws, "test", auth.AccessWrite, testHandler)
+	})
 	resp := post(t, srv.URL+"/test", strings.Repeat("x", 4096))
 	if resp.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Errorf("oversized body: status = %d, want 413", resp.StatusCode)
@@ -96,8 +106,10 @@ func TestOversizedBodyIsRejected(t *testing.T) {
 // client can still report the message.
 func TestApplicationErrorKeepsJSONBodyWithStatus(t *testing.T) {
 	srv := handlerServer(t, 0,
-		&failingRequest{Request: Request{Id: "notfound"}, err: ErrCollectionNotFound},
-		&failingRequest{Request: Request{Id: "internal"}, err: errors.New("disk on fire")},
+		func(ws *Webservice) { Register(ws, "notfound", auth.AccessRead, failingHandler(ErrCollectionNotFound)) },
+		func(ws *Webservice) {
+			Register(ws, "internal", auth.AccessRead, failingHandler(errors.New("disk on fire")))
+		},
 	)
 
 	resp := post(t, srv.URL+"/notfound", `{"Id":"notfound"}`)

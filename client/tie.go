@@ -498,15 +498,15 @@ func (tc *TieClient) CollectionInfo() api.CollectionInfo {
 
 // run sends a request and returns the typed reply. err is non-nil on transport
 // failure; the API-level Success flag is checked by each method via replyError.
-func run[T any](tc *TieClient, request ws.RequestInterface) (*T, error) {
+// call sends one request and returns its reply. Both halves of the exchange are
+// named at the call site — the request type carries the id, the reply type is a
+// parameter — so a request and a handler that disagree about the reply shape is
+// a compile error rather than a wrong-shaped decode (§7.5).
+func call[Req ws.RequestID, Rep any](tc *TieClient, request Req) (*Rep, error) {
 	if tc.runErr != nil {
 		return nil, tc.runErr
 	}
-	generic, err := tc.client.Run(request)
-	if err != nil {
-		return nil, err
-	}
-	return ws.ReadReply[T](generic), nil
+	return ws.Call[Req, Rep](tc.client, request)
 }
 
 // replyError turns an unsuccessful reply into an error: ErrNotFound for the
@@ -525,7 +525,7 @@ func replyError(status ws.ReplyStatus) error {
 func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
 	request := tc.CollectionInfo().NewAddRequest(key, value1, value2)
 
-	reply, err := run[api.AddReply](tc, request)
+	reply, err := call[*api.AddRequest, api.AddReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +539,7 @@ func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
 func (tc *TieClient) Sync() error {
 	request := tc.CollectionInfo().NewSyncRequest()
 
-	reply, err := run[api.SyncReply](tc, request)
+	reply, err := call[*api.SyncRequest, api.SyncReply](tc, request)
 	if err != nil {
 		return err
 	}
@@ -551,7 +551,7 @@ func (tc *TieClient) Sync() error {
 func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 	request := tc.CollectionInfo().NewAssociatedRequest(key)
 
-	reply, err := run[api.AssociatedReply](tc, request)
+	reply, err := call[*api.AssociatedRequest, api.AssociatedReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -586,7 +586,7 @@ func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 		Descending:         spec.Descending,
 	}
 
-	reply, err := run[api.QueryReply](tc, request)
+	reply, err := call[*api.QueryRequest, api.QueryReply](tc, request)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -615,7 +615,7 @@ func (tc *TieClient) Get(key string) (Row, error) {
 func (tc *TieClient) Expand(keys []string) ([]Row, error) {
 	request := tc.CollectionInfo().NewExpandRequest(keys, "")
 
-	reply, err := run[api.ExpandReply](tc, request)
+	reply, err := call[*api.ExpandRequest, api.ExpandReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -630,7 +630,7 @@ func (tc *TieClient) Expand(keys []string) ([]Row, error) {
 func (tc *TieClient) Set(key, relation string, values []string) error {
 	request := tc.CollectionInfo().NewSetRequest(key, relation, values)
 
-	reply, err := run[api.SetReply](tc, request)
+	reply, err := call[*api.SetRequest, api.SetReply](tc, request)
 	if err != nil {
 		return err
 	}
@@ -641,7 +641,7 @@ func (tc *TieClient) Set(key, relation string, values []string) error {
 func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
 	request := tc.CollectionInfo().NewDeleteRequest(key, value1, value2)
 
-	reply, err := run[api.DeleteReply](tc, request)
+	reply, err := call[*api.DeleteRequest, api.DeleteReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -652,7 +652,7 @@ func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
 func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
 	request := tc.CollectionInfo().NewUpdateRequest(update)
 
-	reply, err := run[api.UpdateReply](tc, request)
+	reply, err := call[*api.UpdateRequest, api.UpdateReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +665,7 @@ func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
 func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 	request := api.NewBatchRequest(batch)
 
-	reply, err := run[api.BatchReply](tc, request)
+	reply, err := call[*api.BatchRequest, api.BatchReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -723,7 +723,7 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 func (tc *TieClient) CheckIndex(deep, repair bool) (*tiedb.IndexReport, error) {
 	request := tc.CollectionInfo().NewCheckIndexRequest(deep, repair)
 
-	reply, err := run[api.CheckIndexReply](tc, request)
+	reply, err := call[*api.CheckIndexRequest, api.CheckIndexReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -740,7 +740,7 @@ func (tc *TieClient) CheckIndex(deep, repair bool) (*tiedb.IndexReport, error) {
 func (tc *TieClient) DropCollection() error {
 	request := tc.CollectionInfo().NewDropRequest()
 
-	reply, err := run[api.DropReply](tc, request)
+	reply, err := call[*api.DropRequest, api.DropReply](tc, request)
 	if err != nil {
 		return err
 	}

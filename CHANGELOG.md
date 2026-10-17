@@ -232,6 +232,22 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **The wire protocol is a registry, not sixteen copied files.** A request type
+  is now its struct plus a handler function; the registry owns decoding, the
+  access check, encoding and status codes.
+  - `webservice.NewWebservice(config)` takes no request slice; call
+    `api.RegisterAll(ws)` (or `webservice.Register(ws, id, access, handler)` per
+    type).
+  - Request types lose their `Reply(env)` and `New()` methods, and the
+    `RequestInterface` they implemented is now just `RequestID { GetId() string }`.
+  - The client transport is generic: `webservice.Call[*api.AddRequest, api.AddReply](c, req)`
+    replaces `c.Run(request)` + `ws.ReadReply[T](reply)`, so a request and a
+    handler that disagree about the reply shape no longer decode into the wrong
+    type at runtime.
+  - The read/write classification is stated at registration; the separate
+    `readRequests` map is gone, and `ws.AccessFor(id)` reports what a request needs.
+  - **The wire format is unchanged**: same request JSON, same reply JSON, same
+    status codes, same NDJSON dump.
 - **One vocabulary for relations.** `client.TieProperty` (the stringer-generated
   int enum), its `tieproperty_string.go` and the `str()` helper for it are gone;
   relations are typed string constants — `const RelTag Relation = "tag"`. Library

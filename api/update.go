@@ -29,12 +29,12 @@ type UpdateReply struct {
 	OrigNewValue2 string
 }
 
-func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func updateHandler(env *ws.Environment, request *UpdateRequest) (*UpdateReply, error) {
 	reply := UpdateReply{}
 
 	col, err := env.Collection(request.Namespace, request.CollectionId)
 	if err != nil {
-		return ws.Reply{}, err
+		return nil, err
 	}
 
 	if request.AddOnFailure {
@@ -48,11 +48,7 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	reply.OrigValue2 = request.Value2
 	reply.OrigNewValue2 = request.NewValue2
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *UpdateRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewUpdateRequest(Update{})
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewUpdateRequest(update Update) *UpdateRequest {
@@ -60,7 +56,6 @@ func (c CollectionInfo) NewUpdateRequest(update Update) *UpdateRequest {
 	request.Id = IdUpdate
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &UpdateReply{}
 	request.Key = update.Key
 	request.Value1 = update.Value1
 	request.Value2 = update.Value2

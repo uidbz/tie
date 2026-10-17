@@ -21,19 +21,14 @@ type VersionReply struct {
 	Build  version.Info `json:"build"`
 }
 
-func (request *VersionRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func versionHandler(env *ws.Environment, request *VersionRequest) (*VersionReply, error) {
 	reply := VersionReply{Server: "tie-triplestore", Build: version.Get()}
 	reply.Success = true
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *VersionRequest) New() ws.RequestInterface {
-	return NewVersionRequest()
+	return &reply, nil
 }
 
 func NewVersionRequest() *VersionRequest {
 	request := &VersionRequest{}
 	request.Id = IdVersion
-	request.ReplyStructPtr = &VersionReply{}
 	return request
 }

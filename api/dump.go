@@ -22,28 +22,13 @@ type DumpReply struct {
 	Triples []tiedb.StringTriple
 }
 
-func (request *DumpRequest) Reply(env *ws.Environment) (ws.Reply, error) {
-	reply := DumpReply{}
-
-	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
-	if err != nil {
-		return ws.Reply{}, err
-	}
-	if found {
-		col.ForEachTriple(func(t tiedb.StringTriple) {
-			reply.Triples = append(reply.Triples, t)
-		})
-	}
-	reply.Success = true
-
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-// StreamReply writes every forward triple as NDJSON (one JSON StringTriple per
-// line) straight to w, so the server never buffers the whole collection. It
-// drops the ReplyStatus envelope the buffered Reply carries — Dump always
-// succeeds, and auth/not-found failures happen before any body byte is written.
-func (request *DumpRequest) StreamReply(env *ws.Environment, w io.Writer) error {
+// dumpStreamHandler writes every forward triple as NDJSON (one JSON StringTriple
+// per line) straight to w, so the server never buffers the whole collection. It
+// carries no ReplyStatus envelope — Dump always succeeds, and auth/not-found
+// failures happen before any body byte is written. The buffered variant this
+// replaced was dead: the server always preferred streaming, and TieClient.Dump
+// collects from the stream.
+func dumpStreamHandler(env *ws.Environment, request *DumpRequest, w io.Writer) error {
 	enc := json.NewEncoder(w) // Encode appends '\n' => NDJSON
 	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
 	if err != nil {
@@ -62,16 +47,11 @@ func (request *DumpRequest) StreamReply(env *ws.Environment, w io.Writer) error 
 	return encErr
 }
 
-func (request *DumpRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewDumpRequest()
-}
-
 func (c CollectionInfo) NewDumpRequest() *DumpRequest {
 	request := &DumpRequest{}
 	request.Id = IdDump
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &DumpReply{}
 
 	return request
 }

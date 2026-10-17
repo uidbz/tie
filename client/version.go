@@ -7,7 +7,7 @@ import (
 
 // ServerVersion asks the bound triplestore which build it is running.
 func (tc *TieClient) ServerVersion() (version.Info, error) {
-	reply, err := run[api.VersionReply](tc, api.NewVersionRequest())
+	reply, err := call[*api.VersionRequest, api.VersionReply](tc, api.NewVersionRequest())
 	if err != nil {
 		return version.Info{}, err
 	}

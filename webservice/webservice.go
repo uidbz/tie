@@ -20,9 +20,12 @@ import (
 )
 
 type Webservice struct {
-	Config   WebserviceConfig
-	mux      *http.ServeMux
-	requests []RequestInterface
+	Config WebserviceConfig
+	mux    *http.ServeMux
+	// handlers maps a request id to its handler and access level. Registering
+	// a request states its access, so a new request cannot fall out of a
+	// separate read/write table (§7.5).
+	handlers map[string]registration
 	db       *tiedb.TieTree
 	// sem bounds how many requests run concurrently. A nil channel means no
 	// ceiling. Each request acquires a slot before Reply and releases it after.
@@ -80,11 +83,13 @@ type CollectionReverseRelations struct {
 	Relations  []string
 }
 
-func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webservice {
+// NewWebservice builds an empty service: it knows no request types until they
+// are registered on it (api.RegisterAll installs the tie protocol).
+func NewWebservice(config WebserviceConfig) *Webservice {
 	ws := &Webservice{}
 	ws.mux = http.NewServeMux()
 	ws.Config = config
-	ws.requests = requests
+	ws.handlers = map[string]registration{}
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	if config.LoadMemoryLimitMB > 0 {
@@ -155,26 +160,23 @@ func (ws *Webservice) Close() {
 	ws.db.Close()
 }
 
-// readRequests are the request Ids that only read state. Every other Id
-// (including any future one) is treated as a write, so a new write operation is
-// never accidentally exposed to a read-only user.
-var readRequests = map[string]bool{
-	"Dummy":      true,
-	"Query":      true,
-	"Expand":     true,
-	"Associated": true,
-	"CoTags":     true,
-	"Dump":       true,
-	"Version":    true,
-}
-
-// accessFor classifies a request Id as read or write. Unknown Ids default to
-// write (fail-safe).
-func accessFor(reqName string) auth.Access {
-	if readRequests[reqName] {
-		return auth.AccessRead
+// AccessFor classifies a request id as read or write from how it was
+// registered. An unknown id defaults to write (fail-safe), so a request that was
+// never registered cannot be reached with read-only credentials.
+func (ws *Webservice) AccessFor(reqName string) auth.Access {
+	if reg, ok := ws.handlers[reqName]; ok {
+		return reg.access
 	}
 	return auth.AccessWrite
+}
+
+// register installs a request type. Register and RegisterStream are the
+// type-safe front ends; this is the shared part.
+func (ws *Webservice) register(id string, reg registration) {
+	if ws.handlers == nil {
+		ws.handlers = map[string]registration{}
+	}
+	ws.handlers[id] = reg
 }
 
 // ErrCollectionNotFound is returned by the read-path collection resolution
@@ -290,7 +292,7 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	reqName := r.PathValue("request")
 	slog.Info("request", "from", r.RemoteAddr, "request", reqName)
 
-	if ok, status := ws.Config.Auth.Authorize(r, accessFor(reqName)); !ok {
+	if ok, status := ws.Config.Auth.Authorize(r, ws.AccessFor(reqName)); !ok {
 		if status == http.StatusUnauthorized {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 		}
@@ -306,18 +308,22 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, x := range ws.requests {
-		if reqName == x.GetId() {
-			// Unmarshal into a fresh instance so concurrent requests never
-			// share the prototype's mutable fields. The HTTP server already
-			// runs each request on its own goroutine, so we answer inline.
-			if ws.sem != nil {
-				ws.sem <- struct{}{}
-				defer func() { <-ws.sem }()
-			}
-			ws.AnswerRequest(w, x.New(), raw_data, username)
-			return
+	reg, known := ws.handlers[reqName]
+	if known {
+		// The handler decodes into a fresh request value, so concurrent
+		// requests never share mutable state. The HTTP server already runs
+		// each request on its own goroutine, so we answer inline.
+		if ws.sem != nil {
+			ws.sem <- struct{}{}
+			defer func() { <-ws.sem }()
 		}
+		// Write requests may create the collection; reads only look it up.
+		writable := reg.access == auth.AccessWrite
+		env := &Environment{username, func(ns, col string) (*tiedb.Collection, error) {
+			return ws.GetCollection(ns, col, writable)
+		}, ws}
+		reg.serve(env, raw_data, w)
+		return
 	}
 
 	// An unknown request id used to answer 200 with an empty body, which the
@@ -345,46 +351,4 @@ func ErrorToJsonString(prepend string, err error) string {
 	}
 
 	return string(json_reply)
-}
-
-func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterface, rawData []byte, username string) {
-	errRequest := json.Unmarshal(rawData, request)
-	if errRequest != nil {
-		slog.Error("unmarshalling request", "err", errRequest)
-		answerError(w, http.StatusBadRequest, "Error unmarshalling request:", errRequest)
-		return
-	}
-
-	// Write requests may create the collection; reads only look it up.
-	writable := accessFor(request.GetId()) == auth.AccessWrite
-	env := &Environment{username, func(ns, col string) (*tiedb.Collection, error) {
-		return ws.GetCollection(ns, col, writable)
-	}, ws}
-
-	// Streaming requests write their reply directly to w (NDJSON) so the whole
-	// reply is never held in memory. The caller's semaphore slot (see
-	// RequestHandler) is held for the full stream — that is the intended
-	// MaxConcurrentRequests load-shedding behavior for a large dump.
-	if s, ok := request.(StreamingRequestInterface); ok {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		if err := s.StreamReply(env, w); err != nil {
-			// Status and headers are already committed; we can only log.
-			slog.Error("stream reply error", "err", err)
-		}
-		return
-	}
-
-	reply, errReply := request.Reply(env)
-	if errReply != nil {
-		answerError(w, statusForError(errReply), "Error:", errReply)
-		return
-	}
-	json_reply, errMarshal := json.Marshal(reply.ReplyStructPtr)
-	if errMarshal != nil {
-		// The reply never reached the wire, so a 500 with a decodable body is
-		// honest; the old code answered 200 with the error string.
-		answerError(w, http.StatusInternalServerError, "Internal error:", errMarshal)
-		return
-	}
-	fmt.Fprint(w, string(json_reply))
 }

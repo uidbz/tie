@@ -33,27 +33,23 @@ type MkDirReply struct {
 	Existed bool `json:"existed"`
 }
 
-func (request *MkDirRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func mkDirHandler(env *ws.Environment, request *MkDirRequest) (*MkDirReply, error) {
 	reply := MkDirReply{}
 	col, err := env.Collection(request.Namespace, request.CollectionId)
 	if err != nil {
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, err
+		return &reply, err
 	}
 
 	uid, existed, err := col.MkDir(request.Spec)
 	if err != nil {
 		reply.Message = err.Error()
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, err
+		return &reply, err
 	}
 	reply.Success = true
 	reply.UID = uid
 	reply.Existed = existed
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *MkDirRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewMkDirRequest(tiedb.DirSpec{})
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewMkDirRequest(spec tiedb.DirSpec) *MkDirRequest {
@@ -62,7 +58,6 @@ func (c CollectionInfo) NewMkDirRequest(spec tiedb.DirSpec) *MkDirRequest {
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
 	request.Spec = spec
-	request.ReplyStructPtr = &MkDirReply{}
 
 	return request
 }

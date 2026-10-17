@@ -26,12 +26,12 @@ type AssociatedReply struct {
 	Result tiedb.TripleSet
 }
 
-func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func associatedHandler(env *ws.Environment, request *AssociatedRequest) (*AssociatedReply, error) {
 	reply := AssociatedReply{}
 
 	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
 	if err != nil {
-		return ws.Reply{}, err
+		return nil, err
 	}
 
 	var assPtr *tiedb.AssociationSet
@@ -50,15 +50,11 @@ func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		reply.Success = true
 		reply.OrigKey = request.Key
 
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
+		return &reply, nil
 	}
 	reply.Success = false
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *AssociatedRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewAssociatedRequest("")
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewAssociatedRequest(key string) *AssociatedRequest {
@@ -66,7 +62,6 @@ func (c CollectionInfo) NewAssociatedRequest(key string) *AssociatedRequest {
 	request.Id = IdAssociated
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &AssociatedReply{}
 
 	request.Key = key
 
