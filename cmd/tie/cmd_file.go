@@ -104,39 +104,68 @@ func cmdUpload(a *app) *cli.Command {
 func cmdDownload(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "download",
-		Usage: "Download a file or directory from a filehost: download [source-hash] [dest]",
+		Usage: "Download a file or directory from a filehost: download SOURCE-HASH DEST (- reads hashes from stdin)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "host", Usage: "Filehost name from config (default: first of the collection's FileHosts)"},
 			&cli.StringFlag{Name: "server", Usage: "Raw filehost URL, bypassing config"},
 			&cli.BoolFlag{Name: "insecure", Usage: "Skip TLS certificate verification (with --server)"},
+			stdinFlag(),
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			if ctx.Args().Len() < 2 {
-				return errors.New("Need 2 args: source-hash, dest")
+				return exitError{code: exitUsage, msg: "download takes SOURCE-HASH DEST (or --stdin to read hashes from stdin; a lone - cannot be followed by DEST)"}
 			}
 			host, err := a.resolveFileHost(ctx)
 			if err != nil {
 				return err
 			}
-			sourceHash := ctx.Args().Get(0)
-			total, err := client.DownloadSize(host, sourceHash)
-			if err != nil {
-				return err
+			hashes := []string{ctx.Args().Get(0)}
+			if wantsStdin(ctx) {
+				// Several hashes land in DEST, so DEST has to be a directory;
+				// saying so beats writing each download over the last (§6.7).
+				hashes, err = readStdinKeys()
+				if err != nil {
+					return err
+				}
+				if len(hashes) == 0 {
+					fmt.Fprintln(os.Stderr, "no hashes on stdin")
+					return nil
+				}
+				if len(hashes) > 1 {
+					if fi, err := os.Stat(ctx.Args().Get(1)); err != nil || !fi.IsDir() {
+						return exitError{code: exitUsage, msg: "downloading several hashes needs DEST to be an existing directory"}
+					}
+				}
 			}
-			bar := progressbar.NewOptions64(
-				total,
-				progressbar.OptionSetDescription("Downloading"),
-				progressbar.OptionSetWriter(os.Stderr),
-				progressbar.OptionShowBytes(true),
-				progressbar.OptionShowCount(),
-				progressbar.OptionClearOnFinish(),
-				// See the upload bar: cap redraws so per-chunk writes don't
-				// throttle the transfer to terminal-render speed.
-				progressbar.OptionThrottle(16*time.Millisecond),
-			)
-			err = client.DownloadFromWithProgress(host, sourceHash, ctx.Args().Get(1), bar)
-			bar.Finish()
-			return err
+			for _, sourceHash := range hashes {
+				if err := downloadOne(a, host, sourceHash, ctx); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
+}
+
+// downloadOne fetches one content hash to the destination named on the command
+// line, with the progress bar on stderr.
+func downloadOne(a *app, host client.FileHost, sourceHash string, ctx *cli.Command) error {
+	total, err := client.DownloadSize(host, sourceHash)
+	if err != nil {
+		return err
+	}
+	bar := progressbar.NewOptions64(
+		total,
+		progressbar.OptionSetDescription("Downloading"),
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionShowCount(),
+		progressbar.OptionClearOnFinish(),
+		// See the upload bar: cap redraws so per-chunk writes don't
+		// throttle the transfer to terminal-render speed.
+		progressbar.OptionThrottle(16*time.Millisecond),
+	)
+	err = client.DownloadFromWithProgress(host, sourceHash, ctx.Args().Get(1), bar)
+	bar.Finish()
+	return err
 }

@@ -161,49 +161,65 @@ func cmdConf(a *app) *cli.Command {
 func cmdStat(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "stat",
-		Usage: "Show info about a file or directory: stat [path-or-hash]",
+		Usage: "Show info about files or directories: stat PATH-or-HASH... (- reads them from stdin)",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "check", Usage: "HEAD the filehost to confirm the blob exists and report its on-disk size"},
 			&cli.BoolFlag{Name: "json", Usage: "Emit the raw StatInfo as JSON (same as --format json)"},
+			stdinFlag(),
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
-			if ctx.Args().Len() < 1 {
-				return errors.New("Need 1 arg: path or hash")
-			}
-			arg := ctx.Args().First()
-			opts := client.StatOptions{Recursive: true, Versions: true, CheckBlob: ctx.Bool("check")}
-
-			var (
-				info client.StatInfo
-				err  error
-			)
-			if metadata.IsHexHash(arg) {
-				info, err = a.tie.Stat(arg, opts)
-			} else {
-				info, err = a.tie.StatPath(arg, opts)
-			}
+			keys, err := argKeys(ctx)
 			if err != nil {
-				if errors.Is(err, client.ErrNotFound) {
-					fmt.Fprintln(os.Stderr, "no metadata in store for "+arg)
-					return nil
-				}
-				return errors.New("Stat Error: " + err.Error())
+				return err
 			}
+			if len(keys) < 1 {
+				return exitError{code: exitUsage, msg: "stat takes a PATH or HASH (or - to read them from stdin)"}
+			}
+			opts := client.StatOptions{Recursive: true, Versions: true, CheckBlob: ctx.Bool("check")}
 
 			format, err := outputFormat(ctx)
 			if err != nil {
 				return err
 			}
-			if ctx.Bool("json") || format == "json" {
+			asJSON := ctx.Bool("json") || format == "json"
+
+			var infos []client.StatInfo
+			for _, arg := range keys {
+				var info client.StatInfo
+				if metadata.IsHexHash(arg) {
+					info, err = a.tie.Stat(arg, opts)
+				} else {
+					info, err = a.tie.StatPath(arg, opts)
+				}
+				if err != nil {
+					if errors.Is(err, client.ErrNotFound) {
+						fmt.Fprintln(os.Stderr, "no metadata in store for "+arg)
+						continue
+					}
+					return operationalError("stat: %v", err)
+				}
+				infos = append(infos, info)
+			}
+			if len(infos) == 0 {
+				return nil
+			}
+
+			if asJSON {
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
-				return enc.Encode(info)
+				if len(infos) == 1 {
+					return enc.Encode(infos[0])
+				}
+				return enc.Encode(infos)
 			}
 			o, err := a.outFor(ctx, "field", "value")
 			if err != nil {
 				return err
 			}
-			return printStat(o, info)
+			for _, info := range infos {
+				printStat(o, info)
+			}
+			return o.flush()
 		},
 	}
 }
@@ -265,7 +281,7 @@ func printStat(o *out, info client.StatInfo) error {
 	for _, r := range rows {
 		o.row(r.k, r.v)
 	}
-	return o.flush()
+	return nil
 }
 
 // humanizeBytes formats a byte count with a binary (KiB/MiB/…) unit, e.g.

@@ -42,142 +42,183 @@ func cmdGet(a *app) *cli.Command {
 	return &cli.Command{
 		Name:    "get",
 		Aliases: []string{"g"},
-		Usage:   "Get triples: get [key] (or multiple keys for intersection of reverse value. Use -[key] to exclude instead of joining)",
+		Usage:   "Get triples: get KEY... [--not EXCLUDE...] (multiple keys intersect; - reads keys from stdin)",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "reverse", Aliases: []string{"r"}},
 			&cli.IntFlag{Name: "limit", Aliases: []string{"l"}, Value: 1000},
 			&cli.IntFlag{Name: "offset", Aliases: []string{"o"}, Value: 0},
 			&cli.StringFlag{Name: "sortby", Aliases: []string{"s"}},
 			&cli.StringFlag{Name: "filter", Aliases: []string{"f"}},
+			&cli.StringSliceFlag{Name: "not", Usage: "Exclude rows carrying this value1 (repeatable); a term spelled !VALUE does the same"},
+			stdinFlag(),
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
-			if ctx.Args().Len() < 1 {
-				return errors.New("Need 1 arg: Key")
-			}
 			args := ctx.Args().Slice()
-			var reverse bool = false
-			if len(args) > 1 {
-				reverse = true
-			} else {
-				reverse = ctx.Bool("reverse")
+			if len(args) < 1 && !ctx.Bool("stdin") {
+				return exitError{code: exitUsage, msg: "get takes at least one KEY (or --stdin to read keys from stdin)"}
 			}
-			terms := []string{args[0]}
-			excluding := make([]string, 0)
-			for i := 1; i < len(args); i++ {
-				if strings.HasPrefix(args[i], "-") {
-					excluding = append(excluding, strings.TrimPrefix(args[i], "-"))
-				} else {
-					terms = append(terms, args[i])
+
+			// Exclusion is a flag, not a leading dash: `-b` is eaten by flag
+			// parsing, so the old spelling only worked behind `--` (§6.7). --not b
+			// and !b both work; a bare -term still does for a script that already
+			// writes `-- -term`.
+			excluding := ctx.StringSlice("not")
+
+			// Each query to run. Several KEYs on the command line mean the
+			// reverse intersection they always meant; keys read from stdin are
+			// asked one at a time, because `tie dump | cut -f1 | tie get -`
+			// wants every key's rows, not the intersection of all of them (§6.7).
+			var queries [][]string
+			if wantsStdin(ctx) {
+				if hasStdinArg(args) {
+					warnDroppedArgs()
 				}
-			}
-			rows, _, err := a.tie.Query(client.QuerySpec{
-				Terms:   terms,
-				Exclude: excluding,
-				Reverse: reverse,
-				Filter:  ctx.String("filter"),
-				Offset:  ctx.Int("offset"),
-				Limit:   ctx.Int("limit"),
-				SortBy:  ctx.String("sortby"),
-			})
-			if err != nil {
-				if errors.Is(err, client.ErrNotFound) {
+				keys, err := readStdinKeys()
+				if err != nil {
+					return err
+				}
+				if len(keys) == 0 {
+					fmt.Fprintln(os.Stderr, "no keys on stdin")
 					return nil
 				}
-				return errors.New("Get Error: " + err.Error())
+				for _, k := range keys {
+					queries = append(queries, []string{k})
+				}
+				// Keys written alongside --stdin are asked the same way.
+				for _, a := range args {
+					if a != "-" {
+						queries = append(queries, []string{a})
+					}
+				}
+			} else {
+				terms := []string{args[0]}
+				for i := 1; i < len(args); i++ {
+					switch {
+					case strings.HasPrefix(args[i], "!"):
+						excluding = append(excluding, strings.TrimPrefix(args[i], "!"))
+					case strings.HasPrefix(args[i], "-") && len(args[i]) > 1:
+						excluding = append(excluding, strings.TrimPrefix(args[i], "-"))
+					default:
+						terms = append(terms, args[i])
+					}
+				}
+				queries = append(queries, terms)
 			}
+
 			o, err := a.outFor(ctx, "key", "value1", "value2")
 			if err != nil {
 				return err
 			}
-			if err := printRows(o, rows); err != nil {
-				return errors.New("Get Error: " + err.Error())
+			var rows []client.Row
+			for _, terms := range queries {
+				found, _, err := a.tie.Query(client.QuerySpec{
+					Terms:   terms,
+					Exclude: excluding,
+					Reverse: len(terms) > 1 || ctx.Bool("reverse"),
+					Filter:  ctx.String("filter"),
+					Offset:  ctx.Int("offset"),
+					Limit:   ctx.Int("limit"),
+					SortBy:  ctx.String("sortby"),
+				})
+				if err != nil {
+					if errors.Is(err, client.ErrNotFound) {
+						continue
+					}
+					return operationalError("get: %v", err)
+				}
+				rows = append(rows, found...)
 			}
-
-			return nil
+			return printRows(o, rows)
 		},
 	}
 }
-
-// printRows writes query results to stdout, flattening each Row back into
-// key<TAB>relation<TAB>value lines. When stdout is an interactive terminal it
-// renders aligned, headered columns for readability; when stdout is piped or
-// redirected it emits plain tab-separated lines so downstream tools like
-// cut/awk/sort keep working unchanged.
 
 func cmdDel(a *app) *cli.Command {
 	return &cli.Command{
 		Name:    "del",
 		Aliases: []string{"d"},
-		Usage:   "Delete a triple: del [key] [value1] [value2]",
-		Action: func(_ context.Context, cCtx *cli.Command) error {
-			if cCtx.Args().Len() < 3 {
-				return errors.New("Need 3 args: Key, Value1, Value2")
+		Usage:   "Delete triples: del KEY VALUE1 VALUE2 | del KEY --relation VALUE1 | del KEY --all",
+		Description: "Three shapes, chosen by flags rather than by `*`: one triple, every triple on one\n" +
+			"relation, or every triple carrying a key. `*` is not a tie wildcard — the shell\n" +
+			"expands it before tie sees it, so an unquoted `tie del key * *` in a non-empty\n" +
+			"directory deletes (key, first-file, second-file) or nothing at all. Ask for what\n" +
+			"you mean, with --relation or --all.",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{Name: "all", Usage: "Delete every triple carrying KEY"},
+			&cli.StringFlag{Name: "relation", Usage: "Delete every triple carrying KEY and this value1"},
+		},
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			all := ctx.Bool("all")
+			relation := ctx.String("relation")
+			if all && relation != "" {
+				return exitError{code: exitUsage, msg: "--all and --relation are mutually exclusive"}
 			}
-			args := cCtx.Args().Slice()
-			deleteBatch := func(filter string) error {
-				rows, _, err := a.tie.Query(client.QuerySpec{
-					Terms:  []string{args[0]},
-					Filter: filter,
-					Limit:  -1,
-				})
-				if err != nil {
-					if errors.Is(err, client.ErrNotFound) {
-						return nil
-					}
-					fmt.Fprintln(os.Stderr, "Error:", err.Error())
-					return nil
+
+			switch {
+			case all, relation != "":
+				if ctx.Args().Len() != 1 {
+					return exitError{code: exitUsage, msg: "del KEY --all and del KEY --relation RELATION take only KEY"}
 				}
-				b := a.tie.NewBatch()
-				for _, r := range rows {
-					for relation, values := range r.Attributes {
-						for _, v := range values {
-							b.Delete(r.Key, relation, v)
-						}
-					}
+				filter := relation
+				if all {
+					filter = ""
 				}
-				if _, err := a.tie.Batch(b); err != nil {
-					return errors.New("Delete Error: " + err.Error())
+				return deleteMatching(a, ctx.Args().First(), filter)
+
+			case ctx.Args().Len() != 3:
+				return exitError{code: exitUsage,
+					msg: "del takes KEY VALUE1 VALUE2, or KEY with --all / --relation"}
+
+			default:
+				key, value1, value2 := ctx.Args().Get(0), ctx.Args().Get(1), ctx.Args().Get(2)
+				if value1 == "*" || value2 == "*" {
+					return exitError{code: exitUsage, msg: "`*` is a shell glob, not a tie wildcard: " +
+						"use `tie del KEY --relation VALUE1` or `tie del KEY --all`"}
+				}
+				if _, err := a.tie.Delete(key, value1, value2); err != nil {
+					return operationalError("del: %v", err)
 				}
 				return nil
 			}
-			switch true {
-			case args[1] == "*" && args[2] == "*":
-				return deleteBatch("")
-
-			case args[1] != "*" && args[2] == "*":
-				return deleteBatch(args[1])
-
-			case args[1] == "*" && args[2] != "*":
-				fmt.Fprintln(os.Stderr, "Function to delete specific value2 from all value1's is not implemented, because it is most likely a typo.")
-				fmt.Fprintf(os.Stderr, "Did you mean: tie delete %s %s * (delete all value2's from specific key + value1 pair?)\n", args[0], args[2])
-
-			default:
-				if _, err := a.tie.Delete(args[0], args[1], args[2]); err != nil {
-					return errors.New("Delete Error: " + err.Error())
-				}
-
-			}
-
-			return nil
 		},
 	}
 }
 
-// cmdVersion prints the client build and, when a config is loaded, the build
-// each configured server is running — the quick way to confirm a deploy landed
-// on a remote triplestore/filehost. Servers that cannot be reached are
-// reported inline rather than failing the command.
+// deleteMatching removes every triple on key (and, when filter is set, on that
+// value1). The rows are read first so the command can say how much it deleted,
+// and a failure to query or to write is reported rather than swallowed: a
+// silent exit 0 from a destructive command is the worst answer it can give.
+func deleteMatching(a *app, key, filter string) error {
+	rows, _, err := a.tie.Query(client.QuerySpec{
+		Terms:  []string{key},
+		Filter: filter,
+		Limit:  -1,
+	})
+	if err != nil {
+		if errors.Is(err, client.ErrNotFound) {
+			fmt.Fprintf(os.Stderr, "nothing to delete: no triples carry %s\n", key)
+			return nil
+		}
+		return operationalError("del: %v", err)
+	}
 
-// printRows writes query results to stdout, flattening each Row back into
-// key<TAB>relation<TAB>value lines. When stdout is an interactive terminal it
-// renders aligned, headered columns for readability; when stdout is piped or
-// redirected it emits plain tab-separated lines so downstream tools like
-// cut/awk/sort keep working unchanged.
-// printRows writes the rows of a get/query through the shared renderer, in a
-// fixed order: by key, then relation. The relations of a row live in a map, so
-// the old code printed the same query in a different order on every run, which
-// broke diff, comm and golden tests (§6.4). Values keep the order the store
-// returned them in.
+	b := a.tie.NewBatch()
+	triples := 0
+	for _, r := range rows {
+		for relation, values := range r.Attributes {
+			for _, v := range values {
+				b.Delete(r.Key, relation, v)
+				triples++
+			}
+		}
+	}
+	if _, err := a.tie.Batch(b); err != nil {
+		return operationalError("del: %v", err)
+	}
+	fmt.Fprintf(os.Stderr, "deleted %s\n", pluralWith(triples, "triple", "triples"))
+	return nil
+}
+
 func printRows(o *out, rows []client.Row) error {
 	records := make([][]string, 0, len(rows))
 	for _, r := range rows {

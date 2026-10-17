@@ -152,15 +152,44 @@ func cmdTag(a *app) *cli.Command {
 			},
 			{
 				Name:  "set",
-				Usage: "Replace the full tag set on a content hash: tag set [hash] [tags...]",
+				Usage: "Replace the full tag set on a content hash: tag set HASH TAGS... (--stdin reads hashes from stdin)",
+				Flags: []cli.Flag{stdinFlag()},
 				Action: func(_ context.Context, ctx *cli.Command) error {
-					if ctx.Args().Len() < 1 {
-						return errors.New("Need at least 1 arg: hash (pass no tags to clear)")
+					var (
+						hashes []string
+						tags   []string
+					)
+					switch {
+					case ctx.Bool("stdin"):
+						// The hashes come from the pipe, the tags stay
+						// arguments — which is what makes
+						// `tie tag files jazz | cut -f1 | tie tag set --stdin mellow`
+						// unambiguous (§6.7).
+						var err error
+						hashes, err = readStdinKeys()
+						if err != nil {
+							return err
+						}
+						if len(hashes) == 0 {
+							fmt.Fprintln(os.Stderr, "no hashes on stdin")
+							return nil
+						}
+						tags = ctx.Args().Slice()
+					case ctx.Args().Len() == 0:
+						return exitError{code: exitUsage, msg: "tag set takes HASH TAGS... (pass no tags to clear, or --stdin to read hashes from stdin)"}
+					case ctx.Args().First() == "-":
+						// A lone "-" stops the argument parser, so the tags typed
+						// after it never arrive — and a tag set with no tags
+						// clears them. Refuse rather than wipe (§6.7).
+						return exitError{code: exitUsage, msg: "tag set - would clear the tags: the arguments after - never reach the command, so write `tag set --stdin TAGS...`"}
+					default:
+						hashes = []string{ctx.Args().First()}
+						tags = ctx.Args().Tail()
 					}
-					hash := ctx.Args().First()
-					tags := ctx.Args().Tail()
-					if err := client.SetTags(a.tie, hash, tags); err != nil {
-						return errors.New("Tag set Error: " + err.Error())
+					for _, hash := range hashes {
+						if err := client.SetTags(a.tie, hash, tags); err != nil {
+							return operationalError("tag set: %v", err)
+						}
 					}
 					return nil
 				},

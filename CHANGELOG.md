@@ -8,6 +8,17 @@ to follow semantic versioning.
 
 ### Added
 
+- **`tie del` chooses its shape with flags**: `del KEY VALUE1 VALUE2`,
+  `del KEY --relation VALUE1`, `del KEY --all`. It also reports how many triples
+  it deleted, and a failed query or write is an error rather than a message on
+  stderr with exit 0.
+- **`tie get --not VALUE`** (repeatable) excludes rows, and so does the `!VALUE`
+  spelling — instead of a leading dash, which the flag parser ate.
+- **Keys from a pipe.** `get`, `stat`, `download` and `tag set` read keys from
+  stdin, one per line, with `-` or `--stdin`:
+  `tie tag files jazz | cut -f1 | tie tag set --stdin mellow`. `--stdin` is the
+  spelling that survives arguments written after it; a lone `-` stops the
+  argument parser, so `tag set - blue` is refused rather than run with no tags.
 - **`tie conf show`** prints what an invocation actually resolves to: the config
   file it loaded, the collection after `-c`/`DefaultCollection`, the namespace,
   the triplestore URL, the credentials name, the filehosts an upload would pick
@@ -211,6 +222,14 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie del KEY '*' '*'` no longer deletes anything.** `*` is a shell glob: an
+  unquoted `tie del key * *` in a non-empty directory deleted
+  `(key, first-file, second-file)`, and the quoted form printed a "not
+  implemented" hint and exited 0. The wildcard forms are now a usage error (2)
+  that names `--relation` and `--all`.
+- **`tie tag set -` is refused.** Everything after a lone `-` never reaches the
+  command, and a tag set with no tags clears them — so the spelling that looked
+  like reading from a pipe would have wiped tags. Write `tag set --stdin TAGS...`.
 - **`tie` no longer writes a config file.** Every invocation used to create a
   default config in the user config dir when none was found — including
   `tie --help` and a typo. Now only `tie conf create` writes one; a command that
