@@ -16,12 +16,7 @@ func cmdAdd(a *app) *cli.Command {
 	return &cli.Command{
 		Name:    "add",
 		Aliases: []string{"a"},
-		Usage:   "Add a triple to the database: add [key] [value1] [value2]",
-		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "gallery-name", Aliases: []string{"g"}},
-			&cli.StringFlag{Name: "tags", Aliases: []string{"t"}},
-		},
-
+		Usage:   "Add a triple to the database: add KEY VALUE1 VALUE2",
 		Action: func(_ context.Context, cCtx *cli.Command) error {
 			if cCtx.Args().Len() < 3 {
 				return exitError{code: exitUsage, msg: "add takes KEY VALUE1 VALUE2"}

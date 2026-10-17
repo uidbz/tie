@@ -216,3 +216,21 @@ func TestDelReportsFailures(t *testing.T) {
 		t.Errorf("the failure was reported on stdout: %q", stdout)
 	}
 }
+
+// TestAddHasNoVestigialFlags: `tie add` used to declare --gallery-name and
+// --tags, which its action never read — a flag that does nothing is a promise
+// the CLI breaks at every use (§5.1 L8). Asserted structurally, because an
+// unknown flag is a parse failure the command tree handles itself.
+func TestAddHasNoVestigialFlags(t *testing.T) {
+	add := newRootCommand(newTestApp(t)).Command("add")
+	if add == nil {
+		t.Fatal("the tree has no add command")
+	}
+	if len(add.Flags) != 0 {
+		var names []string
+		for _, f := range add.Flags {
+			names = append(names, f.Names()[0])
+		}
+		t.Errorf("add declares flags its action never reads: %v", names)
+	}
+}
