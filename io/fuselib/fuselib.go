@@ -20,10 +20,10 @@ import (
 )
 
 // TieFuse is the go-fuse adapter for a content-addressed tree. The shared
-// read cache, inode numbering, and write staging live in tiesfs.Store; this
+// read cache, inode numbering, and write staging live in tiefs.Store; this
 // layer only translates between go-fuse node operations and those primitives.
 type TieFuse struct {
-	store  *tiesfs.Store
+	store  *tiefs.Store
 	config config
 }
 
@@ -38,7 +38,7 @@ func (state *TieFuse) Close() error {
 // over multi-GB media is wasted work; turn it on when the filehost is untrusted.
 func NewTieFuse(host client.FileHost, cacheSizeGB int, verify bool) *TieFuse {
 	return &TieFuse{
-		store:  tiesfs.NewStore(host, cacheSizeGB, verify),
+		store:  tiefs.NewStore(host, cacheSizeGB, verify),
 		config: config{fh: fhclient.New(host.URL, client.HTTPClientFor(host)), verify: verify},
 	}
 }
@@ -51,7 +51,7 @@ type config struct {
 
 func (state *TieFuse) inodeID(hash string) uint64 { return state.store.InodeID(hash) }
 
-func (state *TieFuse) cache() *tiesfs.Cache { return state.store.Cache() }
+func (state *TieFuse) cache() *tiefs.Cache { return state.store.Cache() }
 
 // Ensure we are implementing the NodeReaddirer interface
 var _ = (fs.NodeReaddirer)((*node)(nil))
@@ -169,7 +169,7 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 // bytesFileHandle is a file handle that serves one blob's bytes from the cache.
 type bytesFileHandle struct {
 	hash  string
-	cache *tiesfs.Cache
+	cache *tiefs.Cache
 }
 
 // Read serves a clamped window of the blob: FUSE reads past the end return the
@@ -231,7 +231,7 @@ func (n *node) AddChild(child *node) {
 // keyed by its (archive hash, member name) pair.
 func (n *node) inodeKey() string {
 	if n.ArchiveMember != "" {
-		return tiesfs.MemberKey(n.ArchiveHash, n.ArchiveMember)
+		return tiefs.MemberKey(n.ArchiveHash, n.ArchiveMember)
 	}
 	return n.Hash
 }
@@ -308,7 +308,7 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		// Flatten nested member paths to disambiguated base names — a dirent name
 		// cannot contain '/'. The full member name is kept as ArchiveMember for
 		// extraction. Shared with the --db mount's archiveDir.
-		for _, v := range tiesfs.ArchiveMemberViews(members) {
+		for _, v := range tiefs.ArchiveMemberViews(members) {
 			child := &node{
 				Name:          v.Display(),
 				Size:          int(v.Member().Size),

@@ -4,7 +4,7 @@
 //
 // It is the SMB twin of io/fuselib's TieDBFuse: all tree semantics (query
 // parsing, disambiguation, path navigation, staged writes, meta files) live
-// in tiesfs; this package adapts them to the path-based Filesystem + Opener
+// in tiefs; this package adapts them to the path-based Filesystem + Opener
 // + WritableFile contract.
 //
 // # Paths
@@ -46,19 +46,19 @@ const (
 // filesystem.Filesystem and filesystem.Opener, and OpenFile returns
 // filesystem.WritableFile handles for the writable views.
 type Share struct {
-	tree *tiesfs.Tree
+	tree *tiefs.Tree
 
 	mu      sync.Mutex
 	pending map[string]*pendingEntry // canonical path -> staged write
 }
 
-// NewShare wraps a tiesfs.Tree as an SMB filesystem.
-func NewShare(tree *tiesfs.Tree) *Share {
+// NewShare wraps a tiefs.Tree as an SMB filesystem.
+func NewShare(tree *tiefs.Tree) *Share {
 	return &Share{tree: tree, pending: make(map[string]*pendingEntry)}
 }
 
 // Tree exposes the underlying tree (for tests and the cmd wiring).
-func (s *Share) Tree() *tiesfs.Tree { return s.tree }
+func (s *Share) Tree() *tiefs.Tree { return s.tree }
 
 // Close releases the tree (blob cache + staging dir). Open handles commit
 // through their own Close; the smb server closes every handle when a client
@@ -166,15 +166,15 @@ func (s *Share) resolveQuery(segs []string) (*node, error) {
 		return &node{kind: kQueryRoot}, nil
 	}
 	switch segs[1] {
-	case tiesfs.ReadmeName:
+	case tiefs.ReadmeName:
 		if len(segs) == 2 {
 			return &node{kind: kStatic}, nil
 		}
-	case tiesfs.TagListName:
+	case tiefs.TagListName:
 		if len(segs) == 2 {
 			return &node{kind: kTagList}, nil
 		}
-	case tiesfs.TypeListName:
+	case tiefs.TypeListName:
 		if len(segs) == 2 {
 			return &node{kind: kTypeList}, nil
 		}
@@ -185,7 +185,7 @@ func (s *Share) resolveQuery(segs []string) (*node, error) {
 	if !ok {
 		expr = segs[1]
 	}
-	scope, include, exclude := tiesfs.ParseTagQuery(expr)
+	scope, include, exclude := tiefs.ParseTagQuery(expr)
 	if scope == "" && len(include) == 0 {
 		return nil, fmt.Errorf("smbfs: query %q matches nothing: %w", segs[1], fs.ErrNotExist)
 	}
@@ -227,7 +227,7 @@ func (s *Share) descendTagged(uid client.DirUID, segs []string, base *node) (*no
 	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if tiesfs.BaseName(p) == segs[0] {
+			if tiefs.BaseName(p) == segs[0] {
 				return s.descendTagged(sub.Uid, segs[1:], &node{kind: kTaggedDir, uid: sub.Uid})
 			}
 		}
@@ -238,7 +238,7 @@ func (s *Share) descendTagged(uid client.DirUID, segs []string, base *node) (*no
 		}
 	}
 	if len(segs) == 1 {
-		for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+		for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 			if f.Filename == segs[0] {
 				return &node{kind: kQueryFile, hash: f.Uid, file: f}, nil
 			}
@@ -259,7 +259,7 @@ func (s *Share) descendArchive(hash string, segs []string, base *node) (*node, e
 	if err != nil {
 		return nil, err
 	}
-	for _, v := range tiesfs.ArchiveMemberViews(members) {
+	for _, v := range tiefs.ArchiveMemberViews(members) {
 		if v.Display() == segs[0] {
 			m := v.Member()
 			return &node{kind: kMember, hash: hash, member: m.Name, memberSize: m.Size}, nil
@@ -300,7 +300,7 @@ func (s *Share) resolvePath(segs []string, canon string) (*node, error) {
 	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if tiesfs.BaseName(p) == name {
+			if tiefs.BaseName(p) == name {
 				return &node{kind: kPathDir, parentSlash: parentSlash, name: name, uid: sub.Uid}, nil
 			}
 		}
@@ -310,7 +310,7 @@ func (s *Share) resolvePath(segs []string, canon string) (*node, error) {
 			return &node{kind: kArchiveDir, parentSlash: parentSlash, name: name, hash: a.Hash}, nil
 		}
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		if f.Filename == name {
 			return &node{kind: kPathFile, parentSlash: parentSlash, name: name, hash: f.Uid, file: f}, nil
 		}
@@ -368,7 +368,7 @@ func (s *Share) resolveMeta(canon string, segs []string) (*node, error) {
 	name := segs[len(segs)-1]
 	childSlash := path.Join(parentSlash, name)
 
-	if name == tiesfs.TagsSelfName || name == tiesfs.TagsTypeName {
+	if name == tiefs.TagsSelfName || name == tiefs.TagsTypeName {
 		uid, err := s.tree.Tie.DirUIDFromPath(parentSlash)
 		if err != nil {
 			return nil, err
@@ -386,7 +386,7 @@ func (s *Share) resolveMeta(canon string, segs []string) (*node, error) {
 		}
 		return nil, fmt.Errorf("smbfs: %q not found: %w", childSlash, fs.ErrNotExist)
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		if f.Filename == name {
 			return &node{kind: kMetaFile, parentSlash: parentSlash, name: name, hash: f.Uid}, nil
 		}
@@ -395,11 +395,11 @@ func (s *Share) resolveMeta(canon string, segs []string) (*node, error) {
 }
 
 // binding returns the MetaBinding behind a kMetaFile node.
-func (n *node) binding(t *tiesfs.Tree) tiesfs.MetaBinding {
-	if n.name == tiesfs.TagsTypeName {
+func (n *node) binding(t *tiefs.Tree) tiefs.MetaBinding {
+	if n.name == tiefs.TagsTypeName {
 		return t.DirTypesBinding(n.uid)
 	}
-	if n.uid != "" && (n.name == tiesfs.TagsSelfName) {
+	if n.uid != "" && (n.name == tiefs.TagsSelfName) {
 		return t.TagsBinding(string(n.uid))
 	}
 	return t.TagsBinding(n.hash)
@@ -407,10 +407,10 @@ func (n *node) binding(t *tiesfs.Tree) tiesfs.MetaBinding {
 
 // metaInodeKey is the stable inode key for a meta file.
 func (n *node) metaInodeKey() string {
-	if n.name == tiesfs.TagsTypeName {
-		return tiesfs.TypeInodeKey(n.uid)
+	if n.name == tiefs.TagsTypeName {
+		return tiefs.TypeInodeKey(n.uid)
 	}
-	if n.name == tiesfs.TagsSelfName {
+	if n.name == tiefs.TagsSelfName {
 		return string(n.uid)
 	}
 	return n.hash
@@ -433,19 +433,19 @@ func (s *Share) Stat(p string) (gofs.Stat, error) {
 	case kQueryDir:
 		return gofs.NewStat(0o040755, 0, s.tree.InodeID("\x00query\x00"+n.query)), nil
 	case kStatic:
-		return gofs.NewStat(0o100444, uint64(len(tiesfs.ReadmeText)), s.tree.InodeID("\x00readme")), nil
+		return gofs.NewStat(0o100444, uint64(len(tiefs.ReadmeText)), s.tree.InodeID("\x00readme")), nil
 	case kTagList:
 		tags, err := s.tree.TagList()
 		if err != nil {
 			return nil, err
 		}
-		return gofs.NewStat(0o100444, uint64(len(tiesfs.RenderMeta(tags))), s.tree.InodeID("\x00taglist")), nil
+		return gofs.NewStat(0o100444, uint64(len(tiefs.RenderMeta(tags))), s.tree.InodeID("\x00taglist")), nil
 	case kTypeList:
 		types, err := s.tree.TypeList()
 		if err != nil {
 			return nil, err
 		}
-		return gofs.NewStat(0o100444, uint64(len(tiesfs.RenderMeta(types))), s.tree.InodeID("\x00typelist")), nil
+		return gofs.NewStat(0o100444, uint64(len(tiefs.RenderMeta(types))), s.tree.InodeID("\x00typelist")), nil
 	case kQueryFile:
 		return gofs.NewStat(0o100444, uint64(n.file.Size), s.tree.InodeID(n.hash)), nil
 	case kTaggedDir, kPathDir, kTagsDir:
@@ -460,7 +460,7 @@ func (s *Share) Stat(p string) (gofs.Stat, error) {
 	case kArchiveDir:
 		return gofs.NewStat(0o040755, 0, s.tree.InodeID(n.hash)), nil
 	case kMember:
-		return gofs.NewStat(0o100444, uint64(n.memberSize), s.tree.InodeID(tiesfs.MemberKey(n.hash, n.member))), nil
+		return gofs.NewStat(0o100444, uint64(n.memberSize), s.tree.InodeID(tiefs.MemberKey(n.hash, n.member))), nil
 	case kPathFile:
 		if n.pending != nil {
 			ino := s.tree.InodeID(n.parentSlash + "\x00" + n.name)
@@ -474,7 +474,7 @@ func (s *Share) Stat(p string) (gofs.Stat, error) {
 		} else {
 			vals, err := n.binding(s.tree).Load()
 			if err == nil {
-				size = int64(len(tiesfs.RenderMeta(vals)))
+				size = int64(len(tiefs.RenderMeta(vals)))
 			}
 		}
 		return gofs.NewStat(0o100644, uint64(size), s.tree.InodeID(n.metaInodeKey())), nil

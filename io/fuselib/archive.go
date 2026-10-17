@@ -14,7 +14,7 @@ import (
 // archiveMemberFileHandle serves one archive member's decompressed bytes from
 // the member cache.
 type archiveMemberFileHandle struct {
-	cache       *tiesfs.Cache
+	cache       *tiefs.Cache
 	archiveHash string
 	member      string
 }
@@ -47,7 +47,7 @@ func (fh *archiveMemberFileHandle) Read(ctx context.Context, dest []byte, off in
 // are listed by expanding the blob and served through the member cache. Nested
 // member paths are flattened to their base name (an image viewer wants the
 // pictures, not the internal folder layout); base-name collisions are
-// disambiguated deterministically (tiesfs.ArchiveMemberViews).
+// disambiguated deterministically (tiefs.ArchiveMemberViews).
 type archiveDir struct {
 	fs.Inode
 	state *TieDBFuse
@@ -78,13 +78,13 @@ func (d *archiveDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	views := tiesfs.ArchiveMemberViews(members)
+	views := tiefs.ArchiveMemberViews(members)
 	entries := make([]fuse.DirEntry, 0, len(views))
 	for _, v := range views {
 		entries = append(entries, fuse.DirEntry{
 			Name: v.Display(),
 			Mode: fuse.S_IFREG,
-			Ino:  d.state.tree.InodeID(tiesfs.MemberKey(d.hash, v.Member().Name)),
+			Ino:  d.state.tree.InodeID(tiefs.MemberKey(d.hash, v.Member().Name)),
 		})
 	}
 	return fs.NewListDirStream(entries), 0
@@ -95,12 +95,12 @@ func (d *archiveDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	for _, v := range tiesfs.ArchiveMemberViews(members) {
+	for _, v := range tiefs.ArchiveMemberViews(members) {
 		if v.Display() != name {
 			continue
 		}
 		child := d.memberNode(v.Member())
-		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.tree.InodeID(tiesfs.MemberKey(d.hash, v.Member().Name))}
+		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.tree.InodeID(tiefs.MemberKey(d.hash, v.Member().Name))}
 		out.Size = uint64(v.Member().Size)
 		return d.NewInode(ctx, child, stable), 0
 	}

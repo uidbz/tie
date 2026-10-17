@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 // Property tests for the tree operations the transports drive (§9): random
 // sequences of mkdir / write / rename / delete against a real triplestore and

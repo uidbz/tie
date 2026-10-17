@@ -117,7 +117,7 @@ file. The share mirrors the "tie mount --db" layout: query, files, tags.
 		os.Exit(1)
 	}
 
-	tree := tiesfs.NewTree(tie, host, cfg.CacheSizeGB, cfg.Verify)
+	tree := tiefs.NewTree(tie, host, cfg.CacheSizeGB, cfg.Verify)
 	defer tree.Close()
 	share := smbfs.NewShare(tree)
 

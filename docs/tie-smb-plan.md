@@ -67,7 +67,7 @@ Decisions (approved by user):
 - `io/tiefs/archive.go`: `ArchiveMemberViews` (`Display()`, `Member()`).
 - `io/fuselib/*` rewritten as thin adapters (fuselib.go, fuselib_db.go,
   fuselib_db_tree.go, fuselib_db_write.go, fuselib_db_meta.go, archive.go).
-  `TieDBFuse{tree *tiesfs.Tree, fuseTree *TieFuse}` share ONE Store via
+  `TieDBFuse{tree *tiefs.Tree, fuseTree *TieFuse}` share ONE Store via
   `NewTreeWithStore`. `errnoFor(err, fallback)` maps io/fs errors -> FUSE
   errnos (nil -> 0!).
 - Tests moved: pure-fn + cache tests -> `io/tiefs/*_test.go`;
@@ -139,9 +139,9 @@ Decisions (approved by user):
 ## Original plan (kept for reference)
 
 ### Phase 3 — `io/smbfs` + `cmd/tie-smb` (design settled — read "Phase 3 findings" at the bottom first)
-- `io/smbfs`: `type Share struct { tree *tiesfs.Tree; mu sync.Mutex;
+- `io/smbfs`: `type Share struct { tree *tiefs.Tree; mu sync.Mutex;
   pending map[string]*pendingWrite }` implementing filesystem.Filesystem +
-  Opener + WritableFile over tiesfs. Path model mirrors
+  Opener + WritableFile over tiefs. Path model mirrors
   `io/fuselib/fuselib_db.go` (dbRoot/tagQueryRoot/tagQueryDir/taggedDir/
   pathDir/tagsDir/metaFile/archiveDir) but path-based: root = `query` |
   `files` | `tags`. /query read-only (README, tags, types, saved queries,
@@ -156,7 +156,7 @@ Decisions (approved by user):
   reports "now") — skip TagDate.
 - ListDir: query root = README/tags/types + saved queries; query dir =
   `tree.QueryFiles`; files/tags dirs = `tree.PathDir` +
-  `tiesfs.DisambiguateFiles`; tags dirs add `.tags`/`.type`; archive dirs via
+  `tiefs.DisambiguateFiles`; tags dirs add `.tags`/`.type`; archive dirs via
   `ArchiveMemberViews`. Display names escaped (see escaping below).
 - WRITE FLOW (pending-handle design — REQUIRED by the lib's CREATE flow, see
   findings): `WriteFile(p,nil)` = create-or-truncate -> stage a
@@ -175,7 +175,7 @@ Decisions (approved by user):
   them -> `fs.ErrPermission`.
 - Rename: only within /files, `tree.Rename(parent,name,dst,newName,
   replace=true)` (lib ignores ReplaceIfExists). DeleteFile/DeleteDir ->
-  tree.DeleteFile/DeleteDir; wrap `tiesfs.ErrNotEmpty` in `fs.ErrExist`
+  tree.DeleteFile/DeleteDir; wrap `tiefs.ErrNotEmpty` in `fs.ErrExist`
   (lib maps ErrExist -> OBJECT_NAME_COLLISION). ReadLink -> error (lib never
   calls it). MkDir -> tree.Mkdir, only under /files.
 - NAME ESCAPING (mandatory, not cosmetic): the lib's `smbPathToFS` REJECTS
@@ -194,7 +194,7 @@ Decisions (approved by user):
   for `ResolveHost`), CacheSizeGB, Verify, ShareName ("tie"), LogFile,
   LogLevel, [[Users]] {Username,Password,Role} reusing `auth.ParseUserRole`;
   write users = RoleWrite. Wire: LoadConfig -> NewTieClientFor ->
-  ResolveHost -> tiesfs.NewTree -> smbfs.NewShare -> smb.New + AddUser +
+  ResolveHost -> tiefs.NewTree -> smbfs.NewShare -> smb.New + AddUser +
   SetName + Share(shareName, sh, smb.WriteUsers(write...)) + ListenAndServe
   (goroutine); SIGINT/SIGTERM -> srv.Close + tree.Close.
   Port 445 needs root or `AmbientCapabilities=CAP_NET_BIND_SERVICE`; support
@@ -243,7 +243,7 @@ Decisions (approved by user):
   convention — but the smb server IGNORES FileType, it Stats every child),
   `NewStat(mode uint16, size, inode)`.
 - Error contract: wrap `fs.ErrNotExist`/`fs.ErrExist`/`fs.ErrPermission` with
-  `%w` at path boundaries (tiesfs already does).
+  `%w` at path boundaries (tiefs already does).
 
 ### smb v0.7.0 server flow (file.go/dir.go/info.go/path.go/casefold.go/access.go)
 - `smbPathToFS`: `\`->`/`, `path.Clean("/"+p)`, refuses `..` escapes AND any
@@ -279,7 +279,7 @@ Decisions (approved by user):
 - `statusFor(err, fallback)`: ErrNotExist->OBJECT_NAME_NOT_FOUND,
   ErrExist->OBJECT_NAME_COLLISION, ErrPermission->ACCESS_DENIED,
   io.EOF->END_OF_FILE, disk-full errnos->DISK_FULL; else caller fallback
-  (mostly ACCESS_DENIED). `tiesfs.ErrNotEmpty` is unmapped -> wrap in
+  (mostly ACCESS_DENIED). `tiefs.ErrNotEmpty` is unmapped -> wrap in
   fs.ErrExist.
 - Access: `WriteUsers(...)` -> non-writers get a read-only CONNECTION
   (writes refused MEDIA_WRITE_PROTECTED before reaching the fs);

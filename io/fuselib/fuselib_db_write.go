@@ -17,7 +17,7 @@ import (
 // dbFileNode is a writable file in the /files path tree. Reads serve the stored
 // content by hash from the shared blob cache (identical to the read-only path);
 // a writable open stages bytes to a temp file and, on close, uploads them and
-// rewrites the file's triples via tiesfs.WriteHandle (which uses
+// rewrites the file's triples via tiefs.WriteHandle (which uses
 // client.WriteFile, versioning any prior content into <name>_prev). file.Uid is
 // empty for a not-yet-committed Create.
 type dbFileNode struct {
@@ -111,10 +111,10 @@ func (n *dbFileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 	return wh, fuse.FOPEN_DIRECT_IO, 0
 }
 
-// writeHandle adapts a tiesfs.WriteHandle to go-fuse's file-handle operations.
+// writeHandle adapts a tiefs.WriteHandle to go-fuse's file-handle operations.
 type writeHandle struct {
 	node *dbFileNode
-	h    *tiesfs.WriteHandle // nil for the read handle of an uncommitted Create
+	h    *tiefs.WriteHandle // nil for the read handle of an uncommitted Create
 }
 
 var (
@@ -229,24 +229,24 @@ func (d *tagsDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+2)
 	entries = append(entries,
 		fuse.DirEntry{
-			Name: tiesfs.TagsSelfName,
+			Name: tiefs.TagsSelfName,
 			Mode: fuse.S_IFREG,
 			Ino:  d.state.tree.InodeID(string(dir.Uid)),
 		},
 		fuse.DirEntry{
-			Name: tiesfs.TagsTypeName,
+			Name: tiefs.TagsTypeName,
 			Mode: fuse.S_IFREG,
-			Ino:  d.state.tree.InodeID(tiesfs.TypeInodeKey(dir.Uid)),
+			Ino:  d.state.tree.InodeID(tiefs.TypeInodeKey(dir.Uid)),
 		},
 	)
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if name := tiesfs.BaseName(p); name != "" {
+			if name := tiefs.BaseName(p); name != "" {
 				entries = append(entries, fuse.DirEntry{Name: name, Mode: fuse.S_IFDIR})
 			}
 		}
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
 			Name: f.Filename,
 			Mode: fuse.S_IFREG,
@@ -264,28 +264,28 @@ func (d *tagsDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	if name == tiesfs.TagsSelfName {
+	if name == tiefs.TagsSelfName {
 		child := newTagFile(d.state, string(dir.Uid))
 		out.Size = uint64(len(child.render()))
 		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.tree.InodeID(string(dir.Uid))}
 		return d.NewInode(ctx, child, stable), 0
 	}
-	if name == tiesfs.TagsTypeName {
+	if name == tiefs.TagsTypeName {
 		child := newTypeFile(d.state, dir.Uid)
 		out.Size = uint64(len(child.render()))
-		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.tree.InodeID(tiesfs.TypeInodeKey(dir.Uid))}
+		stable := fs.StableAttr{Mode: fuse.S_IFREG, Ino: d.state.tree.InodeID(tiefs.TypeInodeKey(dir.Uid))}
 		return d.NewInode(ctx, child, stable), 0
 	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if tiesfs.BaseName(p) != name {
+			if tiefs.BaseName(p) != name {
 				continue
 			}
-			child := &tagsDir{state: d.state, path: tiesfs.ChildPath(d.path, name)}
+			child := &tagsDir{state: d.state, path: tiefs.ChildPath(d.path, name)}
 			return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 		}
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		if f.Filename != name {
 			continue
 		}

@@ -1,4 +1,4 @@
-// Package tiesfs is the transport-agnostic virtual filesystem that tie
+// Package tiefs is the transport-agnostic virtual filesystem that tie
 // exposes: the live, tag-derived tree served by `tie mount --db` and by
 // tie-smb. It carries the semantics of the three top-level views - /query (tag
 // queries), /files (the path-based import tree), and /tags (writable tag/type
@@ -13,7 +13,7 @@
 // Errors follow io/fs conventions: a missing path reports an error wrapping
 // fs.ErrNotExist, a collision wraps fs.ErrExist. Transports map these onto
 // their own codes (ENOENT/EEXIST for FUSE, SMB status codes for tie-smb).
-package tiesfs
+package tiefs
 
 import (
 	"hash/fnv"

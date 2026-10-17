@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 import (
 	"errors"
@@ -24,7 +24,7 @@ func (t *Tree) PathDir(slashPath string) (client.Directory, error) {
 		return client.Directory{}, err
 	}
 	if uid == "" {
-		return client.Directory{}, fmt.Errorf("tiesfs: path %q not found: %w", slashPath, os.ErrNotExist)
+		return client.Directory{}, fmt.Errorf("tiefs: path %q not found: %w", slashPath, os.ErrNotExist)
 	}
 	return client.ReadTieDir(t.Tie, uid)
 }
@@ -39,7 +39,7 @@ func (t *Tree) PathDir(slashPath string) (client.Directory, error) {
 func (t *Tree) Mkdir(parentSlash, name string) (client.DirUID, error) {
 	childSlash := ChildPath(parentSlash, name)
 	if existing, err := t.Tie.DirUIDFromPath(childSlash); err == nil && existing != "" {
-		return "", fmt.Errorf("tiesfs: %q exists: %w", childSlash, os.ErrExist)
+		return "", fmt.Errorf("tiefs: %q exists: %w", childSlash, os.ErrExist)
 	}
 	uid, err := t.Tie.MkTieDirAll(client.FileURIScheme + childSlash)
 	if err != nil {
@@ -60,11 +60,11 @@ func (t *Tree) Mkdir(parentSlash, name string) (client.DirUID, error) {
 func (t *Tree) Rename(parentSlash, name, dstSlash, newName string, replace bool) error {
 	srcParent, err := t.Tie.DirUIDFromPath(parentSlash)
 	if err != nil || srcParent == "" {
-		return fmt.Errorf("tiesfs: source parent %q not found: %w", parentSlash, os.ErrNotExist)
+		return fmt.Errorf("tiefs: source parent %q not found: %w", parentSlash, os.ErrNotExist)
 	}
 	dstParent, err := t.Tie.DirUIDFromPath(dstSlash)
 	if err != nil || dstParent == "" {
-		return fmt.Errorf("tiesfs: destination parent %q not found: %w", dstSlash, os.ErrNotExist)
+		return fmt.Errorf("tiefs: destination parent %q not found: %w", dstSlash, os.ErrNotExist)
 	}
 
 	dir, err := t.PathDir(parentSlash)
@@ -78,7 +78,7 @@ func (t *Tree) Rename(parentSlash, name, dstSlash, newName string, replace bool)
 			continue
 		}
 		if !replace && destExists(t, dstSlash, newName) {
-			return fmt.Errorf("tiesfs: destination %q exists: %w", ChildPath(dstSlash, newName), os.ErrExist)
+			return fmt.Errorf("tiefs: destination %q exists: %w", ChildPath(dstSlash, newName), os.ErrExist)
 		}
 		return client.RenameFile(t.Tie, f.Uid, srcParent, dstParent, newName)
 	}
@@ -103,16 +103,16 @@ func (t *Tree) Rename(parentSlash, name, dstSlash, newName string, replace bool)
 			return nil // a rename onto itself is a no-op, as POSIX defines it
 		}
 		if strings.HasPrefix(newPath, oldPath+"/") {
-			return fmt.Errorf("tiesfs: cannot move %q into itself (to %q): %w",
+			return fmt.Errorf("tiefs: cannot move %q into itself (to %q): %w",
 				ChildPath(parentSlash, name), ChildPath(dstSlash, newName), ErrRenameLoop)
 		}
 		// Reject collisions with an existing destination directory.
 		if existing, err := t.Tie.DirUIDFromPath(ChildPath(dstSlash, newName)); err == nil && existing != "" {
-			return fmt.Errorf("tiesfs: destination %q exists: %w", ChildPath(dstSlash, newName), os.ErrExist)
+			return fmt.Errorf("tiefs: destination %q exists: %w", ChildPath(dstSlash, newName), os.ErrExist)
 		}
 		return client.RenameDir(t.Tie, sub.Uid, oldPath, newPath, srcParent, dstParent)
 	}
-	return fmt.Errorf("tiesfs: %q not found: %w", ChildPath(parentSlash, name), os.ErrNotExist)
+	return fmt.Errorf("tiefs: %q not found: %w", ChildPath(parentSlash, name), os.ErrNotExist)
 }
 
 // DeleteFile unlinks the child of parentSlash shown as displayName (the
@@ -128,7 +128,7 @@ func (t *Tree) DeleteFile(parentSlash, displayName string) error {
 			return client.DeleteFile(t.Tie, f.Uid, dir.Uid)
 		}
 	}
-	return fmt.Errorf("tiesfs: %q not found: %w", ChildPath(parentSlash, displayName), os.ErrNotExist)
+	return fmt.Errorf("tiefs: %q not found: %w", ChildPath(parentSlash, displayName), os.ErrNotExist)
 }
 
 // DeleteDir removes the empty subdirectory of parentSlash named name.
@@ -150,11 +150,11 @@ func (t *Tree) DeleteDir(parentSlash, name string) error {
 		}
 		err := client.DeleteDir(t.Tie, sub.Uid, dir.Uid)
 		if err != nil && strings.Contains(err.Error(), "not empty") {
-			return fmt.Errorf("tiesfs: %q not empty: %w", ChildPath(parentSlash, name), ErrNotEmpty)
+			return fmt.Errorf("tiefs: %q not empty: %w", ChildPath(parentSlash, name), ErrNotEmpty)
 		}
 		return err
 	}
-	return fmt.Errorf("tiesfs: %q not found: %w", ChildPath(parentSlash, name), os.ErrNotExist)
+	return fmt.Errorf("tiefs: %q not found: %w", ChildPath(parentSlash, name), os.ErrNotExist)
 }
 
 // destExists reports whether dstSlash already has a child (file or subdir)

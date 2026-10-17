@@ -42,9 +42,9 @@ func (s *Share) ListDir(p string) ([]gofs.DirEntry, error) {
 
 	case kQueryRoot:
 		entries := []gofs.DirEntry{
-			gofs.NewDirEntry(s.tree.InodeID("\x00readme"), tiesfs.ReadmeName, typeFile),
-			gofs.NewDirEntry(s.tree.InodeID("\x00taglist"), tiesfs.TagListName, typeFile),
-			gofs.NewDirEntry(s.tree.InodeID("\x00typelist"), tiesfs.TypeListName, typeFile),
+			gofs.NewDirEntry(s.tree.InodeID("\x00readme"), tiefs.ReadmeName, typeFile),
+			gofs.NewDirEntry(s.tree.InodeID("\x00taglist"), tiefs.TagListName, typeFile),
+			gofs.NewDirEntry(s.tree.InodeID("\x00typelist"), tiefs.TypeListName, typeFile),
 		}
 		for name, expr := range s.tree.Tie.Config.Queries {
 			// Key the inode by the query expression, the same key Stat uses
@@ -55,7 +55,7 @@ func (s *Share) ListDir(p string) ([]gofs.DirEntry, error) {
 		return entries, nil
 
 	case kQueryDir:
-		scope, include, exclude := tiesfs.ParseTagQuery(n.query)
+		scope, include, exclude := tiefs.ParseTagQuery(n.query)
 		files, err := s.tree.QueryFiles(scope, include, exclude)
 		if err != nil {
 			return nil, err
@@ -84,11 +84,11 @@ func (s *Share) ListDir(p string) ([]gofs.DirEntry, error) {
 		if err != nil {
 			return nil, err
 		}
-		views := tiesfs.ArchiveMemberViews(members)
+		views := tiefs.ArchiveMemberViews(members)
 		entries := make([]gofs.DirEntry, 0, len(views))
 		for _, v := range views {
 			entries = append(entries, gofs.NewDirEntry(
-				s.tree.InodeID(tiesfs.MemberKey(n.hash, v.Member().Name)),
+				s.tree.InodeID(tiefs.MemberKey(n.hash, v.Member().Name)),
 				escapeName(v.Display()), typeFile))
 		}
 		return entries, nil
@@ -121,7 +121,7 @@ func (s *Share) listTieDir(uid client.DirUID, withPending bool, own string) ([]g
 	entries := make([]gofs.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+len(dir.Archives))
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if name := tiesfs.BaseName(p); name != "" {
+			if name := tiefs.BaseName(p); name != "" {
 				entries = append(entries, gofs.NewDirEntry(s.tree.InodeID(string(sub.Uid)), escapeName(name), typeDir))
 			}
 		}
@@ -129,7 +129,7 @@ func (s *Share) listTieDir(uid client.DirUID, withPending bool, own string) ([]g
 	for _, a := range dir.Archives {
 		entries = append(entries, gofs.NewDirEntry(s.tree.InodeID(a.Hash), escapeName(a.Filename), typeDir))
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		entries = append(entries, gofs.NewDirEntry(s.tree.InodeID(f.Uid), escapeName(f.Filename), typeFile))
 	}
 	if withPending {
@@ -153,18 +153,18 @@ func (s *Share) listTagsDir(n *node, own string) ([]gofs.DirEntry, error) {
 	entries := make([]gofs.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+2)
 	if n.uid != "" {
 		entries = append(entries,
-			gofs.NewDirEntry(s.tree.InodeID(string(n.uid)), tiesfs.TagsSelfName, typeFile),
-			gofs.NewDirEntry(s.tree.InodeID(tiesfs.TypeInodeKey(n.uid)), tiesfs.TagsTypeName, typeFile),
+			gofs.NewDirEntry(s.tree.InodeID(string(n.uid)), tiefs.TagsSelfName, typeFile),
+			gofs.NewDirEntry(s.tree.InodeID(tiefs.TypeInodeKey(n.uid)), tiefs.TagsTypeName, typeFile),
 		)
 	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if name := tiesfs.BaseName(p); name != "" {
+			if name := tiefs.BaseName(p); name != "" {
 				entries = append(entries, gofs.NewDirEntry(s.tree.InodeID(string(sub.Uid)), escapeName(name), typeDir))
 			}
 		}
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		entries = append(entries, gofs.NewDirEntry(s.tree.InodeID(f.Uid), escapeName(f.Filename), typeFile))
 	}
 	entries = append(entries, s.pendingEntries(own, true)...)
@@ -196,19 +196,19 @@ func (s *Share) ReadFile(p string) ([]byte, error) {
 	}
 	switch n.kind {
 	case kStatic:
-		return []byte(tiesfs.ReadmeText), nil
+		return []byte(tiefs.ReadmeText), nil
 	case kTagList:
 		tags, err := s.tree.TagList()
 		if err != nil {
 			return nil, err
 		}
-		return tiesfs.RenderMeta(tags), nil
+		return tiefs.RenderMeta(tags), nil
 	case kTypeList:
 		types, err := s.tree.TypeList()
 		if err != nil {
 			return nil, err
 		}
-		return tiesfs.RenderMeta(types), nil
+		return tiefs.RenderMeta(types), nil
 	case kQueryFile, kPathFile:
 		if n.pending != nil {
 			if dh, ok := n.pending.h.(*dataHandle); ok {
@@ -239,7 +239,7 @@ func (s *Share) ReadFile(p string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		return tiesfs.RenderMeta(vals), nil
+		return tiefs.RenderMeta(vals), nil
 	}
 	return nil, fmt.Errorf("smbfs: %q is not a regular file: %w", p, fs.ErrNotExist)
 }
@@ -251,7 +251,7 @@ func (s *Share) ReadLink(p string) (string, error) {
 
 // readAll drains a Blob following io.ReaderAt semantics, then releases the
 // cache reference the caller took.
-func readAll(b *tiesfs.Blob) ([]byte, error) {
+func readAll(b *tiefs.Blob) ([]byte, error) {
 	defer b.Close()
 	out := make([]byte, b.Size())
 	if _, err := b.ReadAt(out, 0); err != nil && !errors.Is(err, io.EOF) {

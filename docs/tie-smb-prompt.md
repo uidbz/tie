@@ -15,7 +15,7 @@ The Phase 3 design decisions are already settled there — implement them,
 don't re-derive.
 
 Your task: phase 3 — create io/smbfs (filesystem.Filesystem + Opener +
-WritableFile over tiesfs.Tree, mirroring io/fuselib/fuselib_db.go's
+WritableFile over tiefs.Tree, mirroring io/fuselib/fuselib_db.go's
 /query,/files,/tags semantics) and cmd/tie-smb (TOML config + tielog +
 version + auth-roles pattern copied from cmd/tie-filehost; one share "tie";
 WriteUsers from [[Users]] Role; SIGTERM graceful shutdown). Then phases 4-5

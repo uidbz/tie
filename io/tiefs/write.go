@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 import (
 	"fmt"
@@ -71,7 +71,7 @@ func (h *WriteHandle) WriteAt(p []byte, off int64) (int, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.tmp == nil {
-		return 0, fmt.Errorf("tiesfs: write handle closed")
+		return 0, fmt.Errorf("tiefs: write handle closed")
 	}
 	n, err := h.tmp.WriteAt(p, off)
 	if err != nil {
@@ -97,7 +97,7 @@ func (h *WriteHandle) Truncate(size int64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.tmp == nil {
-		return fmt.Errorf("tiesfs: write handle closed")
+		return fmt.Errorf("tiefs: write handle closed")
 	}
 	if err := h.tmp.Truncate(size); err != nil {
 		return err
@@ -208,11 +208,11 @@ func (h *WriteHandle) Close() error {
 				// Logged as well as returned: a FUSE release() or an SMB close
 				// error is usually ignored by the application, and this is the
 				// only notice the user gets that their file is somewhere else.
-				slog.Error("tiesfs: write could not be committed; the bytes are kept in the spool",
+				slog.Error("tiefs: write could not be committed; the bytes are kept in the spool",
 					"file", dest, "spool", spool, "err", err)
 				err = fmt.Errorf("%w (bytes kept in %s)", err, spool)
 			} else {
-				slog.Error("tiesfs: write could not be committed and the bytes could not be kept",
+				slog.Error("tiefs: write could not be committed and the bytes could not be kept",
 					"file", dest, "err", err, "spool", serr)
 				err = fmt.Errorf("%w (and the staged bytes could not be kept: %v)", err, serr)
 			}

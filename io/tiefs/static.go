@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 // ReadmeText is the help file served at /query/README by every transport.
 const ReadmeText = `tie tag-query filesystem

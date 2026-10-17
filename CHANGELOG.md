@@ -232,6 +232,9 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **The package in `io/tiefs` is named `tiefs`, not `tiesfs`.** The import path
+  is unchanged; the identifier you write is (`tiesfs.Tree` → `tiefs.Tree`). The
+  directory and the package disagreed, so grep found neither consistently.
 - **A wrong argument list is a usage error (exit 2), not a generic failure (1)**:
   `tie tag rename one`, `tie add k v`, `tie upload` with no file. Their messages
   changed too — `Need 2 args: tag, newname` is now

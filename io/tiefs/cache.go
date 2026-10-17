@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 import (
 	"encoding/hex"
@@ -47,7 +47,7 @@ func NewCache(filehostURL string, client *http.Client, maxBytes int64, verify bo
 	c := &Cache{fh: fhclient.New(filehostURL, client), verify: verify}
 	dir, err := os.MkdirTemp("", "tie-cache-")
 	if err != nil {
-		c.newErr = fmt.Errorf("tiesfs: creating cache directory: %w", err)
+		c.newErr = fmt.Errorf("tiefs: creating cache directory: %w", err)
 		return c
 	}
 	dc, err := diskcache.New(diskcache.Options{Dir: dir, MaxBytes: maxBytes, Layout: cacheFileName})
@@ -68,7 +68,7 @@ func cacheFileName(dir, key string) (string, error) {
 	if !metadata.IsHexHash(name) {
 		h, err := metadata.HashReader(strings.NewReader(key))
 		if err != nil {
-			return "", fmt.Errorf("tiesfs: cache key %q: %w", key, err)
+			return "", fmt.Errorf("tiefs: cache key %q: %w", key, err)
 		}
 		name = h
 	}
@@ -118,7 +118,7 @@ func (c *Cache) fetch(hash string, w io.Writer) error {
 	}
 	if c.verify {
 		if got := hex.EncodeToString(h.Sum(nil)); got != hash {
-			return errors.New("tiesfs: downloaded content does not match its hash")
+			return errors.New("tiefs: downloaded content does not match its hash")
 		}
 	}
 	return nil
@@ -129,7 +129,7 @@ func (c *Cache) fetch(hash string, w io.Writer) error {
 // that single download. The caller must Close it.
 func (c *Cache) Blob(hash string) (*Blob, error) {
 	if !metadata.IsHexHash(hash) {
-		return nil, fmt.Errorf("tiesfs: invalid content hash %q", hash)
+		return nil, fmt.Errorf("tiefs: invalid content hash %q", hash)
 	}
 	h, err := c.get(hash, func(w io.Writer) error { return c.fetch(hash, w) })
 	if err != nil {
@@ -169,7 +169,7 @@ func MemberKey(archiveHash, member string) string {
 // and lists its members from the seekable cached file.
 func (c *Cache) ArchiveMembers(archiveHash string) ([]archivelib.Member, error) {
 	if !metadata.IsHexHash(archiveHash) {
-		return nil, fmt.Errorf("tiesfs: invalid content hash %q", archiveHash)
+		return nil, fmt.Errorf("tiefs: invalid content hash %q", archiveHash)
 	}
 	h, err := c.get(archiveHash, func(w io.Writer) error { return c.fetch(archiveHash, w) })
 	if err != nil {

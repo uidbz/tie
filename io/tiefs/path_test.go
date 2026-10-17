@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 // Tests for the path-tree operations the transports drive: mkdir, rename,
 // delete. They run against a real triplestore and filehost (internal/testenv),

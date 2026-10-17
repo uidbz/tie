@@ -1,4 +1,4 @@
-package tiesfs
+package tiefs
 
 import (
 	"strings"
