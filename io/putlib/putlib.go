@@ -16,7 +16,6 @@ import (
 )
 
 type PutConfig struct {
-	PathToWorkdir bool
 	// Client is the HTTP client used for uploads. When nil, http.DefaultClient
 	// is used. Set it to control TLS behavior (e.g. InsecureSkipVerify).
 	Client *http.Client
@@ -220,28 +219,6 @@ func Upload(url string, file string, config PutConfig) *Status {
 	}
 	status.fh = fhclient.New(strings.TrimSuffix(url, "upload/"), config.Client)
 	status.fh.Store = config.Store
-
-	// Change workdir temporarily to input dir, to get relative paths in dir enumeration
-	if config.PathToWorkdir {
-		wd, _ := os.Getwd()
-		defer os.Chdir(wd)
-
-		var dir string
-		fi, err := os.Stat(file)
-		if err != nil {
-			return &Status{ErrorMsg: "Error stat file: " + file + " : " + err.Error()}
-		}
-		if fi.IsDir() {
-			dir = file
-			file = "."
-		} else {
-			dir = filepath.Dir(file)
-			file = filepath.Base(file)
-		}
-		if err := os.Chdir(dir); err != nil {
-			return &Status{ErrorMsg: "Error changing dir to:" + dir + " : " + err.Error()}
-		}
-	}
 
 	status.upload(file, config)
 

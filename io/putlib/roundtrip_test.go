@@ -272,3 +272,63 @@ func BenchmarkReimport(b *testing.B) {
 		}
 	}
 }
+
+// TestUploadDoesNotChdir: the library used to offer a PathToWorkdir option that
+// called os.Chdir around an upload. That is process-global — it moves the
+// working directory out from under every other goroutine, which is a data race
+// in the making once the library runs inside FUSE or SMB (§5.1 L14). Nothing
+// ever set the option, and it is gone; this test keeps it gone.
+//
+// The old code deferred the restore, so comparing the working directory before
+// and after would pass anyway. What matters is what it is *during* the upload,
+// so the server handler — same process, other goroutine — reports it.
+func TestUploadDoesNotChdir(t *testing.T) {
+	before, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := newBlobStore()
+	var (
+		mu     sync.Mutex
+		seen   []string
+		inside = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			wd, err := os.Getwd()
+			if err == nil {
+				mu.Lock()
+				seen = append(seen, wd)
+				mu.Unlock()
+			}
+			store.ServeHTTP(w, r)
+		}))
+	)
+	defer inside.Close()
+
+	base := t.TempDir()
+	treeDir := filepath.Join(base, "mytree")
+	writeTree(t, treeDir)
+
+	status := putlib.Upload(inside.URL, treeDir, putlib.PutConfig{})
+	if status.ErrorMsg != "" {
+		t.Fatalf("upload failed: %s", status.ErrorMsg)
+	}
+
+	after, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Errorf("Upload left the process working directory at %s, was %s", after, before)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) == 0 {
+		t.Fatal("the upload never reached the server")
+	}
+	for _, wd := range seen {
+		if wd != before {
+			t.Errorf("during the upload the process working directory was %s, not %s", wd, before)
+			break
+		}
+	}
+}

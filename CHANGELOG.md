@@ -232,6 +232,10 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`putlib.PutConfig.PathToWorkdir` is gone.** It wrapped the upload in
+  `os.Chdir`, which is process-global: it moved the working directory out from
+  under every other goroutine, a race waiting to happen once the library runs
+  inside FUSE or SMB. Nothing ever set it.
 - **`metadata.HexHashBlobPolicy` is now `tiedb.HexHashBlobPolicy(metadata.IsHexHash)`.**
   `metadata` describes formats and had no business importing the storage engine;
   the engine offers the policy and the caller supplies the hash-shape rule.
