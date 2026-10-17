@@ -2,8 +2,7 @@ Username = 'defaultuser'
 Password = 'defaultpassword'
 Namespace = 'Collections'
 Collection = 'Main'
-# TripleStoreURL is the tie-triplestore endpoint (the old Webservice key is
-# still honored for backward compatibility).
+# TripleStoreURL is the tie-triplestore endpoint.
 TripleStoreURL = 'http://localhost:2161'
 DefaultFileHosts = ['default']
 PrevVersions = 3

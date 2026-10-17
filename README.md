@@ -214,7 +214,7 @@ collection — see [Multiple collections](#multiple-collections) below.)
 `tie-filehost` servers. Filehosts are named in config:
 
 ```toml
-TripleStoreURL = 'http://localhost:1161'   # legacy 'Webservice' key still works
+TripleStoreURL = 'http://localhost:1161'
 DefaultFileHosts = ['default']
 
 [FileHosts.default]

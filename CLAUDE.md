@@ -79,8 +79,8 @@ cd test-env
   ride every request via a Basic-Auth `http.RoundTripper` in
   `client.HTTPClientFor`.
 - **Client config (`client.Config`).** The triplestore URL key is `TripleStoreURL`
-  (`Webservice` is the deprecated alias; `LoadConfig`→`normalizeConfig` copies
-  one into the other). One config can bind several collections via
+  (the older `Webservice` key was honored through v0.6.0 and is now refused with
+  a message naming the replacement). One config can bind several collections via
   `[Collections.<name>]` entries (each may override `Namespace`, `Collection`,
   `TripleStoreURL`, `Username`/`Password`, `Insecure`, `FileHosts`; unset fields fall
   back to the top-level values). `DefaultCollection` picks the one used when no

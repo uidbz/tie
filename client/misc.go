@@ -75,27 +75,26 @@ func LoadConfig(configName string) (Config, error) {
 		return defaultConfig, err
 	}
 	c.configPath = loadPath
-	normalizeConfig(&c)
 
-	return c, nil
-}
-
-// normalizeConfig applies backward-compatible defaults after decode: the
-// deprecated Webservice field maps to TripleStoreURL (and vice versa).
-//
-// A config with no [Collections] is deliberately left without one. Synthesizing
-// an entry from the flat Namespace/Collection fields would make that entry
-// shadow the fields it was copied from, so a caller that loads a config and then
-// overrides Config.Namespace/Config.Collection (the documented way to target a
-// collection programmatically) would be silently ignored. ResolveCollection's
-// unnamed path already resolves the flat fields identically.
-func normalizeConfig(c *Config) {
+	// `Webservice` was the name of the triplestore URL before TripleStoreURL,
+	// and the alias was honored through v0.6.0. Dropping the field silently
+	// would leave the client dialling an empty URL, so name the key and the fix.
 	if c.TripleStoreURL == "" {
-		c.TripleStoreURL = c.Webservice
+		var legacy struct{ Webservice string }
+		if err := conf.ReadConfig(loadPath, &legacy); err == nil && legacy.Webservice != "" {
+			return defaultConfig, fmt.Errorf(
+				"config %s: the Webservice key is no longer supported; it named the triplestore URL, now written as TripleStoreURL", loadPath)
+		}
 	}
-	if c.Webservice == "" {
-		c.Webservice = c.TripleStoreURL
-	}
+
+	// A config with no [Collections] is deliberately left without one.
+	// Synthesizing an entry from the flat Namespace/Collection fields would make
+	// that entry shadow the fields it was copied from, so a caller that loads a
+	// config and then overrides Config.Namespace/Config.Collection (the
+	// documented way to target a collection programmatically) would be silently
+	// ignored. ResolveCollection's unnamed path already resolves the flat fields
+	// identically.
+	return c, nil
 }
 
 // LoadOrCreateConfig loads configName like LoadConfig, but when no config file

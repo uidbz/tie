@@ -146,7 +146,9 @@ def _config_from_dict(d: dict) -> Config:
         password=d.get("Password", ""),
         namespace=d.get("Namespace", ""),
         collection=d.get("Collection", ""),
-        webservice=d.get("Webservice", ""),
+        # TripleStoreURL is the canonical key (as in the Go client); the older
+        # Webservice key is still read so an existing config keeps working.
+        webservice=d.get("TripleStoreURL", "") or d.get("Webservice", ""),
         webservice_insecure=d.get("WebserviceInsecure", False),
         default_file_hosts=list(d.get("DefaultFileHosts", []) or []),
         file_hosts=fh,
@@ -194,7 +196,7 @@ def save_config(name: str, config: Config) -> str:
     lines.append(f"Password = {_toml_str(config.password)}")
     lines.append(f"Namespace = {_toml_str(config.namespace)}")
     lines.append(f"Collection = {_toml_str(config.collection)}")
-    lines.append(f"Webservice = {_toml_str(config.webservice)}")
+    lines.append(f"TripleStoreURL = {_toml_str(config.webservice)}")
     if config.webservice_insecure:
         lines.append("WebserviceInsecure = true")
     hosts = ", ".join(_toml_str(h) for h in config.default_file_hosts)

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -160,29 +161,48 @@ func TestResolveHosts(t *testing.T) {
 	}
 }
 
-func TestNormalizeConfigLegacy(t *testing.T) {
-	c := Config{
-		Webservice:       "https://legacy",
-		Namespace:        "Collections",
-		Collection:       "Main",
-		DefaultFileHosts: []string{"default"},
+// The `Webservice` key named the triplestore URL before TripleStoreURL did. The
+// alias was honored through v0.6.0; now it is refused rather than ignored,
+// because a config that quietly ends up with an empty URL fails far away from
+// the line that caused it (§8 S10).
+func TestLegacyWebserviceKeyIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	toml := "Webservice = \"https://legacy\"\nNamespace = \"Collections\"\nCollection = \"Main\"\n"
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	normalizeConfig(&c)
 
-	if c.TripleStoreURL != "https://legacy" {
-		t.Errorf("Webservice should populate TripleStoreURL, got %q", c.TripleStoreURL)
+	if _, err := LoadConfig(path); err == nil {
+		t.Fatal("the retired Webservice key loaded without a word")
+	} else if !strings.Contains(err.Error(), "TripleStoreURL") {
+		t.Errorf("the error does not say what to write instead: %v", err)
 	}
-	// A flat config gains no [Collections] entry: one synthesized from the flat
-	// fields would shadow them (see TestFlatFieldOverrideIsHonored).
+}
+
+// A flat config (no [Collections]) must stay flat: an entry synthesized from the
+// flat fields would shadow them, and ResolveCollection's unnamed path already
+// resolves the flat fields identically.
+func TestFlatConfigStaysFlat(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	toml := "TripleStoreURL = \"https://box\"\nNamespace = \"Collections\"\nCollection = \"Main\"\nDefaultFileHosts = [\"default\"]\n"
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if len(c.Collections) != 0 || c.DefaultCollection != "" {
 		t.Errorf("flat config should stay flat, got DefaultCollection=%q Collections=%+v",
 			c.DefaultCollection, c.Collections)
 	}
 
-	// It must still resolve to the legacy connection, filehosts included.
 	got := c.ResolveCollection("")
-	if got.TripleStoreURL != "https://legacy" || got.Collection != "Main" || got.Namespace != "Collections" {
-		t.Errorf("resolved default from legacy config wrong: %+v", got)
+	if got.TripleStoreURL != "https://box" || got.Collection != "Main" || got.Namespace != "Collections" {
+		t.Errorf("resolved default from a flat config wrong: %+v", got)
 	}
 	if !reflect.DeepEqual(got.FileHosts, []string{"default"}) {
 		t.Errorf("resolved filehosts wrong: %+v", got.FileHosts)

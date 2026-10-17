@@ -232,6 +232,11 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`client.Config.Webservice` is gone.** It was the name of the triplestore URL
+  before `TripleStoreURL`, and it was honored as an alias since v0.5.0. A config
+  that still uses it is now refused with a message naming the replacement, rather
+  than loading with an empty URL. The Python client reads both keys and writes
+  `TripleStoreURL`, so configs stay interchangeable.
 - **The wire protocol is a registry, not sixteen copied files.** A request type
   is now its struct plus a handler function; the registry owns decoding, the
   access check, encoding and status codes.

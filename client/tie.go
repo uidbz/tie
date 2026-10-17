@@ -163,7 +163,7 @@ func (c Config) ResolveCollection(name string) ResolvedCollection {
 	if name == "" {
 		name = c.DefaultCollection
 	}
-	store := firstNonEmpty(c.TripleStoreURL, c.Webservice)
+	store := c.TripleStoreURL
 	entry, ok := c.Collections[name]
 	if !ok {
 		return ResolvedCollection{
@@ -201,12 +201,9 @@ type Config struct {
 	Password   string
 	Namespace  string
 	Collection string
-	// Webservice is the triplestore URL. Deprecated: use TripleStoreURL. It is
-	// still honored (LoadConfig copies it into TripleStoreURL when the latter is
-	// empty) so pre-existing configs keep working.
-	Webservice string
-	// TripleStoreURL is the tie-triplestore endpoint. It supersedes Webservice;
-	// when unset LoadConfig falls back to Webservice.
+	// TripleStoreURL is the tie-triplestore endpoint. The older `Webservice`
+	// key spelled the same thing; it was honored through v0.6.0 and is now
+	// refused with a message that says what to change.
 	TripleStoreURL string
 	// WebserviceInsecure enables TLS InsecureSkipVerify for the triplestore
 	// connection (accept self-signed certificates).
