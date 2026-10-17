@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/uidbz/tie/client"
 )
 
 // seedTriples adds a small, known set of triples for the argument-handling
@@ -192,5 +194,25 @@ func TestDownloadFromStdinNeedsADirectory(t *testing.T) {
 	_, _, code, runErr := runTie(t, a, "aaaa\nbbbb\n", "download", "-", "/no/such/directory")
 	if code != exitUsage {
 		t.Errorf("downloading two hashes to a missing directory exited %d, want %d: %v", code, exitUsage, runErr)
+	}
+}
+
+// TestDelReportsFailures: a query or write error used to be printed on stdout
+// while the command exited 0, so a script could not tell a delete from a no-op
+// (§5.1 L9; the rewrite in #67 returns the error instead).
+func TestDelReportsFailures(t *testing.T) {
+	cfg := client.Config{
+		TripleStoreURL: "http://127.0.0.1:1",
+		Namespace:      "testing",
+		Collection:     "testing",
+	}
+	a := &app{config: cfg, tie: client.NewTieClientFor(cfg, "")}
+
+	stdout, _, code, runErr := runTie(t, a, "", "del", "k1", "--all")
+	if code != exitOperational {
+		t.Errorf("`del k1 --all` against a dead store exited %d, want %d: %v", code, exitOperational, runErr)
+	}
+	if stdout != "" {
+		t.Errorf("the failure was reported on stdout: %q", stdout)
 	}
 }
