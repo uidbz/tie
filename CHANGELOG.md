@@ -8,6 +8,14 @@ to follow semantic versioning.
 
 ### Added
 
+- **`tie conf show`** prints what an invocation actually resolves to: the config
+  file it loaded, the collection after `-c`/`DefaultCollection`, the namespace,
+  the triplestore URL, the credentials name, the filehosts an upload would pick
+  and their URLs, the dir-type import templates and `PrevVersions` — as rows, so
+  `tie conf show | grep triplestore` and `--format json` work. Passwords are
+  never printed. Config resolution (flat keys vs `[Collections]`, two URL keys,
+  `-c` vs `--collection`, the file search) is the likeliest place to be pointed
+  at the wrong store, and this makes it visible.
 - **`$TIE_CONFIG`** names the config file to load, between `-C/--config` and the
   default name. The search order — `-C`, `$TIE_CONFIG`, `./config.toml`, the user
   config dir (`~/.config/tie`), the system config dir (`/etc/tie`) — is now

@@ -105,6 +105,28 @@ func cmdConf(a *app) *cli.Command {
 			"No command writes a config except `conf create` (§6.6).",
 		Commands: []*cli.Command{
 			{
+				Name:  "show",
+				Usage: "Print the collection, filehosts and URLs this invocation actually resolves to",
+				Description: "Config resolution has several layers — the flat keys, [Collections], -c,\n" +
+					"-C, $TIE_CONFIG — and getting them wrong is the likeliest way to run a\n" +
+					"command against the wrong store. This prints what *this* invocation means:\n" +
+					"the file it loaded, the collection it resolved, the triplestore URL, the\n" +
+					"filehosts an upload would pick. Passwords are never printed.",
+				Action: func(_ context.Context, cCtx *cli.Command) error {
+					if a.tie == nil {
+						return exitError{code: exitUsage, msg: a.configMessage()}
+					}
+					o, err := a.outFor(cCtx, "field", "value")
+					if err != nil {
+						return err
+					}
+					for _, row := range confRows(a.config, cCtx.String("collection")) {
+						o.row(row[0], row[1])
+					}
+					return o.flush()
+				},
+			},
+			{
 				Name:  "create",
 				Usage: "Create new default config file: conf create [name]",
 				Action: func(_ context.Context, cCtx *cli.Command) error {
@@ -259,4 +281,50 @@ func humanizeBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// confRows resolves the config the way a command will use it and reports what
+// it settled on (§9: config resolution — two URL keys, flat keys vs
+// [Collections], -c vs --collection — is where misconfiguration hides).
+// Passwords are deliberately not among them.
+func confRows(cfg client.Config, collectionFlag string) [][]string {
+	resolved := cfg.ResolveCollection(collectionFlag)
+	rows := [][]string{
+		{"config", cfg.Path()},
+		{"collection", resolved.Collection},
+		{"namespace", resolved.Namespace},
+		{"triplestore", resolved.TripleStoreURL},
+		{"username", resolved.Username},
+		{"insecure", strconv.FormatBool(resolved.Insecure)},
+		{"filehosts", strings.Join(resolved.FileHosts, ", ")},
+		{"prev-versions", strconv.Itoa(cfg.PrevVersions)},
+	}
+
+	names := make([]string, 0, len(cfg.FileHosts))
+	for name := range cfg.FileHosts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		rows = append(rows, []string{"filehost:" + name, cfg.FileHosts[name].URL})
+	}
+
+	if len(cfg.Collections) > 0 {
+		defined := make([]string, 0, len(cfg.Collections))
+		for name := range cfg.Collections {
+			defined = append(defined, name)
+		}
+		sort.Strings(defined)
+		rows = append(rows, []string{"collections", strings.Join(defined, ", ")})
+	}
+
+	dests := make([]string, 0, len(cfg.ImportDest))
+	for name := range cfg.ImportDest {
+		dests = append(dests, name)
+	}
+	sort.Strings(dests)
+	for _, name := range dests {
+		rows = append(rows, []string{"import-dest:" + name, cfg.ImportDest[name]})
+	}
+	return rows
 }

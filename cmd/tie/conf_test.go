@@ -82,6 +82,60 @@ func TestTIEConfigEnv(t *testing.T) {
 	}
 }
 
+// TestConfShowIsTheResolvedState: config resolution has enough layers that the
+// only way to see what an invocation means is to ask it (§9).
+func TestConfShowIsTheResolvedState(t *testing.T) {
+	a := newTestApp(t)
+	a.config = client.Config{
+		TripleStoreURL:   "http://store.example:1161",
+		Namespace:        "Collections",
+		Collection:       "Main",
+		Username:         "alice",
+		Password:         "hunter2",
+		DefaultFileHosts: []string{"default"},
+		FileHosts: map[string]client.FileHost{
+			"default": {URL: "http://blobs.example:1162"},
+			"backup":  {URL: "https://backup.example"},
+		},
+		DefaultCollection: "Main",
+		Collections: map[string]client.CollectionEntry{
+			"Archive": {Namespace: "Collections", Collection: "Archive2024", TripleStoreURL: "http://archive.example:1161"},
+		},
+		ImportDest:   map[string]string{"audio-dir": "/music/{artist}/{album}"},
+		PrevVersions: 3,
+	}
+	a.tie = client.NewTieClientFor(a.config, "")
+
+	stdout, _, code, _ := runTie(t, a, "", "conf", "show", "-c", "Archive")
+	if code != 0 {
+		t.Fatalf("conf show exited %d", code)
+	}
+
+	want := map[string]string{
+		"collection":            "Archive2024",
+		"triplestore":           "http://archive.example:1161",
+		"filehost:backup":       "https://backup.example",
+		"import-dest:audio-dir": "/music/{artist}/{album}",
+		"prev-versions":         "3",
+	}
+	got := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		fields := strings.SplitN(line, "\t", 2)
+		if len(fields) != 2 {
+			t.Fatalf("row %q is not two fields", line)
+		}
+		got[fields[0]] = fields[1]
+	}
+	for field, value := range want {
+		if got[field] != value {
+			t.Errorf("%s = %q, want %q (all: %v)", field, got[field], value, got)
+		}
+	}
+	if strings.Contains(stdout, "hunter2") {
+		t.Errorf("the password was printed:\n%s", stdout)
+	}
+}
+
 // TestConfHasNoShortAlias: `c` read like the global -c (collection), so
 // `tie c create` was a trap (§6.6). Checked on the tree rather than by running
 // it, because cli's unknown-command path exits the process.
