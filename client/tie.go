@@ -37,13 +37,7 @@ var defaultConfig = Config{
 	DefaultFileHosts: []string{"default"},
 	FileHosts:        map[string]FileHost{"default": {URL: "http://localhost:1162"}},
 	PrevVersions:     3,
-	key:              InitKey(),
 }
-
-const (
-	tieKey            = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
-	defaultConfigFile = "config"
-)
 
 type AssociatedReply = *api.AssociatedReply
 type DumpReply = *api.DumpReply
@@ -250,7 +244,6 @@ type Config struct {
 	// query. The query string uses the same syntax as an ad-hoc query dir
 	// (space-ANDed terms, "-" excludes, optional "type:" scope).
 	Queries map[string]string
-	key     []byte
 }
 
 // Path returns the filesystem path the config was loaded from (empty for a

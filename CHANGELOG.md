@@ -232,6 +232,9 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`client.InitKey` and the unused `Config.key` field are gone.** The
+  content-address key now exists once, in `metadata`; everything that needs an
+  address goes through `metadata.NewHash` / `metadata.HashReader`.
 - **The package in `io/tiefs` is named `tiefs`, not `tiesfs`.** The import path
   is unchanged; the identifier you write is (`tiesfs.Tree` → `tiefs.Tree`). The
   directory and the package disagreed, so grep found neither consistently.

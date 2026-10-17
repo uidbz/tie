@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -152,15 +151,4 @@ func SaveConfigTo(name string, config Config) (string, error) {
 		return "", err
 	}
 	return conf.PathUserConfigDir("tie", name)
-}
-
-// InitKey decodes the constant tie key. The string is a build-time constant, so
-// a decode failure is a programming error: it panics rather than printing to
-// stdout and carrying on with a nil key (§6.1).
-func InitKey() []byte {
-	k, err := hex.DecodeString(tieKey)
-	if err != nil {
-		panic("client: tieKey is not valid hex: " + err.Error())
-	}
-	return k
 }
