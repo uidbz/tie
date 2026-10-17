@@ -17,16 +17,16 @@ func main() {
 	// Load config before building the command tree so `import` can generate a
 	// subcommand per configured dir-type. The global flags aren't parsed yet at
 	// this point, so peek them out of os.Args directly.
+	//
+	// Loading never writes (§6.6): `tie --help`, a typo and every read-only
+	// command used to leave a config file behind in the user config dir. A
+	// missing config is reported by the Before hook, and `tie conf create` is
+	// the only thing that writes one.
 	configName, collection := parseGlobalFlags(os.Args)
-	config, created, err := client.LoadOrCreateConfig(configName)
 	a := &app{}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error opening config file:", err)
+	if config, err := client.LoadConfig(configName); err != nil {
+		a.configErr = err
 	} else {
-		if created {
-			fmt.Fprintf(os.Stderr, "No config found; created a default at %s\n", config.Path())
-			fmt.Fprintln(os.Stderr, "Set Username and Password there if the triplestore requires authentication.")
-		}
 		a.config = config
 		a.tie = client.NewTieClientFor(config, collection)
 	}
@@ -59,7 +59,7 @@ func newRootCommand(a *app) *cli.Command {
 		// check spread through the command tree.
 		Before: a.before,
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted)", Value: "config.toml"},
+			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted). Precedence: -C, then $TIE_CONFIG, then ./config.toml, then the user and system config dirs.", Value: "config.toml"},
 			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection)"},
 			&cli.BoolFlag{Name: "quiet", Aliases: []string{"q"}, Usage: "Report errors only; silence library warnings and progress"},
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "Also report what the library does per file"},
@@ -113,8 +113,14 @@ func exitCodeFor(err error) int {
 // precede the subcommand, and stops at the first non-global token — so a local
 // --collection on a subcommand (verify/import) is left untouched. configName
 // matches the cli default when the flag is absent.
+// parseGlobalFlags also honours $TIE_CONFIG, the conventional override for a
+// tool whose config is otherwise found by searching (§6.6). -C still wins, so a
+// wrapper script can set the env once and a one-off invocation can override it.
 func parseGlobalFlags(args []string) (configName, collection string) {
 	configName = "config.toml"
+	if env := os.Getenv("TIE_CONFIG"); env != "" {
+		configName = env
+	}
 	for i := 1; i < len(args); i++ {
 		a := args[i]
 		switch {

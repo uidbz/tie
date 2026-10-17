@@ -18,6 +18,10 @@ import (
 type app struct {
 	config client.Config
 	tie    *client.TieClient
+	// configErr is why no config was loaded: a missing file (which `tie conf
+	// create` fixes) or an unreadable one. The Before hook turns it into the
+	// message and exit code a command fails with.
+	configErr error
 }
 
 // configExempt are the commands that work without a loaded config: they report
@@ -42,7 +46,7 @@ func (a *app) before(ctx context.Context, cmd *cli.Command) (context.Context, er
 		return ctx, nil
 	}
 	if a.tie == nil {
-		return ctx, exitError{code: 2, msg: "config not loaded"}
+		return ctx, exitError{code: exitUsage, msg: a.configMessage()}
 	}
 	// The library reports what it notices through a slog logger rather than
 	// writing to stderr itself (§6.1); this is where it reaches the terminal.
@@ -71,6 +75,19 @@ func cliLogger(cmd *cli.Command) *slog.Logger {
 			return attr
 		},
 	}))
+}
+
+// configMessage says why a command cannot run: either there is no config to
+// load — which `tie conf create` writes, and which no other command will do on
+// your behalf (§6.6) — or the file that is there cannot be read.
+func (a *app) configMessage() string {
+	if a.configErr == nil {
+		return "config not loaded"
+	}
+	if os.IsNotExist(a.configErr) {
+		return "no config found: run `tie conf create`, or point at one with -C or $TIE_CONFIG"
+	}
+	return "config not loaded: " + a.configErr.Error()
 }
 
 // outFor builds the renderer one command prints through, honouring the global

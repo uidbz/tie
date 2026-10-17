@@ -8,6 +8,10 @@ to follow semantic versioning.
 
 ### Added
 
+- **`$TIE_CONFIG`** names the config file to load, between `-C/--config` and the
+  default name. The search order — `-C`, `$TIE_CONFIG`, `./config.toml`, the user
+  config dir (`~/.config/tie`), the system config dir (`/etc/tie`) — is now
+  documented on the flag and in `tie conf`'s help.
 - **`tie repair plan` and `tie repair apply` — the fsck pipeline.** Each stage
   reads the previous one's stdout, so the plan can be inspected, saved, edited
   or replayed before anything destructive runs:
@@ -199,6 +203,15 @@ to follow semantic versioning.
 
 ### Breaking
 
+- **`tie` no longer writes a config file.** Every invocation used to create a
+  default config in the user config dir when none was found — including
+  `tie --help` and a typo. Now only `tie conf create` writes one; a command that
+  needs a config fails with exit 2 and says to run it, or to point at a file with
+  `-C` or `$TIE_CONFIG`. `conf create` with no argument creates the file this
+  invocation would have loaded (the `-C`/`$TIE_CONFIG` value) rather than always
+  `config` in the user config dir.
+- **`conf`'s `c` alias is gone.** It read like the global `-c` (collection), so
+  `tie c create` looked like "create in collection c".
 - **`tie verify` follows the fsck exit codes**: 0 clean, 1 problems found, 2
   usage error, 4 could not run. An unreachable triplestore or filehost, and a
   partial report, now exit **4** instead of 1, so a cron job can tell a damaged

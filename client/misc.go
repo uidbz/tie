@@ -131,13 +131,27 @@ func LoadOrCreateConfig(configName string) (Config, bool, error) {
 }
 
 func SaveConfig(name string, config Config) error {
+	_, err := SaveConfigTo(name, config)
+	return err
+}
+
+// SaveConfigTo writes the config and reports where it landed. `tie conf create`
+// is the only thing that writes a config (§6.6), so it has to be able to say
+// where the file went — and where it went follows the same rule as loading:
+// an explicit path (what -C or $TIE_CONFIG names) is written there, a bare name
+// goes to the user config dir.
+func SaveConfigTo(name string, config Config) (string, error) {
 	name = ConfigFileName(name)
-	// An explicit path is written directly (so LoadOrCreateConfig can create the
-	// default at the exact path -C names); a bare name goes to the user config dir.
 	if isConfigPath(name) {
-		return conf.WriteConfig(name, config)
+		if err := conf.WriteConfig(name, config); err != nil {
+			return "", err
+		}
+		return name, nil
 	}
-	return conf.SaveToUserConfigDir("tie", name, config)
+	if err := conf.SaveToUserConfigDir("tie", name, config); err != nil {
+		return "", err
+	}
+	return conf.PathUserConfigDir("tie", name)
 }
 
 // InitKey decodes the constant tie key. The string is a build-time constant, so

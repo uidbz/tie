@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/client"
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/version"
@@ -98,28 +97,31 @@ func describeBuild(v version.Info) string {
 
 func cmdConf(a *app) *cli.Command {
 	return &cli.Command{
-		Name:    "conf",
-		Aliases: []string{"c"},
-		Usage:   "conf",
+		Name:  "conf",
+		Usage: "Create and inspect the configuration",
+		Description: "The config is looked up in this order: the -C/--config value, $TIE_CONFIG,\n" +
+			"./config.toml, then the user config dir (~/.config/tie) and the system\n" +
+			"config dir (/etc/tie). The .toml extension may be omitted for a name.\n" +
+			"No command writes a config except `conf create` (§6.6).",
 		Commands: []*cli.Command{
 			{
 				Name:  "create",
 				Usage: "Create new default config file: conf create [name]",
 				Action: func(_ context.Context, cCtx *cli.Command) error {
-					var name string
-					if cCtx.Args().Len() == 0 {
-						name = "config"
-					} else {
+					// With no argument, create the config this invocation would
+					// have loaded — the -C value or $TIE_CONFIG — so the fix the
+					// refusal points at actually fixes the next run (§6.6).
+					name := cCtx.String("config")
+					if cCtx.Args().Len() > 0 {
 						name = cCtx.Args().First()
 					}
-					err := client.SaveConfig(name, client.DefaultConfig())
+					path, err := client.SaveConfigTo(name, client.DefaultConfig())
 					if err != nil {
-						return err
+						return operationalError("creating config: %v", err)
 					}
-					path, err := conf.PathUserConfigDir("tie", client.ConfigFileName(name))
 					fmt.Fprintln(os.Stderr, "Config created here:", path)
-
-					return err
+					fmt.Fprintln(os.Stderr, "Set Username and Password there if the triplestore requires authentication.")
+					return nil
 				},
 			},
 		},
