@@ -4,14 +4,6 @@ import (
 	ws "github.com/uidbz/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Sync to 'NewName'
-3. Implement Reply and define fields in structs
-4. Add to request slice and pass to NewWebservice on server
-*/
-
 const (
 	IdSync = "Sync"
 )
@@ -25,16 +17,16 @@ type SyncReply struct {
 	ws.ReplyStatus
 }
 
-func (request *SyncRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func syncHandler(env *ws.Environment, request *SyncRequest) (*SyncReply, error) {
 	reply := SyncReply{}
-	env.Collection(request.Namespace, request.CollectionId).Sync()
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
+	col.Sync()
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *SyncRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewSyncRequest()
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewSyncRequest() *SyncRequest {
@@ -42,7 +34,6 @@ func (c CollectionInfo) NewSyncRequest() *SyncRequest {
 	request.Id = IdSync
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &SyncReply{}
 
 	return request
 }

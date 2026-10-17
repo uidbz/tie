@@ -1,52 +1,42 @@
-package tiesfs
+package tiefs
 
 import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	stdhash "hash"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
+	"strings"
 
+	stdhash "hash"
+
+	"github.com/uidbz/tie/internal/diskcache"
 	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/metadata"
 )
 
-// Cache is a disk-backed, single-flight blob cache. Blobs are streamed from the
-// filehost to files under dir (bounded by disk, not RAM), verified against their
-// content hash while streaming, and served to reads via ReadAt. Concurrent reads
-// of the same hash coalesce into a single download.
+// Cache is the shared read path for every tie transport (FUSE mount, SMB
+// server): a blob is downloaded once no matter how many protocol handles ask
+// for it, streamed to disk (bounded by disk, not RAM), verified against its
+// content address while streaming when the filehost is untrusted, and served
+// to reads through random-access ReadAt.
 //
-// It is the shared read path for every tie transport (FUSE mount, SMB server):
-// a blob is downloaded once no matter how many protocol handles ask for it.
+// Storage, the size budget, LRU eviction and handle refcounting live in
+// internal/diskcache — the same engine the filehost read cache uses. This type
+// only supplies the producers: an HTTP fetch, or extracting one archive member.
 type Cache struct {
-	filehost string
-	client   *http.Client
-	dir      string
-	maxSize  int64
-	verify   bool // hash downloaded bytes and check against their content address
+	// fh is the filehost client: one per Cache, so its connections are pooled
+	// across every blob the mount touches.
+	fh     *fhclient.Client
+	verify bool // hash downloaded bytes and check against their content address
 
-	// mu guards entries and the LRU order slice. Downloads happen outside the
-	// lock; the per-blob entry carries its own readiness signal.
-	mu      sync.Mutex
-	entries map[string]*cacheEntry
-	order   []string // hashes in insertion order, for size-based eviction
-	curSize int64
-}
-
-// cacheEntry is one cached blob. ready is closed once the download finishes (or
-// fails); until then, readers block on it. On success, file is an open,
-// read-only handle to the on-disk blob and size is its length; on failure, err
-// is set. Keeping the fd open means an evicted-and-unlinked blob stays readable
-// for handles that already resolved it (unlink removes the name, not the inode).
-type cacheEntry struct {
-	ready chan struct{}
-	file  *os.File
-	size  int64
-	err   error
+	dc *diskcache.Cache
+	// newErr records a failure to create the cache directory; every read then
+	// reports it instead of dereferencing a nil cache.
+	newErr error
 }
 
 // NewCache builds a blob cache reading from filehostURL with the given HTTP
@@ -54,203 +44,120 @@ type cacheEntry struct {
 // downloaded bytes are hashed and checked against their content address (off
 // for a trusted filehost, on when the filehost is untrusted).
 func NewCache(filehostURL string, client *http.Client, maxBytes int64, verify bool) *Cache {
+	c := &Cache{fh: fhclient.New(filehostURL, client), verify: verify}
 	dir, err := os.MkdirTemp("", "tie-cache-")
 	if err != nil {
-		// Fall back to the OS temp root; download() will surface open errors.
-		dir = os.TempDir()
+		c.newErr = fmt.Errorf("tiefs: creating cache directory: %w", err)
+		return c
 	}
-	return &Cache{
-		filehost: filehostURL,
-		client:   client,
-		dir:      dir,
-		maxSize:  maxBytes,
-		verify:   verify,
-		entries:  make(map[string]*cacheEntry),
+	dc, err := diskcache.New(diskcache.Options{Dir: dir, MaxBytes: maxBytes, Layout: cacheFileName})
+	if err != nil {
+		os.RemoveAll(dir)
+		c.newErr = err
+		return c
 	}
+	c.dc = dc
+	return c
 }
 
-// Close removes the on-disk cache directory and closes open blob handles. Safe
-// to call once at shutdown.
-func (c *Cache) Close() error {
-	c.mu.Lock()
-	for _, e := range c.entries {
-		if e.file != nil {
-			e.file.Close()
+// cacheFileName maps a cache key to a file name under dir. Blob keys are
+// already 64-hex; archive-member keys are "hash\x00member" and are hashed into
+// a hex name so they stay single, safe path segments.
+func cacheFileName(dir, key string) (string, error) {
+	name := key
+	if !metadata.IsHexHash(name) {
+		h, err := metadata.HashReader(strings.NewReader(key))
+		if err != nil {
+			return "", fmt.Errorf("tiefs: cache key %q: %w", key, err)
 		}
+		name = h
 	}
-	c.entries = make(map[string]*cacheEntry)
-	c.order = nil
-	c.curSize = 0
-	dir := c.dir
-	c.mu.Unlock()
-	if dir == "" || dir == os.TempDir() {
+	return filepath.Join(dir, name), nil
+}
+
+// Close removes the on-disk cache directory. Safe to call once at shutdown.
+func (c *Cache) Close() error {
+	if c.dc == nil {
 		return nil
 	}
+	dir := c.dc.Dir()
+	c.dc.Close()
 	return os.RemoveAll(dir)
 }
 
-// blobPath returns the on-disk path for a hash. The hash is validated as hex by
-// callers, so it is safe as a single path segment.
-func (c *Cache) blobPath(hash string) string {
-	return filepath.Join(c.dir, hash)
+// get is the single entry point into the shared cache, so a cache that failed
+// to create its directory reports that rather than panicking.
+func (c *Cache) get(key string, produce func(io.Writer) error) (*diskcache.Handle, error) {
+	if c.dc == nil {
+		return nil, c.newErr
+	}
+	return c.dc.Get(key, produce)
 }
 
-// evictLocked drops least-recently-inserted blobs until curSize fits maxSize.
-// The open fd of an evicted entry is closed and its file unlinked; any reader
-// still holding a reference to that entry keeps reading through its own fd.
-// Must be called with c.mu held.
-func (c *Cache) evictLocked(keep string) {
-	for c.curSize > c.maxSize && len(c.order) > 0 {
-		oldest := c.order[0]
-		if oldest == keep {
-			// Never evict the blob we just admitted; stop to avoid churn.
-			if len(c.order) == 1 {
-				break
-			}
-			c.order = append(c.order[1:], oldest)
-			continue
-		}
-		c.order = c.order[1:]
-		e, ok := c.entries[oldest]
-		if !ok {
-			continue
-		}
-		delete(c.entries, oldest)
-		c.curSize -= e.size
-		if e.file != nil {
-			e.file.Close()
-		}
-		os.Remove(c.blobPath(oldest))
-	}
-}
-
-// Blob returns a random-access handle to the blob for hash, downloading it on
-// the first request and coalescing concurrent requests for the same hash into
-// that single download.
-func (c *Cache) Blob(hash string) (*Blob, error) {
-	if !metadata.IsHexHash(hash) {
-		return nil, fmt.Errorf("tiesfs: invalid content hash %q", hash)
-	}
-	e, err := c.get(hash, func() (*os.File, int64, error) { return c.download(hash) })
+// fetch streams one blob from the filehost into w, hashing as it copies when
+// verification is on. Memory use is bounded by the copy buffer, not the blob
+// size, so blobs larger than RAM (or the cache budget) serve fine.
+func (c *Cache) fetch(hash string, w io.Writer) error {
+	body, err := c.fh.Get(hash)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &Blob{entry: e}, nil
-}
+	defer body.Close()
 
-// get returns the ready cache entry for key, running producer on the first
-// request and coalescing concurrent requests for the same key into that single
-// run. producer must return an open, read-only file (already unlinked) plus its
-// size. Used both for whole-blob downloads (key = content hash) and extracted
-// archive members (key = archive hash + member name).
-func (c *Cache) get(key string, producer func() (*os.File, int64, error)) (*cacheEntry, error) {
-	c.mu.Lock()
-	if e, ok := c.entries[key]; ok {
-		c.mu.Unlock()
-		<-e.ready
-		return e, e.err
-	}
-	e := &cacheEntry{ready: make(chan struct{})}
-	c.entries[key] = e
-	c.mu.Unlock()
-
-	// This goroutine won the race to create the entry, so it owns the work.
-	e.file, e.size, e.err = producer()
-	if e.err != nil {
-		// Drop the failed entry so a later read can retry rather than caching
-		// the error forever.
-		c.mu.Lock()
-		delete(c.entries, key)
-		c.mu.Unlock()
-		close(e.ready)
-		return nil, e.err
-	}
-
-	c.mu.Lock()
-	c.order = append(c.order, key)
-	c.curSize += e.size
-	c.evictLocked(key)
-	c.mu.Unlock()
-
-	close(e.ready)
-	return e, nil
-}
-
-// download streams the blob from the filehost to a file in the cache dir and
-// returns an open, read-only handle to it plus its size. Memory use is bounded
-// by the copy buffer, not the file size, so blobs larger than RAM (or the cache
-// budget) download and serve fine. When c.verify is set, the bytes are hashed as
-// they copy and checked against their content address (the filehost is treated
-// as untrusted); by default verification is skipped, since hashing every read of
-// multi-GB media on a trusted personal filehost is wasted work.
-func (c *Cache) download(hash string) (*os.File, int64, error) {
-	resp, err := c.client.Get(c.filehost + "/" + hash)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("tiesfs: bad status %s", resp.Status)
-	}
-
-	path := c.blobPath(hash)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0600)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	var dst io.Writer = f
+	var dst io.Writer = w
 	var h stdhash.Hash
 	if c.verify {
 		h, err = metadata.NewHash()
 		if err != nil {
-			f.Close()
-			os.Remove(path)
-			return nil, 0, err
+			return err
 		}
-		dst = io.MultiWriter(f, h)
+		dst = io.MultiWriter(w, h)
 	}
-	size, err := io.Copy(dst, resp.Body)
-	if err != nil {
-		f.Close()
-		os.Remove(path)
-		return nil, 0, err
+	if _, err := io.Copy(dst, body); err != nil {
+		return err
 	}
 	if c.verify {
 		if got := hex.EncodeToString(h.Sum(nil)); got != hash {
-			f.Close()
-			os.Remove(path)
-			return nil, 0, errors.New("tiesfs: downloaded content does not match its hash")
+			return errors.New("tiefs: downloaded content does not match its hash")
 		}
 	}
+	return nil
+}
 
-	// Unlink now: the open fd keeps the bytes reachable, and eviction/close no
-	// longer needs a second unlink. The dir is removed wholesale on cache close.
-	os.Remove(path)
-	return f, size, nil
+// Blob returns a random-access handle to the blob for hash, downloading it on
+// the first request and coalescing concurrent requests for the same hash into
+// that single download. The caller must Close it.
+func (c *Cache) Blob(hash string) (*Blob, error) {
+	if !metadata.IsHexHash(hash) {
+		return nil, fmt.Errorf("tiefs: invalid content hash %q", hash)
+	}
+	h, err := c.get(hash, func(w io.Writer) error { return c.fetch(hash, w) })
+	if err != nil {
+		return nil, err
+	}
+	return &Blob{h: h}, nil
 }
 
 // Blob is a random-access handle to one cached blob. It follows io.ReaderAt
 // to the letter: a short read always carries a non-nil error, reading at or
 // past Size returns 0, io.EOF, and ReadAt calls may run concurrently.
+//
+// The handle holds a reference on its cache entry: the entry may be evicted
+// while the handle is live, but it stays readable until Close. Handles that
+// are never closed pin the blob's bytes, so every Blob must be released when
+// the protocol handle using it goes away.
 type Blob struct {
-	entry *cacheEntry
+	h *diskcache.Handle
 }
 
 // ReadAt reads len(p) bytes from the blob at off.
-func (b *Blob) ReadAt(p []byte, off int64) (int, error) {
-	if off < 0 || off >= b.entry.size {
-		if off < 0 {
-			return 0, fmt.Errorf("tiesfs: negative read offset %d", off)
-		}
-		return 0, io.EOF
-	}
-	n, err := b.entry.file.ReadAt(p, off)
-	return n, err
-}
+func (b *Blob) ReadAt(p []byte, off int64) (int, error) { return b.h.ReadAt(p, off) }
 
 // Size returns the blob's length in bytes.
-func (b *Blob) Size() int64 { return b.entry.size }
+func (b *Blob) Size() int64 { return b.h.Size() }
+
+// Close releases this handle's reference on the cached blob.
+func (b *Blob) Close() error { return b.h.Close() }
 
 // memberKey is the cache key for one extracted archive member. The archive hash
 // is hex and the member name cannot contain a NUL, so the join is unambiguous.
@@ -262,15 +169,14 @@ func MemberKey(archiveHash, member string) string {
 // and lists its members from the seekable cached file.
 func (c *Cache) ArchiveMembers(archiveHash string) ([]archivelib.Member, error) {
 	if !metadata.IsHexHash(archiveHash) {
-		return nil, fmt.Errorf("tiesfs: invalid content hash %q", archiveHash)
+		return nil, fmt.Errorf("tiefs: invalid content hash %q", archiveHash)
 	}
-	e, err := c.get(archiveHash, func() (*os.File, int64, error) { return c.download(archiveHash) })
+	h, err := c.get(archiveHash, func(w io.Writer) error { return c.fetch(archiveHash, w) })
 	if err != nil {
 		return nil, err
 	}
-	// A SectionReader gives an independent, zero-based view of the shared cache
-	// fd, so concurrent listings/reads don't race on its offset.
-	return archivelib.List(io.NewSectionReader(e.file, 0, e.size))
+	defer h.Close()
+	return archivelib.List(h.Section())
 }
 
 // Member extracts one archive member into its own cache entry and returns a
@@ -278,35 +184,22 @@ func (c *Cache) ArchiveMembers(archiveHash string) ([]archivelib.Member, error) 
 // not seekable, so the member is decompressed to a cache file up front; reads
 // then use random-access ReadAt like any other blob. Bounded by disk, not RAM.
 func (c *Cache) Member(archiveHash, member string) (*Blob, error) {
-	e, err := c.get(MemberKey(archiveHash, member), func() (*os.File, int64, error) {
-		ae, err := c.get(archiveHash, func() (*os.File, int64, error) { return c.download(archiveHash) })
+	h, err := c.get(MemberKey(archiveHash, member), func(w io.Writer) error {
+		ah, err := c.get(archiveHash, func(w io.Writer) error { return c.fetch(archiveHash, w) })
 		if err != nil {
-			return nil, 0, err
+			return err
 		}
-		rc, err := archivelib.Open(io.NewSectionReader(ae.file, 0, ae.size), member)
+		defer ah.Close()
+		rc, err := archivelib.Open(ah.Section(), member)
 		if err != nil {
-			return nil, 0, err
+			return err
 		}
 		defer rc.Close()
-
-		f, err := os.CreateTemp(c.dir, "member-")
-		if err != nil {
-			return nil, 0, err
-		}
-		path := f.Name()
-		size, err := io.Copy(f, rc)
-		if err != nil {
-			f.Close()
-			os.Remove(path)
-			return nil, 0, err
-		}
-		// Unlink now: the open fd keeps the bytes reachable; the dir is removed
-		// wholesale on cache close.
-		os.Remove(path)
-		return f, size, nil
+		_, err = io.Copy(w, rc)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &Blob{entry: e}, nil
+	return &Blob{h: h}, nil
 }

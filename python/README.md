@@ -41,7 +41,7 @@ Username   = 'defaultuser'
 Password   = 'defaultpassword'
 Namespace  = 'Collections'
 Collection = 'Main'
-Webservice = 'http://localhost:1161'
+TripleStoreURL = 'http://localhost:1161'
 DefaultFileHosts = ['default']
 PrevVersions = 3
 
@@ -58,8 +58,10 @@ audio-dir = '{artist}/{album}'
 
 Key fields:
 
-- **`Webservice`** / **`WebserviceInsecure`** — triplestore URL; `Insecure` is
-  `InsecureSkipVerify` for HTTPS (does not swap the scheme).
+- **`TripleStoreURL`** / **`WebserviceInsecure`** — triplestore URL; `Insecure`
+  is `InsecureSkipVerify` for HTTPS (does not swap the scheme). The older
+  `Webservice` spelling is still read, but new configs are written with
+  `TripleStoreURL`, the key the Go tools use.
 - **`FileHosts.<name>`** — blob stores, keyed by name. When no `--host` is
   given, the default collection's `FileHosts` are used (its own list when a
   `[Collections.<name>]` entry sets one, else `DefaultFileHosts`).

@@ -1,24 +1,15 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
-	"github.com/uidbz/conf"
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/auth"
-	"github.com/uidbz/tie/tiedb"
-	"github.com/uidbz/tie/tielog"
-	"github.com/uidbz/tie/version"
+	"github.com/uidbz/tie/internal/daemon"
 	"github.com/uidbz/tie/webservice"
-)
-
-var (
-	db     *tiedb.TieTree
-	dbPath string
 )
 
 // User is a single account entry in the triplestore config. Passwords are
@@ -29,6 +20,16 @@ type User struct {
 	// Role is "read" (read-only) or "write" (full read+write). Empty defaults to
 	// "write" so accounts predating roles keep full access.
 	Role string
+}
+
+// configUsers maps the config file's [[Users]] entries onto the shared
+// validating type, where duplicate names and empty passwords are refused.
+func configUsers(us []User) []auth.UserConfig {
+	out := make([]auth.UserConfig, 0, len(us))
+	for _, u := range us {
+		out = append(out, auth.UserConfig{Username: u.Username, Password: u.Password, Role: u.Role})
+	}
+	return out
 }
 
 // TripleStoreConfig is the full tie-triplestore configuration, loaded from TOML.
@@ -49,7 +50,15 @@ type TripleStoreConfig struct {
 	LogLevel string
 	// MaxConcurrentRequests caps how many requests run at once. 0 = unbounded.
 	MaxConcurrentRequests int
-	Users                 []User
+	// LoadMemoryLimitMB is a soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while collections load from disk. 0 = runtime default.
+	LoadMemoryLimitMB int
+	// MaxRequestBytesMB caps a single request body in megabytes. A body is read
+	// whole before it is parsed, so an uncapped request can exhaust memory; a
+	// Batch (restore, repair) legitimately carries a lot, so the built-in
+	// default is generous. 0 selects it.
+	MaxRequestBytesMB int
+	Users             []User
 	// AnonymousAccess is the role granted to a request with no valid credentials:
 	// "none" (require auth for everything), "read", or "write". Empty defaults to
 	// "none", preserving the always-authenticated behavior.
@@ -93,52 +102,25 @@ func defaultConfig() TripleStoreConfig {
 }
 
 func main() {
-	var configPath = flag.String("config", "tie-triplestore.toml", "Path to TOML config file.")
-	var showVersion = flag.Bool("version", false, "Print version and exit.")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `tie triplestore
+	flags := daemon.ParseFlags("tie-triplestore", "tie-triplestore.toml", `tie triplestore
 -----------------------------
 Configuration (server settings and user accounts) is read from a TOML file.
 `)
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("tie-triplestore", version.String())
-		return
-	}
 
 	cfg := defaultConfig()
-	if err := conf.ReadConfig(*configPath, &cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
+	if err := daemon.LoadConfig(flags.ConfigPath, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 
-	cleanup, err := tielog.Setup(tielog.Config{File: cfg.LogFile, Level: cfg.LogLevel})
-	if err != nil {
-		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
-	}
+	cleanup := daemon.SetupLogging("tie-triplestore", cfg.LogFile, cfg.LogLevel)
 	defer cleanup()
-	tielog.LogVersion("tie-triplestore")
 
-	users := make(map[string]auth.User, len(cfg.Users))
-	for _, u := range cfg.Users {
-		role, err := auth.ParseUserRole(u.Role)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error in config: user %q: %v\n", u.Username, err)
-			os.Exit(1)
-		}
-		users[u.Username] = auth.User{Password: u.Password, Role: role}
-	}
-	anon, err := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleNone)
+	authStore, err := auth.BuildStore(configUsers(cfg.Users), cfg.AnonymousAccess, auth.RoleNone)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error in config:", err)
 		os.Exit(1)
 	}
-	authStore := auth.NewStore(users, anon)
 
 	reverseRelations := cfg.ReverseRelations
 	if len(reverseRelations) == 0 {
@@ -159,39 +141,24 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		Insecure:                   cfg.Insecure,
 		CertFile:                   cfg.CertFile,
 		KeyFile:                    cfg.KeyFile,
-		UserNamespace:              "userdata",
 		DbPath:                     cfg.DbPath,
 		Auth:                       authStore,
 		ReverseRelations:           reverseRelations,
 		CollectionReverseRelations: overrides,
 		MaxConcurrentRequests:      cfg.MaxConcurrentRequests,
+		LoadMemoryLimitMB:          cfg.LoadMemoryLimitMB,
+		MaxRequestBytes:            int64(cfg.MaxRequestBytesMB) * 1024 * 1024,
 	}
 
-	c := api.CollectionInfo{}
-
-	requests := []webservice.RequestInterface{
-		c.NewDummyRequest(),
-		c.NewQueryRequest(),
-		c.NewExpandRequest(nil, ""),
-		c.NewSetRequest("", "", nil),
-		c.NewAddRequest("", "", ""),
-		c.NewDeleteRequest("", "", ""),
-		c.NewUpdateRequest(api.Update{}),
-		api.NewBatchRequest(&api.Batch{}),
-		c.NewAssociatedRequest(""),
-		c.NewSyncRequest(),
-		c.NewDumpRequest(),
-		c.NewDropRequest(),
-		c.NewCoTagsRequest(nil, nil, ""),
-		c.NewCheckIndexRequest(false, false),
-		api.NewVersionRequest(),
-	}
-
-	ws := webservice.NewWebservice(config, requests)
+	ws := webservice.NewWebservice(config)
+	api.RegisterAll(ws)
 
 	routes := func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	}
 
-	ws.ListenAndServe(routes)
+	if err := ws.ListenAndServe(routes); err != nil {
+		slog.Error("triplestore stopped", "err", err)
+		os.Exit(1)
+	}
 }

@@ -4,14 +4,6 @@ import (
 	ws "github.com/uidbz/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Update to 'NewName'
-3. Implement Reply and define fields in structs
-4. Update to request slice and pass to NewWebservice on server
-*/
-
 const (
 	IdUpdate = "Update"
 )
@@ -37,10 +29,13 @@ type UpdateReply struct {
 	OrigNewValue2 string
 }
 
-func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func updateHandler(env *ws.Environment, request *UpdateRequest) (*UpdateReply, error) {
 	reply := UpdateReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
 
 	if request.AddOnFailure {
 		reply.Message, reply.Success = col.UpdateAdd(request.Key, request.Value1, request.Value2, request.NewValue2)
@@ -49,15 +44,11 @@ func (request *UpdateRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	}
 
 	reply.OrigKey = request.Key
-	reply.OrigValue1 = request.Value2
+	reply.OrigValue1 = request.Value1
 	reply.OrigValue2 = request.Value2
 	reply.OrigNewValue2 = request.NewValue2
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *UpdateRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewUpdateRequest(Update{})
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewUpdateRequest(update Update) *UpdateRequest {
@@ -65,7 +56,6 @@ func (c CollectionInfo) NewUpdateRequest(update Update) *UpdateRequest {
 	request.Id = IdUpdate
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &UpdateReply{}
 	request.Key = update.Key
 	request.Value1 = update.Value1
 	request.Value2 = update.Value2

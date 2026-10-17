@@ -95,7 +95,11 @@ func TestPlayStatsApply(t *testing.T) {
 	if s.PlayCount != 2 || s.SkipCount != 1 || !s.FirstPlayed.Equal(t1) || !s.LastPlayed.Equal(t2) || !s.LastSkipped.Equal(t2) {
 		t.Fatalf("%+v", s)
 	}
-	back := StatsFromRow(Row{Attributes: s.relations()})
+	attrs := make(map[string][]string)
+	for rel, vals := range s.relations() {
+		attrs[string(rel)] = vals
+	}
+	back := StatsFromRow(Row{Attributes: attrs})
 	if back != s {
 		t.Fatalf("relations round trip: %+v vs %+v", back, s)
 	}
@@ -212,9 +216,9 @@ func TestIndexCollectionMultiDisc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for rel, want := range map[string]string{
+	for rel, want := range map[Relation]string{
 		RelTrackCount: "3", RelDiscCount: "2", RelDuration: "300.000", RelGenre: "Jazz",
-		RelAlbumArtist: "Some Artist", "album": "Double", "year": "1999", RelMemberCount: "4",
+		RelAlbumArtist: "Some Artist", RelAlbum: "Double", RelYear: "1999", RelMemberCount: "4",
 	} {
 		if got := RowFirst(row, rel); got != want {
 			t.Errorf("album %s = %q, want %q", rel, got, want)
@@ -289,7 +293,7 @@ func TestRecordPlaysIdempotentAndStats(t *testing.T) {
 	}
 
 	// Corrupt the counter, then rebuild it from the events.
-	if err := tc.Set(track, RelPlayCount, []string{"99"}); err != nil {
+	if err := tc.Set(track, string(RelPlayCount), []string{"99"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tc.RecomputeStats(); err != nil {
@@ -341,8 +345,8 @@ func TestPlaylistLifecycleAndMigration(t *testing.T) {
 	bt.Add(legacy, "name", "Old")
 	bt.Add(legacy, "tag", PlaylistTag)
 	bt.Set(legacy, "tag-date", []string{time.Now().Format(time.DateTime)})
-	bt.Add(legacy, RelPlaylistTrack, PlaylistEntry(0, c))
-	bt.Add(legacy, RelPlaylistTrack, PlaylistEntry(1, a))
+	bt.Add(legacy, string(RelPlaylistTrack), PlaylistEntry(0, c))
+	bt.Add(legacy, string(RelPlaylistTrack), PlaylistEntry(1, a))
 	bt.Add(c, "parent", legacy)
 	bt.Add(a, "parent", legacy)
 	if _, err := tc.Batch(bt); err != nil {

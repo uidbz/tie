@@ -28,20 +28,19 @@ type CheckIndexReply struct {
 	Report tiedb.IndexReport
 }
 
-func (request *CheckIndexRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func checkIndexHandler(env *ws.Environment, request *CheckIndexRequest) (*CheckIndexReply, error) {
 	reply := CheckIndexReply{}
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
 	reply.Report = col.CheckIndex(tiedb.IndexCheckOptions{
 		Deep:        request.Deep,
 		Repair:      request.Repair,
 		SampleLimit: request.SampleLimit,
 	})
 	reply.Success = true
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *CheckIndexRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewCheckIndexRequest(false, false)
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewCheckIndexRequest(deep, repair bool) *CheckIndexRequest {
@@ -51,7 +50,6 @@ func (c CollectionInfo) NewCheckIndexRequest(deep, repair bool) *CheckIndexReque
 	request.CollectionId = c.CollectionId
 	request.Deep = deep
 	request.Repair = repair
-	request.ReplyStructPtr = &CheckIndexReply{}
 
 	return request
 }

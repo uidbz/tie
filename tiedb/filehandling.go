@@ -13,13 +13,6 @@ import (
 	"time"
 )
 
-// Debug and Info are thin wrappers kept for existing call sites; they forward
-// to the process slog logger (which tie-triplestore/tie-filehost point at a log file
-// plus pretty stderr). Diagnostics stay off stdout — stdout is data.
-func Debug(value string) { slog.Debug(value) }
-
-func Info(value string) { slog.Info(value) }
-
 func (ic *Collection) bufToEntry(buf [ENTRY_SIZE]byte) (level int, entryID uint64, uv *UniqueValue) {
 	var last int = SIZE_DATATYPE
 
@@ -99,11 +92,7 @@ func (ic *Collection) loadEntries(rawDataToLoad chan RawDataEntry, wg *sync.Wait
 		switch int(binary.LittleEndian.Uint16(entry.Data[:SIZE_DATATYPE])) {
 		case TYPE_ENTRY:
 			level, entryID, uv := ic.bufToEntry(entry.Data)
-			ic.totalEntriesMutex.Lock()
-			if entryID > ic.totalEntries {
-				ic.totalEntries = entryID
-			}
-			ic.totalEntriesMutex.Unlock()
+			ic.bumpTotalEntries(entryID)
 			ic.insertEntry(level, entryID, uv)
 
 		case TYPE_HASH:
@@ -147,7 +136,7 @@ func (t *Collection) loadDB(filename string) error {
 	}
 	defer db.Close()
 
-	Info(dbname + "Loading DB...")
+	slog.Info(dbname + " loading db...")
 
 	// A bulk load builds a large, almost-entirely-retained heap, so the default
 	// GC pace spends cycles re-scanning a live set that never shrinks. Relax the
@@ -155,6 +144,12 @@ func (t *Collection) loadDB(filename string) error {
 	// fewer collections) and restore it afterwards.
 	prevGC := debug.SetGCPercent(200)
 	defer debug.SetGCPercent(prevGC)
+	// A soft heap ceiling bounds the peak the relaxed pacer is allowed to
+	// reach; without it, GOGC=200 on a small machine can OOM a load.
+	if t.loadMemoryLimit > 0 {
+		prevLimit := debug.SetMemoryLimit(t.loadMemoryLimit)
+		defer debug.SetMemoryLimit(prevLimit)
+	}
 
 	// Two passes over the file: entries first, then associations. Associations
 	// resolve their relation string against the entries trie (shouldBuildReverse),
@@ -169,7 +164,7 @@ func (t *Collection) loadDB(filename string) error {
 		return err
 	}
 
-	Info(dbname + "Loading DB: Done!")
+	slog.Info(dbname + " loading db: done")
 	return nil
 }
 
@@ -212,16 +207,26 @@ func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.
 	return nil
 }
 
+// dbFile is the record-file handle the writer goroutine uses. It is an
+// interface so tests can inject I/O faults (ENOSPC, short writes, a dead
+// device) without mounting a tiny filesystem.
+type dbFile interface {
+	io.WriterAt
+	io.ReaderAt
+	Sync() error
+	Close() error
+}
+
 // openDB opens (creating if needed) the DB file handle. It does NOT set db_size:
 // db_size is the append cursor owned by allocSlot and initialized once by
 // initDBSize. A lazy reopen must not reset it, or an allocSlot bump made while
 // the file was idle-closed would be clobbered and hand out a colliding offset.
-func (t *Collection) openDB() *os.File {
+func (t *Collection) openDB() (dbFile, error) {
 	f, err := os.OpenFile(t.dBFullPath, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("opening collection file %s: %w", t.dBFullPath, err)
 	}
-	return f
+	return f, nil
 }
 
 // initDBSize establishes db_size (the end-of-file append cursor) exactly once,
@@ -229,51 +234,69 @@ func (t *Collection) openDB() *os.File {
 // crash mid-write can leave a trailing partial record; that tail was never
 // acknowledged, so trim it back to a record boundary rather than refusing to
 // open the whole DB.
-func (t *Collection) initDBSize() {
+func (t *Collection) initDBSize() error {
 	fi, err := os.Stat(t.dBFullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			t.db_size = 0
-			return
+			return nil
 		}
-		panic(err)
+		return fmt.Errorf("stat %s: %w", t.dBFullPath, err)
 	}
 	t.db_size = fi.Size()
 	rem := t.db_size % ENTRY_SIZE
 	if rem == 0 {
-		return
+		return nil
 	}
 	trimmed := t.db_size - rem
 	slog.Warn("partial trailing record; truncating",
 		"path", t.dBFullPath, "partialBytes", rem, "trimTo", trimmed)
 	f, err := os.OpenFile(t.dBFullPath, os.O_RDWR, 0600)
 	if err != nil {
-		panic("tiedb: failed to open for truncation: " + err.Error())
+		return fmt.Errorf("opening %s for truncation: %w", t.dBFullPath, err)
 	}
 	if err := f.Truncate(trimmed); err != nil {
-		panic("tiedb: failed to truncate partial record: " + err.Error())
+		f.Close()
+		return fmt.Errorf("truncating partial record in %s: %w", t.dBFullPath, err)
 	}
 	if err := f.Close(); err != nil {
-		panic("tiedb: failed to close after truncation: " + err.Error())
+		return fmt.Errorf("closing %s after truncation: %w", t.dBFullPath, err)
 	}
 	t.db_size = trimmed
+	return nil
 }
 
 // applyFileMod persists one queued modification to the open db handle. It runs
-// only on the writer goroutine, which owns the fd, so it takes no lock. A
-// FILE_DELETE with Position -1 (the tree placeholder for a triple whose FILE_ADD
-// has not yet been processed) has no on-disk record to tombstone, so it is
-// skipped. Any I/O error or short write is fatal — the DB is presumed corrupt.
-func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
+// only on the writer goroutine, which owns the fd, so it takes no lock.
+//
+// An I/O error (ENOSPC, a dying device) is RETURNED, not panicked: the writer
+// records it as the collection's sticky error, keeps serving reads, and every
+// later write reports it. Panicking here killed the whole triplestore — every
+// other collection and every in-flight request — because one collection's disk
+// was full, and lost the acknowledged writes still queued. Only programmer
+// errors (an impossible mode or entry type) still panic.
+func (ic *Collection) applyFileMod(db dbFile, file_mod FileMod) error {
 	var n int
 	var err error
 
 	switch file_mod.Mode {
-	case FILE_DELETE:
-		pos := file_mod.Position
-		if pos == -1 {
-			return
+	case FILE_BARRIER:
+		// The queue is FIFO, so everything queued before the barrier has
+		// already been applied: this is the durability point. fsync, then
+		// release the caller. No record is written, so return before the
+		// short-write check.
+		if file_mod.Done != nil {
+			if err := db.Sync(); err != nil {
+				slog.Error("barrier DB sync error", "err", err)
+			}
+			close(file_mod.Done)
 		}
+		return nil
+
+	case FILE_DELETE:
+		// Every association in the index carries a real slot offset (slots are
+		// reserved before the index insert), so there is no placeholder case.
+		pos := file_mod.Position
 		b := make([]byte, ENTRY_SIZE)
 		binary.LittleEndian.PutUint16(b, TYPE_DELETE)
 		n, err = db.WriteAt(b, pos)
@@ -294,7 +317,6 @@ func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
 		switch file_mod.EntryType {
 		case TYPE_ASSOCIATION:
 			n, err = db.WriteAt(file_mod.Triple.toBytes(), pos)
-			ic.finishedAdding.Done()
 		case TYPE_ENTRY:
 			n, err = db.WriteAt(EntryToBytes(file_mod.Level, file_mod.EntryID, file_mod.UniqueValue), pos)
 		case TYPE_HASH:
@@ -308,17 +330,18 @@ func (ic *Collection) applyFileMod(db *os.File, file_mod FileMod) {
 	}
 
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("writing record at %d: %w", file_mod.Position, err)
 	}
 	if n != ENTRY_SIZE {
-		panic(fmt.Sprintf("Assertion: wrote %d bytes, expected %d. DB probably corrupt.", n, ENTRY_SIZE))
+		return fmt.Errorf("short write at %d: wrote %d bytes, expected %d", file_mod.Position, n, ENTRY_SIZE)
 	}
+	return nil
 }
 
 // drainWriteQueue applies every write currently queued, without blocking. The
 // writer goroutine calls it before serving a read (read-your-writes) and on
 // shutdown so no acknowledged Add is lost.
-func (ic *Collection) drainWriteQueue(db *os.File) {
+func (ic *Collection) drainWriteQueue(db dbFile) {
 	for {
 		select {
 		case file_mod := <-ic.dBWriteQueue:
@@ -330,66 +353,70 @@ func (ic *Collection) drainWriteQueue(db *os.File) {
 }
 
 // readSlot reads and decodes the record at pos, guaranteeing read-your-writes.
-// Collection.Add reserves a slot with allocSlot, inserts the association into
-// the in-memory index at that offset (making it visible to queries), and only
-// then queues the FILE_ADD. A query can therefore ask to read a slot the file
-// does not yet cover. readSlot first drains all queued writes so every reserved
-// slot is on disk before the read. If the slot is within the allocated range
-// (pos < db_size) but the record is still absent — the producer inserted into
-// the index and has not yet pushed the write onto the channel — it briefly
-// retries, draining as the write arrives. Dropping the triple instead (the old
-// behavior) silently corrupted query results, which led reconciliation to
-// delete live directories. A read genuinely outside the allocated range is a
-// hard failure.
-func (ic *Collection) readSlot(db *os.File, pos int64) (Triple, bool) {
+// Collection.Add reserves a slot with allocSlot, queues the FILE_ADD, and only
+// then inserts the association into the in-memory index (making it visible to
+// queries). A reader can therefore only ask for a slot whose write is already
+// in the queue; draining the queue first puts the bytes on disk before the
+// read. The old index-before-enqueue order left a window where a reclaimed
+// slot read back its old tombstone, so readSlot used to spin (up to a second)
+// waiting for the write to arrive; with the queue-first order that window is
+// gone and the spin is deleted.
+func (ic *Collection) readSlot(db dbFile, pos int64) (Triple, bool) {
 	b := make([]byte, ENTRY_SIZE)
-	for attempt := 0; ; attempt++ {
-		ic.drainWriteQueue(db)
-		n, err := db.ReadAt(b, pos)
-		if err == nil {
-			a, decodeErr := ic.bufToAssociation([ENTRY_SIZE]byte(b))
-			if decodeErr != nil {
-				slog.Error("decode error", "position", pos, "err", decodeErr)
-				return Triple{}, false
-			}
-			return a, true
-		}
+	ic.drainWriteQueue(db)
+	n, err := db.ReadAt(b, pos)
+	if err != nil {
 		ic.freespaceMutex.Lock()
 		allocated := pos >= 0 && pos < ic.db_size
 		ic.freespaceMutex.Unlock()
-		if !allocated {
-			slog.Error("read error", "err", err, "bytesRead", n, "expected", ENTRY_SIZE, "position", pos)
-			return Triple{}, false
-		}
-		// Slot is allocated but its FILE_ADD is still in flight (inserted into
-		// the index, not yet queued). Yield and retry, draining as it arrives.
-		if attempt >= 100000 {
-			slog.Error("read error: allocated slot never materialized", "position", pos, "db_size", ic.db_size)
-			return Triple{}, false
-		}
-		time.Sleep(10 * time.Microsecond)
+		slog.Error("read error", "err", err, "bytesRead", n, "expected", ENTRY_SIZE, "position", pos, "allocated", allocated)
+		return Triple{}, false
 	}
+	a, decodeErr := ic.bufToAssociation([ENTRY_SIZE]byte(b))
+	if decodeErr != nil {
+		slog.Error("decode error", "position", pos, "err", decodeErr)
+		return Triple{}, false
+	}
+	return a, true
 }
-
 func (ic *Collection) dBWriter() {
-	ic.dBWriteQueue = make(chan FileMod, 100000)
-	ic.dBReadQueue = make(chan ReadRequest, 100000)
+	// Queues absorb write bursts; when full, Add blocks — back-pressure is
+	// the point. 100 000 slots per collection (~a few MB of channel buffer)
+	// let a caller loop mint unbounded pending work; 4096 is plenty for
+	// burst smoothing and bounds memory per collection.
+	ic.dBWriteQueue = make(chan FileMod, 4096)
+	ic.dBReadQueue = make(chan ReadRequest, 4096)
 	ic.dBCloseWriter = make(chan bool, 1)
 
 	// db_size is the append cursor consumed by allocSlot. Set it once here,
 	// before any Add can allocate.
-	ic.initDBSize()
+	ic.writerDone = make(chan struct{})
+
+	if err := ic.initDBSize(); err != nil {
+		ic.setIOErr(err)
+		slog.Error("collection unavailable: cannot size the record file", "path", ic.dBFullPath, "err", err)
+		close(ic.writerDone)
+		return
+	}
 
 	// The writer goroutine owns the fd for its whole lifetime: it opens once
 	// here and closes only on shutdown. Durability comes from a periodic Sync on
 	// syncInterval rather than from closing the handle when idle (holding an fd
 	// open is free; the old idle-close existed only to force that Sync).
-	db := ic.openDB()
+	db, err := ic.openDB()
+	if err != nil {
+		ic.setIOErr(err)
+		slog.Error("collection unavailable: cannot open the record file", "path", ic.dBFullPath, "err", err)
+		close(ic.writerDone)
+		return
+	}
+	ic.setFile(db)
 	syncInterval := time.Second * 10
 
 	// finished lets closeDB block until the fd is synced and closed.
 	ic.finished.Add(1)
 	go func() {
+		defer close(ic.writerDone)
 		defer ic.finished.Done()
 		syncTicker := time.NewTicker(syncInterval)
 		defer syncTicker.Stop()
@@ -397,7 +424,7 @@ func (ic *Collection) dBWriter() {
 		for {
 			select {
 			case req := <-ic.dBReadQueue:
-				a, ok := ic.readSlot(db, req.Position)
+				a, ok := ic.readSlot(ic.getFile(), req.Position)
 				if ok {
 					req.ReplyChan <- a
 				} else {
@@ -405,21 +432,26 @@ func (ic *Collection) dBWriter() {
 				}
 
 			case file_mod := <-ic.dBWriteQueue:
-				ic.applyFileMod(db, file_mod)
+				if werr := ic.applyFileMod(ic.getFile(), file_mod); werr != nil {
+					// Sticky: reads keep working, every later write reports it.
+					ic.setIOErr(werr)
+					slog.Error("collection write failed; making it read-only",
+						"path", ic.dBFullPath, "err", werr)
+				}
 
 			case <-syncTicker.C:
-				if err := db.Sync(); err != nil {
+				if err := ic.getFile().Sync(); err != nil {
 					slog.Error("periodic DB sync error", "err", err)
 				}
 
 			case <-ic.dBCloseWriter:
 				// Drain any writes already queued so no acknowledged Add is lost,
 				// then sync and close. Reads are best-effort and can be dropped.
-				ic.drainWriteQueue(db)
-				if err := db.Sync(); err != nil {
+				ic.drainWriteQueue(ic.getFile())
+				if err := ic.getFile().Sync(); err != nil {
 					slog.Error("DB sync error on close", "err", err)
 				}
-				if err := db.Close(); err != nil {
+				if err := ic.getFile().Close(); err != nil {
 					slog.Error("DB close error on close", "err", err)
 				}
 				return

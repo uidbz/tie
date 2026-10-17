@@ -5,9 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"net/http"
 	"syscall"
 	"time"
 
@@ -16,15 +14,16 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/uidbz/tie/client"
 	"github.com/uidbz/tie/io/archivelib"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/io/tiefs"
 	"github.com/uidbz/tie/metadata"
 )
 
 // TieFuse is the go-fuse adapter for a content-addressed tree. The shared
-// read cache, inode numbering, and write staging live in tiesfs.Store; this
+// read cache, inode numbering, and write staging live in tiefs.Store; this
 // layer only translates between go-fuse node operations and those primitives.
 type TieFuse struct {
-	store  *tiesfs.Store
+	store  *tiefs.Store
 	config config
 }
 
@@ -39,20 +38,20 @@ func (state *TieFuse) Close() error {
 // over multi-GB media is wasted work; turn it on when the filehost is untrusted.
 func NewTieFuse(host client.FileHost, cacheSizeGB int, verify bool) *TieFuse {
 	return &TieFuse{
-		store:  tiesfs.NewStore(host, cacheSizeGB, verify),
-		config: config{filehost: host.URL, client: client.HTTPClientFor(host), verify: verify},
+		store:  tiefs.NewStore(host, cacheSizeGB, verify),
+		config: config{fh: fhclient.New(host.URL, client.HTTPClientFor(host)), verify: verify},
 	}
 }
 
 type config struct {
-	filehost string
-	client   *http.Client
-	verify   bool
+	// fh is the filehost client shared by every content read of the mount.
+	fh     *fhclient.Client
+	verify bool
 }
 
 func (state *TieFuse) inodeID(hash string) uint64 { return state.store.InodeID(hash) }
 
-func (state *TieFuse) cache() *tiesfs.Cache { return state.store.Cache() }
+func (state *TieFuse) cache() *tiefs.Cache { return state.store.Cache() }
 
 // Ensure we are implementing the NodeReaddirer interface
 var _ = (fs.NodeReaddirer)((*node)(nil))
@@ -170,7 +169,7 @@ func (f *node) Open(ctx context.Context, openFlags uint32) (fh fs.FileHandle, fu
 // bytesFileHandle is a file handle that serves one blob's bytes from the cache.
 type bytesFileHandle struct {
 	hash  string
-	cache *tiesfs.Cache
+	cache *tiefs.Cache
 }
 
 // Read serves a clamped window of the blob: FUSE reads past the end return the
@@ -182,6 +181,11 @@ func (fh *bytesFileHandle) Read(ctx context.Context, dest []byte, off int64) (fu
 	if err != nil {
 		return nil, syscall.EIO
 	}
+	// The handle holds a reference for the duration of the read: eviction can
+	// no longer close the fd under us (that was the EIO). Re-resolving per
+	// read also keeps the entry hot in the LRU instead of pinning a multi-GB
+	// blob for the whole lifetime of an open file.
+	defer e.Close()
 	size := e.Size()
 	if off < 0 || off > size {
 		return nil, syscall.EINVAL
@@ -227,7 +231,7 @@ func (n *node) AddChild(child *node) {
 // keyed by its (archive hash, member name) pair.
 func (n *node) inodeKey() string {
 	if n.ArchiveMember != "" {
-		return tiesfs.MemberKey(n.ArchiveHash, n.ArchiveMember)
+		return tiefs.MemberKey(n.ArchiveHash, n.ArchiveMember)
 	}
 	return n.Hash
 }
@@ -235,20 +239,16 @@ func (n *node) inodeKey() string {
 const dirHeader = metadata.DirHeader
 
 func (state *TieFuse) listContent(sourceHash string) (*node, error) {
-	if !metadata.IsHexHash(sourceHash) {
-		return nil, fmt.Errorf("fuselib: invalid content hash %q", sourceHash)
-	}
-	resp, err := state.config.client.Get(state.config.filehost + "/" + sourceHash)
+	// fhclient validates the content address and the status, so a crafted
+	// hash never reaches a URL and a non-200 is an error rather than an empty
+	// directory.
+	rc, err := state.config.fh.Get(sourceHash)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer rc.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("bad status: %s", resp.Status)
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(rc)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +308,7 @@ func (state *TieFuse) listContent(sourceHash string) (*node, error) {
 		// Flatten nested member paths to disambiguated base names — a dirent name
 		// cannot contain '/'. The full member name is kept as ArchiveMember for
 		// extraction. Shared with the --db mount's archiveDir.
-		for _, v := range tiesfs.ArchiveMemberViews(members) {
+		for _, v := range tiefs.ArchiveMemberViews(members) {
 			child := &node{
 				Name:          v.Display(),
 				Size:          int(v.Member().Size),

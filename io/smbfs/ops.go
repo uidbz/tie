@@ -74,7 +74,7 @@ func (s *Share) WriteFile(p string, data []byte, perm os.FileMode) error {
 			})
 			return nil
 		}
-		return n.binding(s.tree).Store(tiesfs.ParseLines(data))
+		return n.binding(s.tree).Store(tiefs.ParseLines(data))
 	}
 
 	existing := s.lookupFile(parentSlash, name)
@@ -110,7 +110,7 @@ func (s *Share) lookupFile(parentSlash, name string) client.File {
 	if err != nil {
 		return client.File{}
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		if f.Filename == name {
 			return f
 		}
@@ -145,25 +145,25 @@ func (s *Share) OpenFile(p string) (gofs.File, error) {
 	case kMember:
 		return &lazyFile{sh: s, hash: n.hash, member: n.member, size: n.memberSize}, nil
 	case kStatic:
-		return &roFile{data: []byte(tiesfs.ReadmeText)}, nil
+		return &roFile{data: []byte(tiefs.ReadmeText)}, nil
 	case kTagList:
 		tags, err := s.tree.TagList()
 		if err != nil {
 			return nil, err
 		}
-		return &roFile{data: tiesfs.RenderMeta(tags)}, nil
+		return &roFile{data: tiefs.RenderMeta(tags)}, nil
 	case kTypeList:
 		types, err := s.tree.TypeList()
 		if err != nil {
 			return nil, err
 		}
-		return &roFile{data: tiesfs.RenderMeta(types)}, nil
+		return &roFile{data: tiefs.RenderMeta(types)}, nil
 	case kMetaFile:
 		vals, err := n.binding(s.tree).Load()
 		if err != nil {
 			return nil, err
 		}
-		return &metaHandle{sh: s, path: canon, bind: n.binding(s.tree), buf: tiesfs.RenderMeta(vals)}, nil
+		return &metaHandle{sh: s, path: canon, bind: n.binding(s.tree), buf: tiefs.RenderMeta(vals)}, nil
 	}
 	return nil, fmt.Errorf("smbfs: %q is not a regular file: %w", p, fs.ErrNotExist)
 }
@@ -177,7 +177,7 @@ type lazyFile struct {
 	size   int64
 
 	mu sync.Mutex
-	b  *tiesfs.Blob
+	b  *tiefs.Blob
 }
 
 var _ = (gofs.File)((*lazyFile)(nil))
@@ -186,7 +186,7 @@ func (f *lazyFile) ReadAt(p []byte, off int64) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.b == nil {
-		var b *tiesfs.Blob
+		var b *tiefs.Blob
 		var err error
 		if f.member == "" {
 			b, err = f.sh.tree.Cache().Blob(f.hash)
@@ -202,7 +202,16 @@ func (f *lazyFile) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (f *lazyFile) Size() int64 { return f.size }
-func (f *lazyFile) Close() error { return nil }
+
+func (f *lazyFile) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.b != nil {
+		f.b.Close() // drop the reference taken on first read
+		f.b = nil
+	}
+	return nil
+}
 
 // MkDir creates a subdirectory of the /files path tree. The /query and /tags
 // views and the fixed top level are refused with fs.ErrPermission/fs.ErrExist.
@@ -237,7 +246,7 @@ func (s *Share) DeleteFile(p string) error {
 }
 
 // DeleteDir removes an empty subdirectory of the /files path tree. A
-// non-empty directory reports tiesfs.ErrNotEmpty, wrapped in fs.ErrExist:
+// non-empty directory reports tiefs.ErrNotEmpty, wrapped in fs.ErrExist:
 // the smb server has no ENOTEMPTY status and maps ErrExist onto
 // OBJECT_NAME_COLLISION, which is the closest honest answer.
 func (s *Share) DeleteDir(p string) error {
@@ -251,14 +260,14 @@ func (s *Share) DeleteDir(p string) error {
 	parentSlash := "/" + strings.Join(segs[1:len(segs)-1], "/")
 	name := segs[len(segs)-1]
 	err := s.tree.DeleteDir(parentSlash, name)
-	if errors.Is(err, tiesfs.ErrNotEmpty) {
+	if errors.Is(err, tiefs.ErrNotEmpty) {
 		return fmt.Errorf("smbfs: %q not empty: %w", p, fs.ErrExist)
 	}
 	return err
 }
 
 // Rename moves a child within the /files path tree. The smb server ignores
-// the client's ReplaceIfExists flag, so the move always replaces (the tiesfs
+// the client's ReplaceIfExists flag, so the move always replaces (the tiefs
 // layer still refuses to clobber a directory). A staged-but-uncommitted
 // create (pending) is moved by re-registering it under the new path: the
 // bytes commit to the new name when the handle closes.

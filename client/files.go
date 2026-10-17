@@ -2,24 +2,30 @@ package client
 
 import (
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/uidbz/tie/io/getlib"
 	"github.com/uidbz/tie/io/putlib"
 )
 
-// ResolveHost looks up a filehost by name. An empty name selects the first
-// entry in DefaultFileHosts.
+// ResolveHost looks up one filehost by name. An empty name selects the first
+// host of the client's scoped collection — the same list ResolveHosts computes,
+// so the two cannot disagree about what "the default host" means (§8 S11). It
+// is the single path from a scope to a FileHost: upload, verify, repair and the
+// CLI resolve the same way, so a batch of triples and the blob they describe
+// cannot end up on different hosts.
 func (tc *TieClient) ResolveHost(name string) (FileHost, error) {
-	if name == "" {
-		if len(tc.active.FileHosts) == 0 {
-			return FileHost{}, errors.New("no filehost configured: set the collection's FileHosts (or DefaultFileHosts) or pass a host name")
-		}
-		name = tc.active.FileHosts[0]
+	hosts := tc.ResolveHosts(nil)
+	if name != "" {
+		hosts = []string{name}
 	}
-	host, ok := tc.Config.FileHosts[name]
+	if len(hosts) == 0 {
+		return FileHost{}, errors.New("no filehost configured: set the collection's FileHosts (or DefaultFileHosts) or pass a host name")
+	}
+	host, ok := tc.Config.FileHosts[hosts[0]]
 	if !ok {
-		return FileHost{}, errors.New("unknown filehost '" + name + "'")
+		return FileHost{}, fmt.Errorf("unknown filehost %q (no [FileHosts.%s] entry in config)", hosts[0], hosts[0])
 	}
 	return host, nil
 }

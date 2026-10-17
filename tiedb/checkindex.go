@@ -1,5 +1,7 @@
 package tiedb
 
+import "strconv"
+
 // Forward/reverse index consistency check.
 //
 // The forward index (subject -> {relation, value2} -> position) is the source
@@ -154,15 +156,30 @@ func (ic *Collection) CheckIndex(opts IndexCheckOptions) IndexReport {
 	rep := IndexReport{Deep: opts.Deep}
 	var fixes []indexFix
 
+	// renderID resolves an entry id for a sample, or renders it as "#<id>"
+	// when the id is dangling (levelOf failed, so the level defaults to 0
+	// and there is no entry to resolve) — the case CheckIndex exists to
+	// report must not crash the report.
+	renderID := func(level int, id uint64) string {
+		if level == HASH_LEVEL {
+			if raw, found := ic.hashEntries.Get(id); found {
+				return ic.blobPolicy.Decode(raw[:])
+			}
+		} else if ic.getUniqueValue(level, id) != nil {
+			return ic.getValueString(level, id)
+		}
+		return "#" + strconv.FormatUint(id, 10)
+	}
+
 	sample := func(kind string, level int, subject uint64, v1Level int, v1 uint64, v2Level int, v2 uint64, pos int64) {
 		if len(rep.Samples) >= limit {
 			return
 		}
 		rep.Samples = append(rep.Samples, IndexProblem{
 			Kind:     kind,
-			Key:      ic.getValueString(level, subject),
-			Value1:   ic.getValueString(v1Level, v1),
-			Value2:   ic.getValueString(v2Level, v2),
+			Key:      renderID(level, subject),
+			Value1:   renderID(v1Level, v1),
+			Value2:   renderID(v2Level, v2),
 			Position: pos,
 		})
 	}
@@ -295,7 +312,6 @@ func (ic *Collection) rewriteAssociation(f indexFix) {
 		}
 	}
 	if ic.writeToDisk {
-		ic.finishedAdding.Add(1)
-		ic.dBWriteQueue <- FileMod{EntryType: TYPE_ASSOCIATION, Level: f.level, Mode: FILE_ADD, Position: pos, Triple: &t}
+		ic.queueWrite(FileMod{EntryType: TYPE_ASSOCIATION, Level: f.level, Mode: FILE_ADD, Position: pos, Triple: &t})
 	}
 }

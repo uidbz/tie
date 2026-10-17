@@ -14,14 +14,14 @@ import (
 // ListFavorites returns the registered favorite tags, sorted. A collection with
 // no favorites yields an empty slice, not an error.
 func (tie *TieClient) ListFavorites() ([]string, error) {
-	row, err := tie.Get(str(TieTags))
+	row, err := tie.Get(string(RelTags))
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	favorites := RowValues(row, str(TieFavorite))
+	favorites := RowValues(row, RelFavorite)
 	sort.Strings(favorites)
 	return favorites, nil
 }
@@ -34,10 +34,10 @@ func (tie *TieClient) RegisterFavorite(tag string) error {
 	if tag == "" {
 		return errors.New("RegisterFavorite: tag must not be empty")
 	}
-	if _, err := tie.Add(str(TieTags), str(TieFavorite), tag); err != nil {
+	if _, err := tie.Add(string(RelTags), string(RelFavorite), tag); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }
 
 // UnregisterFavorite removes tag from the ("tags","favorite",<tag>) registry.
@@ -48,8 +48,8 @@ func (tie *TieClient) UnregisterFavorite(tag string) error {
 	if tag == "" {
 		return errors.New("UnregisterFavorite: tag must not be empty")
 	}
-	if _, err := tie.Delete(str(TieTags), str(TieFavorite), tag); err != nil {
+	if _, err := tie.Delete(string(RelTags), string(RelFavorite), tag); err != nil {
 		return err
 	}
-	return tie.Sync()
+	return nil
 }

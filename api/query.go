@@ -42,13 +42,21 @@ type QueryReply struct {
 	TotalCount int         `json:"totalCount"`
 }
 
-func (request *QueryRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func queryHandler(env *ws.Environment, request *QueryRequest) (*QueryReply, error) {
 	reply := QueryReply{}
 	if len(request.Terms) > 0 {
 		reply.OrigKey = request.Terms[0]
 	}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		reply.Success = false
+		reply.Message = "Key has no associated values"
+		return &reply, nil
+	}
 
 	q := tiedb.TagQuery{
 		Include:         request.Terms,
@@ -59,11 +67,11 @@ func (request *QueryRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 		Filter:          request.Filter,
 		Sort:            request.Sort,
 	}
-	_, sorted, total, found := col.QueryTags(q)
+	sorted, total, found := col.QueryTags(q)
 	if !found || len(sorted) == 0 {
 		reply.Success = false
 		reply.Message = "Key has no associated values"
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
+		return &reply, nil
 	}
 
 	reply.TotalCount = total
@@ -82,11 +90,7 @@ func (request *QueryRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	}
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *QueryRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewQueryRequest()
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewQueryRequest() *QueryRequest {
@@ -94,7 +98,6 @@ func (c CollectionInfo) NewQueryRequest() *QueryRequest {
 	request.Id = IdQuery
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &QueryReply{}
 
 	return request
 }

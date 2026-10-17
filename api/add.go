@@ -4,14 +4,6 @@ import (
 	ws "github.com/uidbz/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Add to 'NewName'
-3. Implement Reply and define fields in structs
-4. Add to request slice and pass to NewWebservice on server
-*/
-
 const (
 	IdAdd = "Add"
 )
@@ -31,23 +23,26 @@ type AddReply struct {
 	OrigValue2 string
 }
 
-func (request *AddRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func addHandler(env *ws.Environment, request *AddRequest) (*AddReply, error) {
 	reply := AddReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, err := env.Collection(request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
 
-	col.Add(request.Key, request.Value1, request.Value2)
+	if err := col.Add(request.Key, request.Value1, request.Value2); err != nil {
+		reply.Success = false
+		reply.Message = err.Error()
+		return &reply, err
+	}
 
 	reply.Success = true
 	reply.OrigKey = request.Key
-	reply.OrigValue1 = request.Value2
+	reply.OrigValue1 = request.Value1
 	reply.OrigValue2 = request.Value2
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *AddRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewAddRequest("", "", "")
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewAddRequest(key, value1, value2 string) *AddRequest {
@@ -55,7 +50,6 @@ func (c CollectionInfo) NewAddRequest(key, value1, value2 string) *AddRequest {
 	request.Id = IdAdd
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &AddReply{}
 	request.Key = key
 	request.Value1 = value1
 	request.Value2 = value2

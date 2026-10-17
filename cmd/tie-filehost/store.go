@@ -26,70 +26,124 @@ type blobStore struct {
 	path             string
 	defaultRetention time.Duration // 0 = infinite
 	retention        *retentionIndex
+	// dirs records which blobs in this store are tie-directory manifests, so
+	// the reaper's mark phase walks those instead of opening every blob.
+	dirs *dirIndex
 }
 
-var (
-	stores       []*blobStore
-	defaultStore *blobStore
-)
+// claimExisting reports whether a blob is already on disk and, when it is,
+// records the upload's retention — both while holding the retention lock. The
+// reaper's sweep deletes blobs and prunes their entries under that same lock, so
+// an upload that sees the bytes present cannot have them removed before its
+// entry is written.
+//
+// Without this, a dedup re-upload racing a sweep loses data silently: the upload
+// stats the blob (present), the sweep deletes it and drops the entry, the upload
+// then records retention for bytes that are gone and answers 200 — and the
+// triple store keeps triples pointing at nothing. With the claim, either the
+// upload lands first (the entry is re-extended and the sweep's re-check skips the
+// blob) or the sweep lands first (the claim sees no file and the caller stores
+// the body, which it still has).
+//
+// When the blob is absent nothing is recorded and the caller proceeds to write
+// the body.
+func (s *blobStore) claimExisting(hash string, expiresAt int64, token string, now int64) (claimed bool, isDir bool, err error) {
+	path, err := PathFromHash(s.path, hash)
+	if err != nil {
+		return false, false, err
+	}
+	s.retention.mu.Lock()
+	defer s.retention.mu.Unlock()
+	if _, err := os.Stat(path); err != nil {
+		return false, false, nil
+	}
+	if err := s.retention.recordUploadLocked(hash, expiresAt, token, now, true); err != nil {
+		return true, false, err
+	}
+	return true, isDirBlobAt(s, hash), nil
+}
 
-// initStores builds the package-level store set from config. When BlobPaths is
-// empty it synthesizes a single "default" store from the legacy scalar BlobPath
+// server is the filehost: its physical stores and the read cache. Handlers are
+// methods on it, so there is no package-level state to reset between tests and
+// no way for one handler to skip a step another one does — the duplication that
+// let a {hash} route forget validation (§7.1).
+type server struct {
+	stores []*blobStore
+	// def receives uploads that carry no Tie-Store header.
+	def *blobStore
+	// cache is the optional read cache (nil when disabled).
+	cache *blobCache
+}
+
+// initStores builds the store set from config. When BlobPaths is empty it
+// synthesizes a single "default" store from the legacy scalar BlobPath
 // (permanent retention), preserving single-store behavior. The default store —
 // the one named "default", else the first listed — receives uploads that carry
 // no Tie-Store header.
-func initStores(cfg FilehostConfig) error {
+func (s *server) initStores(cfg FilehostConfig) error {
 	specs := cfg.BlobPaths
 	if len(specs) == 0 {
 		specs = []BlobPathConfig{{Name: "default", Path: cfg.BlobPath}}
 	}
-	stores = nil
-	defaultStore = nil
+	s.stores = nil
+	s.def = nil
 	seen := map[string]bool{}
-	for _, s := range specs {
-		if s.Name == "" {
+	for _, sp := range specs {
+		if sp.Name == "" {
 			return fmt.Errorf("blob store with empty Name")
 		}
-		if seen[s.Name] {
-			return fmt.Errorf("duplicate blob store name %q", s.Name)
+		if seen[sp.Name] {
+			return fmt.Errorf("duplicate blob store name %q", sp.Name)
 		}
-		seen[s.Name] = true
-		if s.Path == "" {
-			return fmt.Errorf("blob store %q has empty Path", s.Name)
+		seen[sp.Name] = true
+		if sp.Path == "" {
+			return fmt.Errorf("blob store %q has empty Path", sp.Name)
 		}
 		var d time.Duration
-		if s.DefaultRetention != "" && s.DefaultRetention != "infinite" {
+		if sp.DefaultRetention != "" && sp.DefaultRetention != "infinite" {
 			var err error
-			if d, err = time.ParseDuration(s.DefaultRetention); err != nil {
-				return fmt.Errorf("blob store %q: invalid DefaultRetention: %w", s.Name, err)
+			if d, err = time.ParseDuration(sp.DefaultRetention); err != nil {
+				return fmt.Errorf("blob store %q: invalid DefaultRetention: %w", sp.Name, err)
 			}
 		}
-		path := filepath.Clean(s.Path)
+		path := filepath.Clean(sp.Path)
 		ri, err := loadRetentionIndex(path)
 		if err != nil {
-			return fmt.Errorf("blob store %q: loading retention index: %w", s.Name, err)
+			return fmt.Errorf("blob store %q: loading retention index: %w", sp.Name, err)
 		}
-		st := &blobStore{name: s.Name, path: path, defaultRetention: d, retention: ri}
-		stores = append(stores, st)
-		if s.Name == "default" {
-			defaultStore = st
+		di, present, err := loadDirIndex(path)
+		if err != nil {
+			return fmt.Errorf("blob store %q: loading dir index: %w", sp.Name, err)
+		}
+		if !present {
+			// Store predates the dir index: pay the full scan once here rather
+			// than on every reaper pass.
+			di.bootstrap(path)
+		} else {
+			// Pick up any manifest whose index line was lost to a crash.
+			di.repair(path)
+		}
+		st := &blobStore{name: sp.Name, path: path, defaultRetention: d, retention: ri, dirs: di}
+		s.stores = append(s.stores, st)
+		if sp.Name == "default" {
+			s.def = st
 		}
 	}
-	if defaultStore == nil {
-		defaultStore = stores[0]
+	if s.def == nil {
+		s.def = s.stores[0]
 	}
 	return nil
 }
 
 // storeByName returns the named store, or the default store when name is empty.
 // It returns nil for an unknown non-empty name.
-func storeByName(name string) *blobStore {
+func (s *server) storeByName(name string) *blobStore {
 	if name == "" {
-		return defaultStore
+		return s.def
 	}
-	for _, s := range stores {
-		if s.name == name {
-			return s
+	for _, st := range s.stores {
+		if st.name == name {
+			return st
 		}
 	}
 	return nil
@@ -98,10 +152,14 @@ func storeByName(name string) *blobStore {
 // findBlob returns the store holding hash, searching all stores (first hit
 // wins). Content addresses are globally unique, so at most one store holds a
 // given hash under normal operation.
-func findBlob(hash string) (*blobStore, bool) {
-	for _, s := range stores {
-		if _, err := os.Stat(PathFromHash(s.path, hash)); err == nil {
-			return s, true
+func (s *server) findBlob(hash string) (*blobStore, bool) {
+	for _, st := range s.stores {
+		p, err := PathFromHash(st.path, hash)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return st, true
 		}
 	}
 	return nil, false
@@ -110,7 +168,10 @@ func findBlob(hash string) (*blobStore, bool) {
 // makeDestinationPath returns the on-disk path for hash within st, creating the
 // shard directories.
 func (st *blobStore) makeDestinationPath(hash string) (string, error) {
-	dest := PathFromHash(st.path, hash)
+	dest, err := PathFromHash(st.path, hash)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
 		return "", err
 	}

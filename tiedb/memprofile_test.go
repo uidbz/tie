@@ -145,7 +145,7 @@ func TestAssociationMemoryProfile(t *testing.T) {
 	for i := 0; i < n; i++ {
 		key := keyFn(i)
 		rel := relNames[i%rels]
-		col.Add(key, rel, "value"+strconv.Itoa(i))
+		col.Add(key, string(rel), "value"+strconv.Itoa(i))
 	}
 	col.Sync()
 

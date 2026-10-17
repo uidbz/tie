@@ -1,20 +1,17 @@
 package api
 
 import (
+	"github.com/uidbz/tie/auth"
 	ws "github.com/uidbz/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Dummy to 'NewName'
-3. Implement Reply and define fields in structs
-4. Add to request slice and pass to NewWebservice on server
-*/
+// A request type is its struct plus a handler function. To add one: define the
+// request and reply structs, write the handler, and register it — the id, the
+// access it needs and the handler go on the same line. The client side is
+// webservice.Call[*MyRequest, MyReply](client, req). There is no prototype to
+// keep in sync and no read/write table to remember to update.
 
-const (
-	IdDummy = "Dummy"
-)
+const IdDummy = "Dummy"
 
 type DummyRequest struct {
 	ws.Request
@@ -26,22 +23,23 @@ type DummyReply struct {
 	Hello string
 }
 
-func (request *DummyRequest) Reply(env *ws.Environment) (ws.Reply, error) {
-	reply := DummyReply{}
-	reply.Hello = "Hello, I got your data: " + request.SomeData
-	reply.Success = true
-
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
+func dummyHandler(env *ws.Environment, request *DummyRequest) (*DummyReply, error) {
+	reply := DummyReply{
+		Hello:   "Hello, I got your data: " + request.SomeData,
+		Success: true,
+	}
+	return &reply, nil
 }
 
-func (request *DummyRequest) New() ws.RequestInterface {
-	return NewDummyRequest()
-}
-
+// NewDummyRequest builds a request. The id is what the server routes on; the
+// reply type is named by the caller, not carried by the request.
 func NewDummyRequest() *DummyRequest {
 	request := &DummyRequest{}
 	request.Id = IdDummy
-	request.ReplyStructPtr = &DummyReply{}
-
 	return request
+}
+
+// Register installs this example's request type on a webservice.
+func Register(srv *ws.Webservice) {
+	ws.Register(srv, IdDummy, auth.AccessRead, dummyHandler)
 }

@@ -2,9 +2,8 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
-	"flag"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,12 +13,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/uidbz/conf"
-	"github.com/uidbz/tie/auth"
-	"github.com/uidbz/tie/tielog"
-	"github.com/uidbz/tie/version"
 	"github.com/h2non/filetype"
-	"github.com/minio/highwayhash"
+	"github.com/uidbz/tie/auth"
+	"github.com/uidbz/tie/internal/daemon"
+	"github.com/uidbz/tie/metadata"
+	"github.com/uidbz/tie/version"
 )
 
 // User is a single account entry in the filehost config. Passwords are stored
@@ -32,11 +30,15 @@ type User struct {
 	Role string
 }
 
-var (
-	key       []byte
-	listenOn  string = ":1162"
-	filecache *blobCache
-)
+// configUsers maps the config file's [[Users]] entries onto the shared
+// validating type, where duplicate names and empty passwords are refused.
+func configUsers(us []User) []auth.UserConfig {
+	out := make([]auth.UserConfig, 0, len(us))
+	for _, u := range us {
+		out = append(out, auth.UserConfig{Username: u.Username, Password: u.Password, Role: u.Role})
+	}
+	return out
+}
 
 // FilehostConfig is the full tie-filehost configuration, loaded from TOML.
 // TLS is expected to be terminated by a reverse proxy in front of the filehost
@@ -59,6 +61,10 @@ type FilehostConfig struct {
 	// ReapInterval is how often expired blobs are reaped, as a Go duration
 	// string (e.g. "1h"). Empty or "0" disables the reaper.
 	ReapInterval string
+	// ReapDryRun makes each reap pass report what it would remove — per blob in
+	// the log, and as a summary — without deleting anything. Use it to check a
+	// retention policy against a real store before letting the reaper act.
+	ReapDryRun bool
 	// LogFile is the path structured JSON logs are appended to. Empty logs only
 	// to stderr (pretty).
 	LogFile string
@@ -108,82 +114,37 @@ func parseRetention(r *http.Request, now time.Time) (int64, error) {
 }
 
 const (
-	tieKey       = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
 	shardLevels  = 2    // directory nesting depth; uniform hashes cap dir count at 256^shardLevels
 	dirWidth     = 2    // hex chars per level
 	hashFunction = "hh" // highway hash
 )
 
-func InitKey() {
-	k, err := hex.DecodeString(tieKey)
-	if err != nil {
-		slog.Error("cannot decode hex key", "err", err)
-		return
+// PathFromHash maps a content address to its sharded location under dest. It
+// rejects anything that is not a well-formed hash, so a request-supplied
+// value (ServeMux hands wildcards back unescaped — %2F becomes /) can never
+// traverse out of the store root.
+func PathFromHash(dest, hash string) (string, error) {
+	if !metadata.IsHexHash(hash) {
+		return "", fmt.Errorf("malformed content address %q", hash)
 	}
-	key = k
-}
-
-func AddressOfFile(key []byte, file string) (string, error) { // function to compute address based on content
-	fsocket, err := os.Open(file)
-	if err != nil {
-		return "", err
-	}
-	defer fsocket.Close()
-
-	return AddressOf(key, fsocket)
-}
-
-func AddressOf(key []byte, input io.Reader) (string, error) { // function to compute address based on content
-	hash, err := highwayhash.New(key)
-	if err != nil {
-		return "", err
-	}
-
-	_, err = io.Copy(hash, input)
-
-	dest := hash.Sum(nil)
-
-	return hex.EncodeToString(dest), err
-}
-
-func PathFromHash(dest, hash string) string {
 	for i := 0; i < shardLevels*dirWidth; i += dirWidth {
 		dest = filepath.Join(dest, hash[i:i+dirWidth])
 	}
 
-	return filepath.Join(dest, hash)
+	return filepath.Join(dest, hash), nil
 }
 
-func UploadHandler(w http.ResponseWriter, r *http.Request) {
-	h := r.PathValue("hash")
-	slog.Info("receiving file", "hash", h)
-	var dest string
+func (s *server) uploadHandler(w http.ResponseWriter, r *http.Request, h string) {
 	defer func() {
 		if r.Body != nil {
 			r.Body.Close()
 		}
 	}()
 
-	st := storeByName(r.Header.Get("Tie-Store"))
+	st := s.storeByName(r.Header.Get("Tie-Store"))
 	if st == nil {
 		http.Error(w, "Unknown store: "+r.Header.Get("Tie-Store"), http.StatusBadRequest)
 		return
-	}
-
-	if h == "" {
-		var errTmp error
-		if dest, errTmp = os.MkdirTemp("", "tie-filehost"); errTmp != nil {
-			fmt.Fprint(w, "Error creating temp dir on server:", errTmp)
-			return
-		}
-		dest = filepath.Join(dest, "tempfile")
-	} else {
-		var errMake error
-		if dest, errMake = st.makeDestinationPath(h); errMake != nil {
-			slog.Error("creating destination directory", "hash", h, "err", errMake)
-			http.Error(w, "Error creating destination directory on server: "+errMake.Error(), http.StatusInternalServerError)
-			return
-		}
 	}
 
 	now := time.Now()
@@ -194,97 +155,100 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	token := r.Header.Get("Tie-Owner")
 
-	if _, err := os.Stat(dest); !os.IsNotExist(err) {
-		if err := st.retention.recordUpload(h, expiresAt, token, now.Unix(), true); err != nil {
-			slog.Error("recording retention", "err", err)
-		}
-		fmt.Fprint(w, h)
-		return
-	}
-
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
-	if err != nil {
-		slog.Error("opening destination file", "dest", dest, "err", err)
-		http.Error(w, "Error opening destination file on server: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer out.Close()
-
-	if _, errCopy := io.Copy(out, r.Body); errCopy != nil {
-		slog.Error("copying upload body", "dest", dest, "err", errCopy)
-		if err := os.Remove(dest); err != nil {
-			slog.Error("deleting bad file", "dest", dest, "err", err)
-		}
-		http.Error(w, "Error writing upload body on server: "+errCopy.Error(), http.StatusInternalServerError)
-		return
-	}
-	hashHex, _ := AddressOfFile(key, dest)
-	if h != "" && hashHex != h {
-		slog.Warn("checksum mismatch; deleting file", "expected", h, "calculated", hashHex, "dest", dest)
-		if err := os.Remove(dest); err != nil {
-			slog.Error("deleting bad file", "dest", dest, "err", err)
-		}
-	}
-	blobExisted := false
-	if h == "" {
-		h = hashHex
-		dest2, errMake := st.makeDestinationPath(h)
-		if errMake != nil {
-			slog.Error("creating destination directory", "hash", h, "err", errMake)
-			http.Error(w, "Error creating destination directory on server: "+errMake.Error(), http.StatusInternalServerError)
-			os.RemoveAll(filepath.Dir(dest))
+	// A claimed hash that is already on disk is a dedup re-upload. Claim it under
+	// the retention lock before touching the body, so a reap pass cannot delete
+	// these bytes between the check and the record (see blobStore.claimExisting).
+	if h != "" {
+		claimed, claimedIsDir, errClaim := st.claimExisting(h, expiresAt, token, now.Unix())
+		switch {
+		case errClaim != nil:
+			slog.Error("claiming stored blob", "store", st.name, "err", errClaim)
+			http.Error(w, "Error saving file on server: "+errClaim.Error(), http.StatusInternalServerError)
+			return
+		case claimed:
+			if claimedIsDir {
+				st.dirs.add(h)
+			}
+			slog.Info("dedup upload", "hash", h, "store", st.name)
+			fmt.Fprint(w, h)
 			return
 		}
-		if _, err := os.Stat(dest2); os.IsNotExist(err) {
-			slog.Debug("moving file", "from", dest, "to", dest2)
-			if errMove := os.Rename(dest, dest2); errMove != nil {
-				fmt.Fprint(w, "Error saving file on server:", err)
-				os.RemoveAll(filepath.Dir(dest))
-				return
-			}
-		} else {
-			os.RemoveAll(filepath.Dir(dest)) // file existed previously, delete tmp file
-			blobExisted = true
-		}
-		dest = dest2
 	}
-	if err := st.retention.recordUpload(hashHex, expiresAt, token, now.Unix(), blobExisted); err != nil {
+
+	hashHex, existed, isDir, err := putBlob(st, r.Body, h)
+	switch {
+	case errors.Is(err, errChecksumMismatch):
+		slog.Warn("checksum mismatch; nothing stored", "expected", h)
+		http.Error(w, "Checksum mismatch", http.StatusUnprocessableEntity)
+		return
+	case err != nil:
+		slog.Error("storing blob", "store", st.name, "err", err)
+		http.Error(w, "Error saving file on server: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := st.retention.recordUpload(hashHex, expiresAt, token, now.Unix(), existed); err != nil {
 		slog.Error("recording retention", "err", err)
+	}
+	// Index directory manifests as they land, so the reaper's mark phase walks
+	// this set instead of opening every blob in the store (§5.2 item 9).
+	if isDir {
+		st.dirs.add(hashHex)
 	}
 	slog.Info("stored blob", "hash", hashHex, "store", st.name)
 	fmt.Fprint(w, hashHex)
 }
 
-func DownloadHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		slog.Warn("invalid hash requested", "hash", hash)
-		fmt.Fprint(w, "Invalid hash:", hash)
+func (s *server) downloadHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
+	slog.Info("serving blob", "hash", hash)
+	// The name passed to ServeContent is the blob's file name, which is what
+	// http.ServeFile would have used.
+	s.serveBlob(w, r, hash, hash, st)
+}
+
+// serveBlob answers a GET for hash. With a read cache configured, a cached
+// copy is served through its handle — so an eviction mid-request cannot turn a
+// download into a 404 — and a cold blob is answered straight from the store
+// while the cache fills behind the response. Copying the whole blob before the
+// first byte used to put seconds to minutes between a client's request and the
+// first byte of a multi-GB object (§4.16).
+func (s *server) serveBlob(w http.ResponseWriter, r *http.Request, name, hash string, st *blobStore) {
+	path, err := PathFromHash(st.path, hash)
+	if err != nil { // unreachable: withHash validated the hash
+		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return
 	}
-	slog.Info("serving blob", "hash", hash)
-	st, ok := findBlob(hash)
-	if !ok {
+	info, err := os.Stat(path)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	path := PathFromHash(st.path, hash)
-	if filecache != nil {
-		if cached, err := filecache.get(hash, path); err == nil {
-			path = cached
-		} else {
-			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
+	if s.cache != nil {
+		if h, ok := s.cache.peek(hash); ok {
+			defer h.Close()
+			if ct := sniffReader(h.Section()); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+			http.ServeContent(w, r, name, info.ModTime(), h.Section())
+			return
 		}
+		defer s.cache.fill(hash, path)
 	}
-	// Blobs are stored under their hash with no extension, so http.ServeFile
+	// Blobs are stored under their hash with no extension, so http.ServeContent
 	// falls back to net/http's content sniffer, whose signature table omits
 	// common formats (e.g. FLAC), yielding application/octet-stream. Sniff the
-	// magic number ourselves so the store serves a correct type; ServeFile
+	// magic number ourselves so the store serves a correct type; ServeContent
 	// honours a Content-Type we set here rather than re-detecting.
 	if ct := sniffContentType(path); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	http.ServeFile(w, r, path)
+	f, err := os.Open(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer f.Close()
+	http.ServeContent(w, r, name, info.ModTime(), f)
 }
 
 // sniffContentType returns a MIME type detected from the file's leading bytes
@@ -296,21 +260,31 @@ func sniffContentType(path string) string {
 		return ""
 	}
 	defer f.Close()
+	return sniffReader(f)
+}
+
+// sniffReader detects the type of whatever r reads, so the same magic-number
+// match works on a store file and on a cache handle.
+func sniffReader(r io.Reader) string {
 	head := make([]byte, 262)
-	n, _ := io.ReadFull(f, head)
-	if n == 0 {
+	n, _ := io.ReadFull(r, head)
+	return sniffHead(head[:n])
+}
+
+func sniffHead(head []byte) string {
+	if len(head) == 0 {
 		return ""
 	}
-	if t, err := filetype.Get(head[:n]); err == nil && t != filetype.Unknown {
+	if t, err := filetype.Get(head); err == nil && t != filetype.Unknown {
 		return t.MIME.Value
 	}
 	return ""
 }
 
-// VersionHandler reports the running build as JSON: {"server":"tie-filehost",
+// versionHandler reports the running build as JSON: {"server":"tie-filehost",
 // "build":{version, commit, date, dirty, goVersion}} — the same shape as the
 // triplestore's Version reply, so `tie version` can print both alike.
-func VersionHandler(w http.ResponseWriter, r *http.Request) {
+func (s *server) versionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"server": "tie-filehost",
@@ -318,7 +292,7 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// StatHandler reports whether a blob exists in the store, without transferring
+// statHandler reports whether a blob exists in the store, without transferring
 // it. It answers HEAD /{hash}: 200 with a Content-Length when the blob is
 // present, 404 when absent. Existence is checked against the primary store
 // (BlobPath) directly — a blob is the durable content of record, so a blob that
@@ -326,18 +300,13 @@ func VersionHandler(w http.ResponseWriter, r *http.Request) {
 // or reaped blob is a clean 404. The blob is never copied into the cache for a
 // stat, and no body is read or written, so a full-store sweep costs one stat per
 // hash.
-func StatHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
-	if len(hash) != 64 {
+func (s *server) statHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
+	p, err := PathFromHash(st.path, hash)
+	if err != nil { // unreachable: withHash validated the hash
 		http.Error(w, "Invalid hash", http.StatusBadRequest)
 		return
 	}
-	st, ok := findBlob(hash)
-	if !ok {
-		w.WriteHeader(http.StatusNotFound)
-		return
-	}
-	info, err := os.Stat(PathFromHash(st.path, hash))
+	info, err := os.Stat(p)
 	if err != nil {
 		if os.IsNotExist(err) {
 			w.WriteHeader(http.StatusNotFound)
@@ -351,56 +320,17 @@ func StatHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func NamedDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
+func (s *server) namedDownloadHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	filename := r.PathValue("filename")
-	if len(hash) != 64 {
-		slog.Warn("invalid hash requested", "hash", hash)
-		fmt.Fprint(w, "Invalid hash:", hash)
-		return
-	}
 	slog.Info("serving blob", "hash", hash, "filename", filename)
-	st, ok := findBlob(hash)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	path := PathFromHash(st.path, hash)
-	if filecache != nil {
-		if cached, err := filecache.get(hash, path); err == nil {
-			path = cached
-		} else {
-			slog.Warn("cache miss, serving from store", "hash", hash, "err", err)
-		}
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		fmt.Fprint(w, "Error happened")
-		return
-	}
-	reader, err2 := os.Open(path)
-	if err2 != nil {
-		fmt.Fprint(w, "Error happened")
-		return
-	}
-	http.ServeContent(w, r, filename, info.ModTime(), reader)
+	s.serveBlob(w, r, filename, hash, st)
 }
 
-// SetRetentionHandler is the explicit owner action to change a blob's expiry.
+// setRetentionHandler is the explicit owner action to change a blob's expiry.
 // It requires a matching Tie-Owner token when the blob is already owned; an
 // unowned blob is claimed by the first token presented. Unlike upload, it may
 // both shorten and extend the retention.
-func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		http.Error(w, "Invalid hash", http.StatusBadRequest)
-		return
-	}
-	st, ok := findBlob(hash)
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
+func (s *server) setRetentionHandler(w http.ResponseWriter, r *http.Request, hash string, st *blobStore) {
 	token := r.Header.Get("Tie-Owner")
 	if !st.retention.authorized(hash, token) {
 		http.Error(w, "Forbidden: owner token required", http.StatusForbidden)
@@ -419,19 +349,14 @@ func SetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "ok")
 }
 
-// GetRetentionHandler reports a blob's current expiry. A blob absent from the
+// getRetentionHandler reports a blob's current expiry. A blob absent from the
 // index is permanent. The owner token hash is never returned.
-func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
-	hash := r.PathValue("hash")
-	if len(hash) != 64 {
-		http.Error(w, "Invalid hash", http.StatusBadRequest)
-		return
-	}
+func (s *server) getRetentionHandler(w http.ResponseWriter, r *http.Request, hash string) {
 	resp := struct {
 		ExpiresAt int64 `json:"expires_at"`
 		HasOwner  bool  `json:"has_owner"`
 	}{}
-	if st, found := findBlob(hash); found {
+	if st, found := s.findBlob(hash); found {
 		if e, ok := st.retention.get(hash); ok {
 			resp.ExpiresAt = e.ExpiresAt
 			resp.HasOwner = e.OwnerTokenHash != ""
@@ -444,38 +369,21 @@ func GetRetentionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	var configPath = flag.String("config", "tie-filehost.toml", "Path to TOML config file.")
-	var showVersion = flag.Bool("version", false, "Print version and exit.")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, `Content-addressed file server
+	flags := daemon.ParseFlags("tie-filehost", "tie-filehost.toml", `Content-addressed file server
 -----------------------------
 Configuration (data path, listen address, TLS) is read from a TOML file.
 TLS is normally terminated by a reverse proxy: run Insecure on localhost, or
 set CertFile/KeyFile to serve HTTPS directly.
 `)
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if *showVersion {
-		fmt.Println("tie-filehost", version.String())
-		return
-	}
 
 	cfg := defaultConfig()
-	if err := conf.ReadConfig(*configPath, &cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "Error reading config file:", err)
+	if err := daemon.LoadConfig(flags.ConfigPath, &cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 
-	cleanup, err := tielog.Setup(tielog.Config{File: cfg.LogFile, Level: cfg.LogLevel})
-	if err != nil {
-		slog.Error("could not open log file, logging to stderr only", "file", cfg.LogFile, "err", err)
-	}
+	cleanup := daemon.SetupLogging("tie-filehost", cfg.LogFile, cfg.LogLevel)
 	defer cleanup()
-	tielog.LogVersion("tie-filehost")
 
 	if cfg.BlobPath == "" && len(cfg.BlobPaths) == 0 {
 		slog.Error("please provide a BlobPath or BlobPaths in the config file")
@@ -484,40 +392,26 @@ set CertFile/KeyFile to serve HTTPS directly.
 
 	var reapInterval time.Duration
 	if cfg.ReapInterval != "" {
+		var err error
 		if reapInterval, err = time.ParseDuration(cfg.ReapInterval); err != nil {
 			slog.Error("invalid ReapInterval", "err", err)
 			os.Exit(1)
 		}
 	}
 
-	users := make(map[string]auth.User, len(cfg.Users))
-	for _, u := range cfg.Users {
-		role, errRole := auth.ParseUserRole(u.Role)
-		if errRole != nil {
-			slog.Error("invalid user role in config", "user", u.Username, "err", errRole)
-			os.Exit(1)
-		}
-		users[u.Username] = auth.User{Password: u.Password, Role: role}
-	}
-	anon, errAnon := auth.ParseAnonAccess(cfg.AnonymousAccess, auth.RoleWrite)
-	if errAnon != nil {
-		slog.Error("invalid AnonymousAccess in config", "err", errAnon)
+	authStore, errAuth := auth.BuildStore(configUsers(cfg.Users), cfg.AnonymousAccess, auth.RoleWrite)
+	if errAuth != nil {
+		slog.Error("invalid users or AnonymousAccess in config", "err", errAuth)
 		os.Exit(1)
 	}
-	authStore := auth.NewStore(users, anon)
 
-	InitKey()
-	router := http.NewServeMux()
-	routes(router, authStore)
-
-	listenOn = cfg.ListenOn
-
-	if err := initStores(cfg); err != nil {
+	srv := &server{}
+	if err := srv.initStores(cfg); err != nil {
 		slog.Error("configuring blob stores", "err", err)
 		os.Exit(1)
 	}
-	for _, s := range stores {
-		slog.Info("blob store", "name", s.name, "path", s.path, "defaultRetention", s.defaultRetention)
+	for _, st := range srv.stores {
+		slog.Info("blob store", "name", st.name, "path", st.path, "defaultRetention", st.defaultRetention)
 	}
 
 	if cfg.CachePath != "" {
@@ -525,15 +419,20 @@ set CertFile/KeyFile to serve HTTPS directly.
 		if maxBytes <= 0 {
 			maxBytes = 1 << 30 // 1 GiB default when CacheSizeGB is unset/zero
 		}
-		if filecache, err = newBlobCache(filepath.Clean(cfg.CachePath), maxBytes); err != nil {
-			slog.Error("initializing blob cache", "err", err)
+		var errCache error
+		if srv.cache, errCache = newBlobCache(filepath.Clean(cfg.CachePath), maxBytes); errCache != nil {
+			slog.Error("initializing blob cache", "err", errCache)
 			os.Exit(1)
 		}
 		slog.Info("blob cache enabled", "path", cfg.CachePath, "size_gb", cfg.CacheSizeGB)
 	}
 
-	startReaper(reapInterval)
+	router := http.NewServeMux()
+	srv.routes(router, authStore)
 
+	startReaper(reapInterval, cfg.ReapDryRun, srv)
+
+	listenOn := cfg.ListenOn
 	if cfg.Insecure {
 		slog.Info("listening", "addr", "http://"+listenOn)
 		if err := http.ListenAndServe(listenOn, router); err != nil {

@@ -121,6 +121,11 @@ Use `contrib/backup/rsync-backup.sh` (below), also cron-friendly.
 `ReapInterval` defaults to `"1h"`: the primary deletes expired blobs on a timer
 (`cmd/tie-filehost/main.go`). Decide what the backup should do with deletions:
 
+To see what a policy would do before letting it run, set `ReapDryRun = true`:
+each pass runs the full mark phase and logs one line per blob it *would* remove
+(store, hash, expiry) plus a `wouldRemove`/`keptReferenced` summary, touching
+nothing. Run it for a few cycles against a real store, then turn it off.
+
 - **Backup mirrors the primary exactly** (disaster recovery only): let deletions
   propagate. `btrfs send` carries them automatically; the rsync script uses
   `--delete`. The backup is a faithful copy, expired blobs and all.

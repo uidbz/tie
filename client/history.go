@@ -169,8 +169,8 @@ func (s *PlayStats) apply(e PlayEvent) {
 	}
 }
 
-func (s PlayStats) relations() map[string][]string {
-	out := map[string][]string{}
+func (s PlayStats) relations() map[Relation][]string {
+	out := map[Relation][]string{}
 	if s.PlayCount > 0 {
 		out[RelPlayCount] = []string{strconv.Itoa(s.PlayCount)}
 		out[RelFirstPlayed] = []string{FormatMediaTime(s.FirstPlayed)}
@@ -233,7 +233,7 @@ func (tc *TieClient) RecordPlays(events []PlayEvent) (int, error) {
 		return 0, fmt.Errorf("record plays: %w", err)
 	}
 	for _, r := range existing {
-		if RowHas(r, str(TieTypeProperty), TypePlayEvent) {
+		if RowHas(r, RelType, TypePlayEvent) {
 			delete(byID, r.Key)
 		}
 	}
@@ -299,7 +299,7 @@ func (tc *TieClient) RecordPlays(events []PlayEvent) (int, error) {
 	}
 	for _, k := range keys {
 		for rel, vals := range stats[k].relations() {
-			b.Set(k, rel, vals)
+			b.Set(k, string(rel), vals)
 		}
 	}
 	if err := flush(); err != nil {
@@ -310,25 +310,25 @@ func (tc *TieClient) RecordPlays(events []PlayEvent) (int, error) {
 
 func appendPlayEventOps(b *api.Batch, e PlayEvent) {
 	id := e.ID
-	b.Add(id, str(TieTypeProperty), TypePlayEvent)
-	b.Add(id, RelPlayOf, e.Subject)
+	b.Add(id, string(RelType), TypePlayEvent)
+	b.Add(id, string(RelPlayOf), e.Subject)
 	if e.Collection != "" {
-		b.Add(id, RelPlayIn, e.Collection)
+		b.Add(id, string(RelPlayIn), e.Collection)
 	}
-	b.Set(id, RelPlayedAt, []string{FormatMediaTime(e.PlayedAt)})
-	b.Set(id, RelListened, []string{strconv.FormatFloat(e.Listened, 'f', 1, 64)})
+	b.Set(id, string(RelPlayedAt), []string{FormatMediaTime(e.PlayedAt)})
+	b.Set(id, string(RelListened), []string{strconv.FormatFloat(e.Listened, 'f', 1, 64)})
 	if e.Duration > 0 {
-		b.Set(id, RelPlayDuration, []string{strconv.FormatFloat(e.Duration, 'f', 1, 64)})
+		b.Set(id, string(RelPlayDuration), []string{strconv.FormatFloat(e.Duration, 'f', 1, 64)})
 	}
-	b.Set(id, RelOutcome, []string{string(e.Outcome)})
+	b.Set(id, string(RelOutcome), []string{string(e.Outcome)})
 	if e.Source != "" {
-		b.Set(id, RelPlaySource, []string{e.Source})
+		b.Set(id, string(RelPlaySource), []string{e.Source})
 	}
 	if e.Context != "" {
-		b.Set(id, RelPlayContext, []string{e.Context})
+		b.Set(id, string(RelPlayContext), []string{e.Context})
 	}
 	if e.Position > 0 {
-		b.Set(id, RelPlayPosition, []string{strconv.FormatFloat(e.Position, 'f', 1, 64)})
+		b.Set(id, string(RelPlayPosition), []string{strconv.FormatFloat(e.Position, 'f', 1, 64)})
 	}
 }
 
@@ -349,7 +349,7 @@ func (tc *TieClient) RecentPlays(q PlayQuery) ([]PlayEvent, error) {
 		limit = -1
 	}
 	rows, _, err := tc.Query(QuerySpec{
-		Terms: []string{TypePlayEvent}, Filter: str(TieTypeProperty), Reverse: true, Expand: true,
+		Terms: []string{TypePlayEvent}, Filter: string(RelType), Reverse: true, Expand: true,
 		SortByValue: RelPlayedAt, Descending: true, Limit: limit,
 	})
 	if errors.Is(err, ErrNotFound) {
@@ -405,8 +405,8 @@ func (tc *TieClient) RecomputeStats() (int, error) {
 	b := tc.NewBatch()
 	for k, s := range stats {
 		rels := s.relations()
-		for _, rel := range []string{RelPlayCount, RelSkipCount, RelFirstPlayed, RelLastPlayed, RelLastSkipped} {
-			b.Set(k, rel, rels[rel]) // nil clears a relation the events no longer support
+		for _, rel := range []Relation{RelPlayCount, RelSkipCount, RelFirstPlayed, RelLastPlayed, RelLastSkipped} {
+			b.Set(k, string(rel), rels[rel]) // nil clears a relation the events no longer support
 		}
 		if len(b.Ops) >= historyFlush {
 			if _, err := tc.Batch(b); err != nil {

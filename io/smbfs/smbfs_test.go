@@ -27,7 +27,7 @@ func liveShare(t *testing.T) *Share {
 	if err != nil {
 		t.Fatalf("ResolveHost: %v", err)
 	}
-	tree := tiesfs.NewTree(tie, host, 1, false)
+	tree := tiefs.NewTree(tie, host, 1, false)
 	t.Cleanup(func() { tree.Close() })
 	return NewShare(tree)
 }
@@ -43,24 +43,24 @@ func testBase(t *testing.T, s *Share) string {
 
 // cleanupBelow recursively removes the tie path tree rooted at p (best
 // effort; leftovers from a failed test are harmless in the test store).
-func cleanupBelow(tree *tiesfs.Tree, p string) {
+func cleanupBelow(tree *tiefs.Tree, p string) {
 	dir, err := tree.PathDir(p)
 	if err != nil {
 		return
 	}
 	for _, sub := range dir.SubDirs {
 		for _, sp := range sub.Paths {
-			cleanupBelow(tree, tiesfs.ChildPath(p, tiesfs.BaseName(sp)))
+			cleanupBelow(tree, tiefs.ChildPath(p, tiefs.BaseName(sp)))
 		}
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		tree.DeleteFile(p, f.Filename)
 	}
 	parent := "/"
 	if i := strings.LastIndex(p, "/"); i > 0 {
 		parent = p[:i]
 	}
-	tree.DeleteDir(parent, tiesfs.BaseName(p))
+	tree.DeleteDir(parent, tiefs.BaseName(p))
 }
 
 func mustStat(t *testing.T, s *Share, p string) gofs.Stat {
@@ -94,24 +94,24 @@ func TestStatAndListViews(t *testing.T) {
 	}
 
 	// /query helper files.
-	readme := mustStat(t, s, "/query/"+tiesfs.ReadmeName)
+	readme := mustStat(t, s, "/query/"+tiefs.ReadmeName)
 	if readme.Mode()&0o222 != 0 {
 		t.Errorf("README mode = 0%o, want read-only", readme.Mode())
 	}
-	if readme.Size() != uint64(len(tiesfs.ReadmeText)) {
-		t.Errorf("README size = %d, want %d", readme.Size(), len(tiesfs.ReadmeText))
+	if readme.Size() != uint64(len(tiefs.ReadmeText)) {
+		t.Errorf("README size = %d, want %d", readme.Size(), len(tiefs.ReadmeText))
 	}
-	data, err := s.ReadFile("/query/" + tiesfs.ReadmeName)
-	if err != nil || string(data) != tiesfs.ReadmeText {
+	data, err := s.ReadFile("/query/" + tiefs.ReadmeName)
+	if err != nil || string(data) != tiefs.ReadmeText {
 		t.Errorf("ReadFile(README): %q, %v", data, err)
 	}
-	if _, err := s.Stat("/query/" + tiesfs.TagListName); err != nil {
+	if _, err := s.Stat("/query/" + tiefs.TagListName); err != nil {
 		t.Errorf("Stat(tags listing): %v", err)
 	}
-	if _, err := s.Stat("/query/" + tiesfs.TypeListName); err != nil {
+	if _, err := s.Stat("/query/" + tiefs.TypeListName); err != nil {
 		t.Errorf("Stat(types listing): %v", err)
 	}
-	if !contains(listNames(t, s, "/query"), tiesfs.ReadmeName) {
+	if !contains(listNames(t, s, "/query"), tiefs.ReadmeName) {
 		t.Errorf("ListDir(/query) missing README")
 	}
 
@@ -398,20 +398,20 @@ func TestMetaTags(t *testing.T) {
 	if err != nil || uid == "" {
 		t.Fatalf("DirUIDFromPath: %q %v", uid, err)
 	}
-	if err := s.WriteFile("/tags"+base+"/"+tiesfs.TagsSelfName, []byte("dirtag\n"), 0o644); err != nil {
+	if err := s.WriteFile("/tags"+base+"/"+tiefs.TagsSelfName, []byte("dirtag\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(.tags): %v", err)
 	}
 	if vals, err := s.tree.TagsBinding(string(uid)).Load(); err != nil || !contains(vals, "dirtag") {
 		t.Fatalf("dir tags = %v, %v", vals, err)
 	}
-	if err := s.WriteFile("/tags"+base+"/"+tiesfs.TagsTypeName, []byte("live-album\n"), 0o644); err != nil {
+	if err := s.WriteFile("/tags"+base+"/"+tiefs.TagsTypeName, []byte("live-album\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(.type): %v", err)
 	}
 	if vals, err := s.tree.DirTypesBinding(uid).Load(); err != nil || !contains(vals, "live-album") {
 		t.Fatalf("dir types = %v, %v", vals, err)
 	}
 	names := listNames(t, s, "/tags"+base)
-	for _, want := range []string{tiesfs.TagsSelfName, tiesfs.TagsTypeName, "tagme.txt"} {
+	for _, want := range []string{tiefs.TagsSelfName, tiefs.TagsTypeName, "tagme.txt"} {
 		if !contains(names, want) {
 			t.Errorf("ListDir(/tags%s) = %v, want %q", base, names, want)
 		}
@@ -428,14 +428,14 @@ func TestEscapedNamesRoundTrip(t *testing.T) {
 	s := liveShare(t)
 	base := testBase(t, s)
 
-	// Create raw tie names that SMB display rules forbid, through tiesfs
+	// Create raw tie names that SMB display rules forbid, through tiefs
 	// (bypassing the escape), then reach them over the escaped view.
 	dirName := "we:ird*name"
 	fileName := "a b:c?.txt"
 	if _, err := s.tree.Mkdir(base, dirName); err != nil {
 		t.Fatalf("tree.Mkdir: %v", err)
 	}
-	inner := tiesfs.ChildPath(base, dirName)
+	inner := tiefs.ChildPath(base, dirName)
 	wh, err := s.tree.NewWriteHandle(inner, fileName, client.File{})
 	if err != nil {
 		t.Fatalf("NewWriteHandle: %v", err)

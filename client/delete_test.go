@@ -32,7 +32,7 @@ func writeTempFile(t *testing.T, tie *TieClient, host FileHost, parentUID DirUID
 	if err := os.WriteFile(tmp, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
-	hash, err := tie.WriteFile(host, "", parentUID, name, tmp, nil)
+	hash, err := tie.WriteFile(host, parentUID, name, tmp, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

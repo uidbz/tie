@@ -2,8 +2,9 @@ package tiedb
 
 import (
 	"encoding/binary"
-	"strings"
+	"encoding/hex"
 	"sync"
+	"sync/atomic"
 )
 
 const (
@@ -21,6 +22,10 @@ const (
 
 	FILE_ADD    = 0
 	FILE_DELETE = 1
+	// FILE_BARRIER is not a record: it carries a Done channel that the writer
+	// closes after fsyncing, once every write queued before it has been
+	// applied. See Collection.Sync.
+	FILE_BARRIER = 2
 
 	// These values get written to the db files
 	TYPE_DELETE      = 10
@@ -34,15 +39,7 @@ const (
 	// fields carry HASH_LEVEL, so getValue resolves it from hashEntries instead
 	// of walking ParentId links.
 	HASH_LEVEL = -1
-
-	// ASSOCIATED = "associated"
 )
-
-type FileIndexer interface {
-	defaultRelations() []string
-	defaultHandlers() []string
-	defaultTypes() []string
-}
 
 type CollectionKey struct {
 	Database   string
@@ -65,12 +62,11 @@ type Collection struct {
 	dBPath            string
 	dBName            string
 	dBFullPath        string
-	totalEntries      uint64
+	totalEntries      atomic.Uint64
 	totalAssociations uint64
 
-	secureLevel       sync.RWMutex
-	totalEntriesMutex sync.Mutex
-	changeMutex       sync.Mutex
+	secureLevel sync.RWMutex
+	changeMutex sync.Mutex
 
 	levels     []entryLevel
 	levelCount int
@@ -132,10 +128,26 @@ type Collection struct {
 	freespace      []int64
 	freespaceMutex sync.Mutex
 
-	writeToDisk    bool
-	finished       sync.WaitGroup
-	finishedAdding sync.WaitGroup
-	db_size        int64
+	writeToDisk bool
+	// loadMemoryLimit is a soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while this collection loads from disk. 0 = runtime default.
+	loadMemoryLimit int64
+	finished        sync.WaitGroup
+	// writerDone closes when the writer goroutine exits; Sync selects on it so
+	// a barrier queued against an already-stopped writer cannot hang.
+	writerDone chan struct{}
+	// closed is set by closeDB; Sync returns immediately once set.
+	closed atomic.Bool
+	// file holds the open record file (a dbFile) owned by the writer
+	// goroutine. It is an atomic.Value so tests can swap in a fault-injecting
+	// handle without racing the writer.
+	file atomic.Value
+	// ioErr is the sticky write failure that put this collection read-only
+	// (ENOSPC, a dying device). Reads keep working; writes report it. Guarded
+	// by ioErrMutex; the first error is the one reported.
+	ioErrMutex sync.Mutex
+	ioErr      error
+	db_size    int64
 }
 
 type UniqueValue struct {
@@ -152,6 +164,33 @@ type UniqueValue struct {
 type BlobPolicy struct {
 	Encode func(value string) (raw []byte, ok bool)
 	Decode func(raw []byte) string
+}
+
+// HexHashBlobPolicy stores content-address hashes as raw 32-byte entries
+// instead of chunking their 64-char hex form into the trie. A hash is the worst
+// case for the chunk trie (no shared prefixes, 3 entries per hash); this
+// collapses it to one. Encode matches only well-formed hex hashes; Decode
+// re-hex-encodes the raw bytes back to the stored string.
+//
+// isContentAddress is supplied by the caller rather than imported: the shape
+// rule belongs to the format package (metadata.IsHexHash), and the storage
+// engine must not depend on it (§5.1 L21).
+func HexHashBlobPolicy(isContentAddress func(string) bool) *BlobPolicy {
+	return &BlobPolicy{
+		Encode: func(value string) ([]byte, bool) {
+			if !isContentAddress(value) {
+				return nil, false
+			}
+			raw, err := hex.DecodeString(value)
+			if err != nil {
+				return nil, false
+			}
+			return raw, true
+		},
+		Decode: func(raw []byte) string {
+			return hex.EncodeToString(raw)
+		},
+	}
 }
 
 type UniqueAssociation struct {
@@ -202,93 +241,6 @@ func RowsFromSorted(sorted []StringTriple) []Row {
 	return rows
 }
 
-type Unit struct{}
-type Value2 map[string]Unit
-type Value1 map[string]Value2
-type TripleSet map[string]Value1
-
-func (s TripleSet) Has(key string) bool {
-	_, ok := s[key]
-	return ok
-}
-
-func (s TripleSet) ForEachKey(do func(key string)) {
-	for key, _ := range s {
-		do(key)
-	}
-}
-
-func (s TripleSet) ForEachValue1(do func(key, value1 string)) {
-	for key, keys := range s {
-		for value1, _ := range keys {
-			do(key, value1)
-		}
-	}
-}
-
-func (s TripleSet) ForEachValue2(do func(key, value1, value2 string)) {
-	for key, keys := range s {
-		for value1, value1s := range keys {
-			for value2, _ := range value1s {
-				do(key, value1, value2)
-			}
-		}
-	}
-}
-
-func (s Value1) Has(value1 string) bool {
-	_, ok := s[value1]
-	return ok
-}
-
-func (s Value1) ForEach(do func(value1 string)) {
-	for value1, _ := range s {
-		do(value1)
-	}
-}
-
-func (s Value1) ForEachValue2(do func(value1, value2 string)) {
-	for value1, value1s := range s {
-		for value2, _ := range value1s {
-			do(value1, value2)
-		}
-	}
-}
-
-// There must exist exactly 1 value2 for the provided value1! Otherwise it will return (empty string, false)")
-func (s Value2) One() (string, bool) {
-	if len(s) != 1 {
-		return "", false
-	}
-	for value2, _ := range s {
-		return value2, true
-	}
-	return "", false
-}
-
-func (s Value2) Has(value2 string) bool {
-	_, ok := s[value2]
-	return ok
-}
-
-func (s Value2) ToString() string {
-	return strings.Join(s.ToSlice(), ", ")
-}
-
-func (s Value2) ToSlice() []string {
-	tmp := make([]string, 0, len(s))
-	for value2 := range s {
-		tmp = append(tmp, value2)
-	}
-	return tmp
-}
-
-func (s Value2) ForEach(do func(value2 string)) {
-	for value2, _ := range s {
-		do(value2)
-	}
-}
-
 type FileMod struct {
 	Mode        int
 	Level       int
@@ -298,6 +250,9 @@ type FileMod struct {
 	EntryID     uint64
 	UniqueValue *UniqueValue
 	HashValue   [32]byte
+	// Done closes once the writer has applied this mod. Only FILE_BARRIER sets
+	// it.
+	Done chan struct{}
 }
 
 type ReadRequest struct {
@@ -305,25 +260,19 @@ type ReadRequest struct {
 	ReplyChan chan Triple
 }
 
+// EntryToBytes serializes a trie entry into the fixed ENTRY_SIZE frame:
+// datatype(2) | level(8) | entryID(8) | parentId(8) | value(24). One buffer,
+// written at the same fixed offsets the bufTo* decoders read — the old version
+// allocated six tiny slices and appended them (and a discarded make) per record.
 func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	levelBytes := make([]byte, SIZE_LEVEL)
-	id := make([]byte, SIZE_ID)
-	parentId := make([]byte, SIZE_PARENTID)
-
-	binary.LittleEndian.PutUint16(datatype, TYPE_ENTRY)
-	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
-	binary.LittleEndian.PutUint64(id, entryID)
-	binary.LittleEndian.PutUint64(parentId, uv.ParentId)
-
-	out := make([]byte, ENTRY_SIZE)
-
-	out = append(datatype[:], levelBytes[:]...)
-	out = append(out, id[:]...)
-	out = append(out, parentId[:]...)
-	out = append(out, uv.Value[:]...)
-
-	return out
+	var b [ENTRY_SIZE]byte
+	binary.LittleEndian.PutUint16(b[0:SIZE_DATATYPE], TYPE_ENTRY)
+	binary.LittleEndian.PutUint64(b[SIZE_DATATYPE:SIZE_DATATYPE+SIZE_LEVEL], uint64(level))
+	next := SIZE_DATATYPE + SIZE_LEVEL + SIZE_ID
+	binary.LittleEndian.PutUint64(b[next-SIZE_ID:next], entryID)
+	binary.LittleEndian.PutUint64(b[next:next+SIZE_PARENTID], uv.ParentId)
+	copy(b[next+SIZE_PARENTID:], uv.Value[:])
+	return b[:]
 }
 
 // HashToBytes serializes a whole-value hash entry into the same 50-byte frame as
@@ -331,47 +280,31 @@ func EntryToBytes(level int, entryID uint64, uv *UniqueValue) []byte {
 // The 32-byte hash occupies the contiguous parentId+value region of the frame,
 // so ENTRY_SIZE is unchanged. The level field is always HASH_LEVEL.
 func HashToBytes(entryID uint64, raw [32]byte) []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	levelBytes := make([]byte, SIZE_LEVEL)
-	id := make([]byte, SIZE_ID)
-
-	level := int64(HASH_LEVEL)
-	binary.LittleEndian.PutUint16(datatype, TYPE_HASH)
-	binary.LittleEndian.PutUint64(levelBytes, uint64(level))
-	binary.LittleEndian.PutUint64(id, entryID)
-
-	out := append(datatype[:], levelBytes[:]...)
-	out = append(out, id[:]...)
-	out = append(out, raw[:]...)
-
-	return out
+	var b [ENTRY_SIZE]byte
+	hashLevel := int64(HASH_LEVEL) // -1 as the all-ones level the format stores
+	binary.LittleEndian.PutUint16(b[0:SIZE_DATATYPE], TYPE_HASH)
+	binary.LittleEndian.PutUint64(b[SIZE_DATATYPE:SIZE_DATATYPE+SIZE_LEVEL], uint64(hashLevel))
+	next := SIZE_DATATYPE + SIZE_LEVEL + SIZE_ID
+	binary.LittleEndian.PutUint64(b[next-SIZE_ID:next], entryID)
+	copy(b[next:], raw[:])
+	return b[:]
 }
 
+// toBytes serializes an association record: datatype(2) | entry level(8) |
+// entry id(8) | value2 level(8) | value2(8) | value1 level(8) | value1(8).
 func (a *Triple) toBytes() []byte {
-	datatype := make([]byte, SIZE_DATATYPE)
-	entry_level := make([]byte, SIZE_LEVEL)
-	entry_id := make([]byte, SIZE_ID)
-	association_level := make([]byte, SIZE_ID)
-	association := make([]byte, SIZE_ID)
-	relation_level := make([]byte, SIZE_LEVEL)
-	relation := make([]byte, SIZE_ID)
-
-	binary.LittleEndian.PutUint16(datatype, TYPE_ASSOCIATION)
-	binary.LittleEndian.PutUint64(entry_level, uint64(a.Level))
-	binary.LittleEndian.PutUint64(entry_id, a.Key)
-	binary.LittleEndian.PutUint64(association_level, uint64(a.Value2Level))
-	binary.LittleEndian.PutUint64(association, a.Value2)
-	binary.LittleEndian.PutUint64(relation_level, uint64(a.Value1Level))
-	binary.LittleEndian.PutUint64(relation, a.Value1)
-
-	out := make([]byte, ENTRY_SIZE)
-
-	out = append(datatype[:], entry_level[:]...)
-	out = append(out, entry_id[:]...)
-	out = append(out, association_level[:]...)
-	out = append(out, association[:]...)
-	out = append(out, relation_level[:]...)
-	out = append(out, relation[:]...)
-
-	return out
+	var b [ENTRY_SIZE]byte
+	binary.LittleEndian.PutUint16(b[0:SIZE_DATATYPE], TYPE_ASSOCIATION)
+	off := SIZE_DATATYPE
+	put := func(v uint64) {
+		binary.LittleEndian.PutUint64(b[off:off+8], v)
+		off += 8
+	}
+	put(uint64(a.Level))
+	put(a.Key)
+	put(uint64(a.Value2Level))
+	put(a.Value2)
+	put(uint64(a.Value1Level))
+	put(a.Value1)
+	return b[:]
 }

@@ -1,13 +1,20 @@
 package client
 
 import (
+	"bufio"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/tiedb"
 	ws "github.com/uidbz/tie/webservice"
 )
@@ -17,23 +24,20 @@ import (
 // a real transport or server failure.
 var ErrNotFound = errors.New("key has no associated values")
 
-// Default values
+// Default values.
+//
+// Credentials are deliberately empty: the auto-created config used to carry
+// defaultuser/defaultpassword, which wrote a password to disk that no server is
+// configured to accept (§5.1 L17). A server that requires auth answers 401
+// until the operator sets Username/Password, which is the honest failure.
 var defaultConfig = Config{
-	Username:         "defaultuser",
-	Password:         "defaultpassword",
 	TripleStoreURL:   "http://localhost:1161",
 	Namespace:        "Collections",
 	Collection:       "Main",
 	DefaultFileHosts: []string{"default"},
 	FileHosts:        map[string]FileHost{"default": {URL: "http://localhost:1162"}},
 	PrevVersions:     3,
-	key:              InitKey(),
 }
-
-const (
-	tieKey            = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
-	defaultConfigFile = "config"
-)
 
 type AssociatedReply = *api.AssociatedReply
 type DumpReply = *api.DumpReply
@@ -64,8 +68,10 @@ type QuerySpec struct {
 	Reverse         bool
 	Expand          bool
 	Offset          int
-	Limit           int
-	SortBy          string
+	// Limit caps the number of TRIPLES returned (not rows). 0 or negative
+	// means unlimited.
+	Limit  int
+	SortBy string
 	// SortByValue orders matched keys by the value each holds under this
 	// relation (e.g. "gendb-imported-at" for chronological order). Empty = none.
 	SortByValue string
@@ -78,21 +84,21 @@ type QuerySpec struct {
 }
 
 // RowValues returns all values a row holds under relation, or nil.
-func RowValues(r Row, relation string) []string {
-	return r.Attributes[relation]
+func RowValues(r Row, relation Relation) []string {
+	return r.Attributes[string(relation)]
 }
 
 // RowFirst returns the first value under relation, or "" when absent.
-func RowFirst(r Row, relation string) string {
-	if v := r.Attributes[relation]; len(v) > 0 {
+func RowFirst(r Row, relation Relation) string {
+	if v := r.Attributes[string(relation)]; len(v) > 0 {
 		return v[0]
 	}
 	return ""
 }
 
 // RowHas reports whether relation holds value.
-func RowHas(r Row, relation, value string) bool {
-	for _, v := range r.Attributes[relation] {
+func RowHas(r Row, relation Relation, value string) bool {
+	for _, v := range r.Attributes[string(relation)] {
 		if v == value {
 			return true
 		}
@@ -102,11 +108,41 @@ func RowHas(r Row, relation, value string) bool {
 
 type TieClient struct {
 	client *ws.Client
+	// runErr records a construction failure (a triplestore URL that cannot be
+	// dialed). It surfaces on the first request rather than as a nil dereference
+	// inside the transport (§4.11).
+	runErr error
 	Config Config
 	// active is the resolved collection this client operates on (triplestore,
 	// namespace, collection id, credentials, filehosts), chosen at construction.
 	active ResolvedCollection
+
+	// Logger receives what the library notices but cannot return: a file it
+	// could not classify, a superseded child it versioned away, a destination
+	// template that did not apply, several UIDs claiming one path. Library code
+	// must not write to stdout or stderr (§6.1): an embedder like tie-fm has
+	// nowhere to put that noise, and `tie import | cut -f1` would swallow it.
+	// The zero value is silent; the CLI wires a stderr handler whose level
+	// comes from -q/-v.
+	Logger *slog.Logger
+
+	// OnImport, when set, is called once per item an import places, after the
+	// batch carrying it has been committed. It is how `tie import` prints data
+	// on stdout — hash and virtual path per item — instead of chatter (§6.1).
+	OnImport func(ImportedItem)
 }
+
+// log is the client's logger, silent unless one was set.
+func (tc *TieClient) log() *slog.Logger {
+	if tc.Logger != nil {
+		return tc.Logger
+	}
+	return silentLogger
+}
+
+// silentLogger is the default: a library that is not told where to talk keeps
+// quiet.
+var silentLogger = slog.New(slog.DiscardHandler)
 
 // firstNonEmpty returns the first non-empty string, or "".
 func firstNonEmpty(vals ...string) string {
@@ -127,7 +163,7 @@ func (c Config) ResolveCollection(name string) ResolvedCollection {
 	if name == "" {
 		name = c.DefaultCollection
 	}
-	store := firstNonEmpty(c.TripleStoreURL, c.Webservice)
+	store := c.TripleStoreURL
 	entry, ok := c.Collections[name]
 	if !ok {
 		return ResolvedCollection{
@@ -165,12 +201,9 @@ type Config struct {
 	Password   string
 	Namespace  string
 	Collection string
-	// Webservice is the triplestore URL. Deprecated: use TripleStoreURL. It is
-	// still honored (LoadConfig copies it into TripleStoreURL when the latter is
-	// empty) so pre-existing configs keep working.
-	Webservice string
-	// TripleStoreURL is the tie-triplestore endpoint. It supersedes Webservice;
-	// when unset LoadConfig falls back to Webservice.
+	// TripleStoreURL is the tie-triplestore endpoint. The older `Webservice`
+	// key spelled the same thing; it was honored through v0.6.0 and is now
+	// refused with a message that says what to change.
 	TripleStoreURL string
 	// WebserviceInsecure enables TLS InsecureSkipVerify for the triplestore
 	// connection (accept self-signed certificates).
@@ -208,8 +241,6 @@ type Config struct {
 	// query. The query string uses the same syntax as an ad-hoc query dir
 	// (space-ANDed terms, "-" excludes, optional "type:" scope).
 	Queries map[string]string
-	key     []byte
-	verbose bool
 }
 
 // Path returns the filesystem path the config was loaded from (empty for a
@@ -246,19 +277,16 @@ type ResolvedCollection struct {
 	FileHosts      []string
 }
 
-// ResolveHosts picks the filehost names an upload/import targets. An explicit
-// list (e.g. one or more --host flags) wins. Otherwise the hosts come from the
-// resolved entry of the named collection — the client's bound collection (the
-// global -c selection) when collection is empty — so a collection's own
-// FileHosts override the top-level DefaultFileHosts.
-func (tc *TieClient) ResolveHosts(collection string, explicit []string) []string {
+// ResolveHosts picks the filehost names an upload or import targets. An
+// explicit list (one or more --host flags) wins; otherwise the hosts come from
+// the client's scoped collection, so a collection's own FileHosts override the
+// top-level DefaultFileHosts. For another collection, scope first:
+// tc.In(name).ResolveHosts(nil).
+func (tc *TieClient) ResolveHosts(explicit []string) []string {
 	if len(explicit) > 0 {
 		return explicit
 	}
-	if collection == "" {
-		return tc.active.FileHosts
-	}
-	return tc.Config.ResolveCollection(collection).FileHosts
+	return tc.active.FileHosts
 }
 
 // FileHost is a filehost endpoint. Insecure enables TLS InsecureSkipVerify
@@ -291,21 +319,79 @@ func (t *basicAuthTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return t.base.RoundTrip(r)
 }
 
+// transportKey names a connection profile: only the credentials and the TLS
+// setting change the transport, so hosts that share them share a pool.
+func transportKey(host FileHost) string {
+	return host.Username + "\x00" + host.Password + "\x00" + strconv.FormatBool(host.Insecure)
+}
+
+// httpClientCache memoizes one *http.Client per connection profile.
+//
+// HTTPClientFor used to build a fresh transport on every call, so nothing was
+// ever pooled: verify, repair, blob stat and the media rescan each carried
+// their own connections, and a large run piled up sockets in TIME_WAIT while
+// paying a handshake per request (§5.1 L19).
+var httpClientCache sync.Map
+
 // HTTPClientFor returns an *http.Client honoring the host's Insecure flag and
 // credentials. A plain, credential-free secure host reuses http.DefaultClient;
-// anything needing a custom TLS config or Basic Auth gets a dedicated client.
+// anything needing a custom TLS config or Basic Auth gets a shared client per
+// profile, so its connections are pooled across calls.
+// idleConnsPerHost is how many keep-alive connections one filehost profile
+// holds on to. The stdlib default (2) is too small for the concurrent paths tie
+// runs — the blob check keeps 16 HEADs in flight — and every worker past the
+// second pays a fresh TCP handshake for every request.
+const idleConnsPerHost = 32
+
 func HTTPClientFor(host FileHost) *http.Client {
-	if !host.Insecure && host.Username == "" {
-		return http.DefaultClient
+	key := transportKey(host)
+	if cached, ok := httpClientCache.Load(key); ok {
+		return cached.(*http.Client)
 	}
-	var base http.RoundTripper = http.DefaultTransport
+	// Cloned from DefaultTransport so the environment's proxy settings still
+	// apply; only the idle-connection budget and the TLS flag change.
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.MaxIdleConnsPerHost = idleConnsPerHost
 	if host.Insecure {
-		base = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		base.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+	var rt http.RoundTripper = base
 	if host.Username != "" {
-		base = &basicAuthTransport{base: base, username: host.Username, pass: host.Password}
+		rt = &basicAuthTransport{base: rt, username: host.Username, pass: host.Password}
 	}
-	return &http.Client{Transport: base}
+	c := &http.Client{Transport: rt}
+	actual, _ := httpClientCache.LoadOrStore(key, c)
+	return actual.(*http.Client)
+}
+
+// fhClientCache memoizes one *fhclient.Client per filehost and profile.
+var fhClientCache sync.Map
+
+// FileHostClient returns the shared filehost client for one configured host:
+// one per host, store and credential profile for the life of the process, so a
+// whole verify or repair run reuses the same pooled connections.
+//
+// The returned client is shared — do not mutate its fields.
+func FileHostClient(host FileHost) *fhclient.Client {
+	key := host.URL + "\x00" + host.Store + "\x00" + transportKey(host)
+	if cached, ok := fhClientCache.Load(key); ok {
+		return cached.(*fhclient.Client)
+	}
+	c := fhclient.New(host.URL, HTTPClientFor(host))
+	c.Store = host.Store
+	actual, _ := fhClientCache.LoadOrStore(key, c)
+	return actual.(*fhclient.Client)
+}
+
+// BlobClient returns the shared filehost client for the named filehost (empty
+// selects the collection's default). Callers should use it instead of building
+// their own: the point is that one client serves the whole run.
+func (tc *TieClient) BlobClient(name string) (*fhclient.Client, error) {
+	host, err := tc.ResolveHost(name)
+	if err != nil {
+		return nil, err
+	}
+	return FileHostClient(host), nil
 }
 
 type TagOptions struct {
@@ -317,17 +403,69 @@ func NewTieClient(config Config) (client *TieClient) {
 	return NewTieClientFor(config, "")
 }
 
+// sameScope reports whether two resolved collections are the same place: same
+// triplestore, credentials, namespace and collection id. The filehost list is
+// not part of it, because it does not change the transport.
+func sameScope(a, b ResolvedCollection) bool {
+	return a.TripleStoreURL == b.TripleStoreURL &&
+		a.Namespace == b.Namespace &&
+		a.Collection == b.Collection &&
+		a.Username == b.Username &&
+		a.Password == b.Password &&
+		a.Insecure == b.Insecure
+}
+
+// In returns a client scoped to the named collection: the same config, and the
+// same transport when the resolved triplestore and credentials match. It is the
+// replacement for the per-call `collection string` parameter (§3.8): a scoped
+// client cannot mix collections, because every call it makes — queries,
+// batches, sync, directory creation, host resolution — goes to one resolved
+// collection.
+//
+// The name resolves through Config.ResolveCollection, so a [Collections.x]
+// entry's triplestore, namespace, collection id, credentials and filehosts all
+// apply. That is what the parameter got wrong: it used the name verbatim as a
+// collection id inside the bound namespace, so `--collection music` wrote to a
+// collection called "music" while taking its hosts from [Collections.music].
+//
+// An empty name selects the client's own scope, and a scope that resolves to
+// exactly this client's returns this client.
+func (tc *TieClient) In(name string) *TieClient {
+	if name == "" {
+		return tc
+	}
+	active := tc.Config.ResolveCollection(name)
+	if sameScope(active, tc.active) {
+		return tc
+	}
+	sub := *tc
+	sub.active = active
+	if active.TripleStoreURL != tc.active.TripleStoreURL ||
+		active.Username != tc.active.Username ||
+		active.Password != tc.active.Password ||
+		active.Insecure != tc.active.Insecure {
+		wsc, err := ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure)
+		if err != nil {
+			sub.runErr = err
+			return &sub
+		}
+		sub.client = wsc
+	}
+	return &sub
+}
+
 // NewTieClientFor builds a client bound to the named collection (empty selects
 // the default). The transport targets that collection's resolved triplestore and
 // credentials.
 func NewTieClientFor(config Config, collection string) (client *TieClient) {
 	active := config.ResolveCollection(collection)
-	client = &TieClient{
-		Config: config,
-		active: active,
-		client: ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure),
+	client = &TieClient{Config: config, active: active}
+	wsc, err := ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure)
+	if err != nil {
+		client.runErr = err
+		return client
 	}
-
+	client.client = wsc
 	return client
 }
 
@@ -348,33 +486,24 @@ func (tc *TieClient) NewBatch() *api.Batch {
 	}
 }
 
-// NewBatchIn makes a Batch targeting a specific collection. An empty collection
-// falls back to the configured default.
-func (tc *TieClient) NewBatchIn(collection string) *api.Batch {
-	return &api.Batch{
-		Collection: tc.collectionInfo(collection),
-	}
-}
-
+// CollectionInfo is the collection this client is scoped to. Everything a
+// client does — queries, batches, sync, directory creation, host resolution —
+// addresses it; a caller that needs another collection uses In().
 func (tc *TieClient) CollectionInfo() api.CollectionInfo {
-	return tc.collectionInfo("")
-}
-
-func (tc *TieClient) collectionInfo(collection string) api.CollectionInfo {
-	if collection == "" {
-		collection = tc.active.Collection
-	}
-	return api.CollectionInfo{Namespace: tc.active.Namespace, CollectionId: collection}
+	return api.CollectionInfo{Namespace: tc.active.Namespace, CollectionId: tc.active.Collection}
 }
 
 // run sends a request and returns the typed reply. err is non-nil on transport
 // failure; the API-level Success flag is checked by each method via replyError.
-func run[T any](tc *TieClient, request ws.RequestInterface) (*T, error) {
-	generic, err := tc.client.Run(request)
-	if err != nil {
-		return nil, err
+// call sends one request and returns its reply. Both halves of the exchange are
+// named at the call site — the request type carries the id, the reply type is a
+// parameter — so a request and a handler that disagree about the reply shape is
+// a compile error rather than a wrong-shaped decode (§7.5).
+func call[Req ws.RequestID, Rep any](tc *TieClient, request Req) (*Rep, error) {
+	if tc.runErr != nil {
+		return nil, tc.runErr
 	}
-	return ws.ReadReply[T](generic), nil
+	return ws.Call[Req, Rep](tc.client, request)
 }
 
 // replyError turns an unsuccessful reply into an error: ErrNotFound for the
@@ -391,39 +520,39 @@ func replyError(status ws.ReplyStatus) error {
 
 // Add a triple to the collection
 func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewAddRequest(key, value1, value2)
+	request := tc.CollectionInfo().NewAddRequest(key, value1, value2)
 
-	reply, err := run[api.AddReply](tc, request)
+	reply, err := call[*api.AddRequest, api.AddReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
 	return reply, replyError(reply.ReplyStatus)
 }
 
-// Wait until all changes has been committed to the collection
+// Sync asks the server to make every write it has already accepted durable
+// (fsync to the collection file). It is not needed for correctness: writes are
+// visible to reads as soon as the write request returns. Use it only to bound
+// what a server crash can lose.
 func (tc *TieClient) Sync() error {
-	return tc.SyncIn("")
-}
+	request := tc.CollectionInfo().NewSyncRequest()
 
-// SyncIn waits until all changes have been committed to a specific collection.
-// An empty collection falls back to the configured default.
-func (tc *TieClient) SyncIn(collection string) error {
-	request := tc.collectionInfo(collection).NewSyncRequest()
-
-	if _, err := tc.client.Run(request); err != nil {
+	reply, err := call[*api.SyncRequest, api.SyncReply](tc, request)
+	if err != nil {
 		return err
 	}
-	return nil
+	return replyError(reply.ReplyStatus)
 }
 
-// Get a TripleSet with all triples that are associated with 'key'.
+// Associated returns the subjects associated with key, each with its own
+// attributes filtered by matchValue1 — the same read as
+// Query(QuerySpec{Terms: []string{key}, Reverse: true, Filter: matchValue1,
+// Expand: true}), which is the form to prefer: it paginates, sorts and takes
+// several terms. Associated stays for callers already speaking it.
 // Returns ErrNotFound if nothing is associated with the key.
 func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewAssociatedRequest(key)
+	request := tc.CollectionInfo().NewAssociatedRequest(key)
 
-	reply, err := run[api.AssociatedReply](tc, request)
+	reply, err := call[*api.AssociatedRequest, api.AssociatedReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -434,13 +563,7 @@ func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 // paginated per spec), the total match count before pagination, and an error.
 // Returns ErrNotFound (with nil rows) when nothing matches.
 func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
-	return tc.QueryIn("", spec)
-}
-
-// QueryIn runs a Query against a specific collection. An empty collection falls
-// back to the configured default.
-func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, error) {
-	request := tc.collectionInfo(collection).NewQueryRequest()
+	request := tc.CollectionInfo().NewQueryRequest()
 	request.Terms = spec.Terms
 	request.Exclude = spec.Exclude
 	request.Scope = spec.Scope
@@ -448,16 +571,23 @@ func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, err
 	request.Filter = spec.Filter
 	request.Reverse = spec.Reverse
 	request.Expand = spec.Expand
+	limit := spec.Limit
+	if limit <= 0 {
+		// 0 (and any negative) means "no limit". The server's SortOptions
+		// defaults an omitted limit to 1000, which silently truncated
+		// directory listings, version lists and tag views (issue #4).
+		limit = -1
+	}
 	request.Sort = tiedb.SortOptions{
 		Offset:             spec.Offset,
-		Limit:              spec.Limit,
+		Limit:              limit,
 		SortBy:             spec.SortBy,
 		SortByValue:        spec.SortByValue,
 		SortByValueNumeric: spec.SortByValueNumeric,
 		Descending:         spec.Descending,
 	}
 
-	reply, err := run[api.QueryReply](tc, request)
+	reply, err := call[*api.QueryRequest, api.QueryReply](tc, request)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -471,13 +601,7 @@ func (tc *TieClient) QueryIn(collection string, spec QuerySpec) ([]Row, int, err
 // the key has no associated values. It is Expand for one key; use Query to
 // search for keys by their associations.
 func (tc *TieClient) Get(key string) (Row, error) {
-	return tc.GetIn("", key)
-}
-
-// GetIn fetches the forward attributes of a single key from a specific
-// collection. An empty collection falls back to the configured default.
-func (tc *TieClient) GetIn(collection, key string) (Row, error) {
-	rows, err := tc.ExpandIn(collection, []string{key})
+	rows, err := tc.Expand([]string{key})
 	if err != nil {
 		return Row{}, err
 	}
@@ -490,16 +614,9 @@ func (tc *TieClient) GetIn(collection, key string) (Row, error) {
 // Expand fetches the forward attributes of many keys in one round trip, one Row
 // per key that exists (missing keys are omitted). Order follows keys.
 func (tc *TieClient) Expand(keys []string) ([]Row, error) {
-	return tc.ExpandIn("", keys)
-}
+	request := tc.CollectionInfo().NewExpandRequest(keys, "")
 
-// ExpandIn fetches the forward attributes of many keys from a specific
-// collection in one round trip. An empty collection falls back to the
-// configured default.
-func (tc *TieClient) ExpandIn(collection string, keys []string) ([]Row, error) {
-	request := tc.collectionInfo(collection).NewExpandRequest(keys, "")
-
-	reply, err := run[api.ExpandReply](tc, request)
+	reply, err := call[*api.ExpandRequest, api.ExpandReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -512,10 +629,9 @@ func (tc *TieClient) ExpandIn(collection string, keys []string) ([]Row, error) {
 // Set makes (key, relation) hold exactly values, replacing any existing values
 // for that relation in one server-side op. An empty values slice clears it.
 func (tc *TieClient) Set(key, relation string, values []string) error {
-	col := tc.collectionInfo("")
-	request := col.NewSetRequest(key, relation, values)
+	request := tc.CollectionInfo().NewSetRequest(key, relation, values)
 
-	reply, err := run[api.SetReply](tc, request)
+	reply, err := call[*api.SetRequest, api.SetReply](tc, request)
 	if err != nil {
 		return err
 	}
@@ -524,10 +640,9 @@ func (tc *TieClient) Set(key, relation string, values []string) error {
 
 // Delete a triple from the collection
 func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewDeleteRequest(key, value1, value2)
+	request := tc.CollectionInfo().NewDeleteRequest(key, value1, value2)
 
-	reply, err := run[api.DeleteReply](tc, request)
+	reply, err := call[*api.DeleteRequest, api.DeleteReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -536,10 +651,9 @@ func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
 
 // Update a triple in the collection
 func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
-	col := tc.collectionInfo("")
-	request := col.NewUpdateRequest(update)
+	request := tc.CollectionInfo().NewUpdateRequest(update)
 
-	reply, err := run[api.UpdateReply](tc, request)
+	reply, err := call[*api.UpdateRequest, api.UpdateReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +666,7 @@ func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
 func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 	request := api.NewBatchRequest(batch)
 
-	reply, err := run[api.BatchReply](tc, request)
+	reply, err := call[*api.BatchRequest, api.BatchReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -564,8 +678,10 @@ func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
 // is unspecified. If fn returns an error, streaming stops and that error is
 // returned.
 func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
-	col := tc.collectionInfo("")
-	request := col.NewDumpRequest()
+	if tc.runErr != nil {
+		return tc.runErr
+	}
+	request := tc.CollectionInfo().NewDumpRequest()
 
 	return tc.client.RunStream(request, func(r io.Reader) error {
 		dec := json.NewDecoder(r)
@@ -605,11 +721,10 @@ func (tc *TieClient) Dump() (DumpReply, error) {
 // position against its on-disk record (slow on a large collection); repair
 // fixes the divergences in memory and reports how many it fixed. The counts in
 // the report describe the state before any repair.
-func (tc *TieClient) CheckIndex(collection string, deep, repair bool) (*tiedb.IndexReport, error) {
-	col := tc.collectionInfo(collection)
-	request := col.NewCheckIndexRequest(deep, repair)
+func (tc *TieClient) CheckIndex(deep, repair bool) (*tiedb.IndexReport, error) {
+	request := tc.CollectionInfo().NewCheckIndexRequest(deep, repair)
 
-	reply, err := run[api.CheckIndexReply](tc, request)
+	reply, err := call[*api.CheckIndexRequest, api.CheckIndexReply](tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -624,31 +739,99 @@ func (tc *TieClient) CheckIndex(collection string, deep, repair bool) (*tiedb.In
 // access. Unlike Delete (one triple) this discards the whole collection, so it
 // is the destructive setup for an overwriting Restore.
 func (tc *TieClient) DropCollection() error {
-	col := tc.collectionInfo("")
-	request := col.NewDropRequest()
+	request := tc.CollectionInfo().NewDropRequest()
 
-	reply, err := run[api.DropReply](tc, request)
+	reply, err := call[*api.DropRequest, api.DropReply](tc, request)
 	if err != nil {
 		return err
 	}
 	return replyError(reply.ReplyStatus)
 }
 
-// Restore adds every (key, value1, value2) triple into the current collection
-// via a single batch. It is additive and idempotent: re-adding an existing
-// triple is a no-op, so restoring a dump merges rather than replaces.
+// restoreBatchOps is how many triples go into one Batch request when restoring.
+// A dump used to be parsed into one slice and sent as one request: a 2M-triple
+// backup was hundreds of MB of JSON on both sides, held one semaphore slot for
+// the whole transfer, and lost everything if the single request failed (§4.18).
+const restoreBatchOps = 5000
+
+// Restore adds the given triples into the current collection in chunks of
+// restoreBatchOps. It is additive and idempotent: re-adding an existing triple
+// is a no-op, so restoring a dump merges rather than replaces.
 func (tc *TieClient) Restore(triples [][3]string) error {
-	if len(triples) == 0 {
-		return nil
-	}
-	b := tc.NewBatch()
-	for _, t := range triples {
-		b.Add(t[0], t[1], t[2])
-	}
-	if _, err := tc.Batch(b); err != nil {
-		return err
+	for len(triples) > 0 {
+		n := len(triples)
+		if n > restoreBatchOps {
+			n = restoreBatchOps
+		}
+		b := tc.NewBatch()
+		for _, t := range triples[:n] {
+			b.Add(t[0], t[1], t[2])
+		}
+		if _, err := tc.Batch(b); err != nil {
+			return err
+		}
+		triples = triples[n:]
 	}
 	return nil
+}
+
+// RestoreStream reads a TSV dump (key<TAB>value1<TAB>value2) and applies it to
+// the collection in chunks, so neither the file's contents nor the request body
+// is ever held whole in memory. Each chunk is followed by a Sync, so an
+// interrupted restore keeps the triples it already applied instead of starting
+// over. It returns the number of triples read; a malformed record aborts with
+// its line number. progress, when non-nil, is called after each chunk with the
+// running total.
+func (tc *TieClient) RestoreStream(src io.Reader, progress func(done int)) (int, error) {
+	r := bufio.NewReader(src)
+
+	done := 0
+	line := 0
+	b := tc.NewBatch()
+	flush := func() error {
+		if len(b.Ops) == 0 {
+			return nil
+		}
+		if _, err := tc.Batch(b); err != nil {
+			return err
+		}
+		if err := tc.Sync(); err != nil {
+			return err
+		}
+		b = tc.NewBatch()
+		if progress != nil {
+			progress(done)
+		}
+		return nil
+	}
+
+	for {
+		text, readErr := r.ReadString('\n')
+		if text != "" {
+			line++
+			rec, err := SplitTSVRecord(strings.TrimRight(text, "\r\n"), 3)
+			if err != nil {
+				return done, fmt.Errorf("malformed line %d: %w", line, err)
+			}
+			b.Add(rec[0], rec[1], rec[2])
+			done++
+			if len(b.Ops) >= restoreBatchOps {
+				if err := flush(); err != nil {
+					return done, err
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				return done, readErr
+			}
+			break
+		}
+	}
+	if err := flush(); err != nil {
+		return done, err
+	}
+	return done, nil
 }
 
 // Check if the key exists

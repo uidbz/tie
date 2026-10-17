@@ -2,27 +2,32 @@ package api
 
 import (
 	"errors"
-	"strconv"
 
+	tiedb "github.com/uidbz/tie/tiedb"
 	ws "github.com/uidbz/tie/webservice"
 )
 
 const (
 	IdBatch = "Batch"
 
-	BatchAdd    = "add"
-	BatchDelete = "delete"
-	BatchSet    = "set"
-	BatchUpdate = "update"
+	BatchAdd         = "add"
+	BatchDelete      = "delete"
+	BatchSet         = "set"
+	BatchUpdate      = "update"
+	BatchUpdateAdd   = "update-add"
+	BatchAddIfAbsent = "add-if-absent"
 )
 
 // BatchOp is one write in a batch. Op selects the kind; the remaining fields are
 // interpreted per Op:
-//   - add:    add triple (Key, Relation, Values[0])
-//   - delete: delete triple (Key, Relation, Values[0])
-//   - set:    replace (Key, Relation) with all of Values
-//   - update: change (Key, Relation, Values[0]) to NewValue; AddOnFailure adds
-//     NewValue when the original triple is absent
+//   - add:          add triple (Key, Relation, Values[0])
+//   - delete:       delete triple (Key, Relation, Values[0]); absent is a no-op
+//   - set:          replace (Key, Relation) with all of Values
+//   - update:       change (Key, Relation, Values[0]) to NewValue; fails the
+//     batch when the source triple is absent
+//   - update-add:   as update, but adds NewValue when the source is absent
+//   - add-if-absent: add Values only when (Key, Relation) holds nothing
+//     (the compare-and-set used for atomic path creation)
 type BatchOp struct {
 	Op           string   `json:"op"`
 	Key          string   `json:"key"`
@@ -34,8 +39,12 @@ type BatchOp struct {
 
 // Batch is an ordered list of write ops against one collection. Ops execute in
 // slice order (the caller controls sequencing — e.g. a delete before an add to
-// replace a value); every op is applied and checked, and the whole batch shares
-// one durability Sync at the end.
+// replace a value); the whole batch shares one durability Sync at the end.
+//
+// A batch IS atomic: the server validates every op before applying the first
+// and runs the whole list under one lock, so a failing op (an update whose
+// source triple is missing, an unknown kind) leaves the collection untouched.
+// See tiedb.Apply.
 type Batch struct {
 	Collection CollectionInfo `json:"collection"`
 	Ops        []BatchOp      `json:"ops"`
@@ -73,55 +82,51 @@ func (batch *Batch) Update(update Update) {
 	})
 }
 
-func (request *BatchRequest) Reply(env *ws.Environment) (ws.Reply, error) {
-	reply := BatchReply{}
-	col := env.Collection(request.Batch.Collection.Namespace, request.Batch.Collection.CollectionId)
+// AddIfAbsent appends a compare-and-set op: values are written only when
+// (key, relation) holds nothing at the moment the batch runs. This is what
+// makes "create this path once" race-free without a separate query round-trip.
+func (batch *Batch) AddIfAbsent(key, relation string, values []string) {
+	batch.Ops = append(batch.Ops, BatchOp{Op: BatchAddIfAbsent, Key: key, Relation: relation, Values: values})
+}
 
+func batchHandler(env *ws.Environment, request *BatchRequest) (*BatchReply, error) {
+	reply := BatchReply{}
+	if request.Batch == nil {
+		reply.Success = false
+		reply.Message = "batch: no batch in request"
+		return &reply, errors.New(reply.Message)
+	}
+	col, err := env.Collection(request.Batch.Collection.Namespace, request.Batch.Collection.CollectionId)
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply runs the whole batch under one changeMutex hold, validating every
+	// op before the first is applied: a failing op leaves nothing behind.
+	ops := make([]tiedb.Op, len(request.Batch.Ops))
 	for i, op := range request.Batch.Ops {
-		var msg string
-		ok := true
-		switch op.Op {
-		case BatchAdd:
-			col.Add(op.Key, op.Relation, op.value())
-		case BatchDelete:
-			// Delete is idempotent: a missing triple is a no-op, not a batch
-			// failure. Callers delete prior values (tag-date, tags) that may
-			// not exist yet on first write.
-			col.Delete(op.Key, op.Relation, op.value())
-		case BatchSet:
-			col.SetValues(op.Key, op.Relation, op.Values)
-		case BatchUpdate:
-			if op.AddOnFailure {
-				msg, ok = col.UpdateAdd(op.Key, op.Relation, op.value(), op.NewValue)
-			} else {
-				msg, ok = col.Update(op.Key, op.Relation, op.value(), op.NewValue)
-			}
-		default:
-			msg, ok = "unknown batch op '"+op.Op+"'", false
+		kind := op.Op
+		if kind == BatchUpdate && op.AddOnFailure {
+			kind = tiedb.OpUpdateAdd
 		}
-		if !ok {
-			reply.Success = false
-			reply.Message = "batch op " + strconv.Itoa(i) + " (" + op.Op + ") failed: " + msg
-			col.Sync()
-			return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, errors.New(reply.Message)
+		ops[i] = tiedb.Op{
+			Kind:     kind,
+			Key:      op.Key,
+			Relation: op.Relation,
+			Values:   op.Values,
+			NewValue: op.NewValue,
 		}
+	}
+	if _, err := col.Apply(ops); err != nil {
+		reply.Success = false
+		reply.Message = err.Error()
+		return &reply, errors.New(reply.Message)
 	}
 
 	col.Sync()
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (op BatchOp) value() string {
-	if len(op.Values) == 0 {
-		return ""
-	}
-	return op.Values[0]
-}
-
-func (request *BatchRequest) New() ws.RequestInterface {
-	return NewBatchRequest(&Batch{})
+	return &reply, nil
 }
 
 func NewBatchRequest(batch *Batch) *BatchRequest {
@@ -130,7 +135,6 @@ func NewBatchRequest(batch *Batch) *BatchRequest {
 	}
 	request := &BatchRequest{}
 	request.Id = IdBatch
-	request.ReplyStructPtr = &BatchReply{}
 	request.Batch = batch
 
 	return request

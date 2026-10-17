@@ -74,7 +74,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"path"
 	"regexp"
 	"slices"
@@ -85,49 +84,51 @@ import (
 	"time"
 
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/metadata"
 )
 
-// Shared media relations.
+// Shared media relations, in the same Relation type as everything else the
+// client writes.
 const (
-	RelMemberOf    = "member-of"
-	RelAddedAt     = "added-at"
-	RelMemberCount = "member-count"
-	RelThumbnail   = "thumbnail"
-	RelRating      = "rating"
+	RelMemberOf    Relation = "member-of"
+	RelAddedAt     Relation = "added-at"
+	RelMemberCount Relation = "member-count"
+	RelThumbnail   Relation = "thumbnail"
+	RelRating      Relation = "rating"
 
 	// Audio.
-	RelAlbumArtist = "album-artist"
-	RelGenre       = "genre"
-	RelComposer    = "composer"
-	RelDisc        = "disc"
-	RelDiscTotal   = "disc-total"
-	RelTrackTotal  = "track-total"
-	RelDuration    = "duration"
-	RelTrackCount  = "track-count"
-	RelDiscCount   = "disc-count"
+	RelAlbumArtist Relation = "album-artist"
+	RelGenre       Relation = "genre"
+	RelComposer    Relation = "composer"
+	RelDisc        Relation = "disc"
+	RelDiscTotal   Relation = "disc-total"
+	RelTrackTotal  Relation = "track-total"
+	RelDuration    Relation = "duration"
+	RelTrackCount  Relation = "track-count"
+	RelDiscCount   Relation = "disc-count"
 
 	// Statistics (history.go).
-	RelPlayCount   = "play-count"
-	RelSkipCount   = "skip-count"
-	RelFirstPlayed = "first-played"
-	RelLastPlayed  = "last-played"
-	RelLastSkipped = "last-skipped"
+	RelPlayCount   Relation = "play-count"
+	RelSkipCount   Relation = "skip-count"
+	RelFirstPlayed Relation = "first-played"
+	RelLastPlayed  Relation = "last-played"
+	RelLastSkipped Relation = "last-skipped"
 
 	// Video / pictures (vocabulary only).
-	RelRuntime        = "runtime"
-	RelRole           = "role"
-	RelSeason         = "season"
-	RelEpisode        = "episode"
-	RelEpisodeTitle   = "episode-title"
-	RelAirDate        = "air-date"
-	RelResumePosition = "resume-position"
-	RelTakenFrom      = "taken-from"
-	RelTakenTo        = "taken-to"
-	RelLocation       = "location"
-	RelTMDBID         = "tmdb-id"
-	RelIMDBID         = "imdb-id"
-	RelTVDBID         = "tvdb-id"
+	RelRuntime        Relation = "runtime"
+	RelRole           Relation = "role"
+	RelSeason         Relation = "season"
+	RelEpisode        Relation = "episode"
+	RelEpisodeTitle   Relation = "episode-title"
+	RelAirDate        Relation = "air-date"
+	RelResumePosition Relation = "resume-position"
+	RelTakenFrom      Relation = "taken-from"
+	RelTakenTo        Relation = "taken-to"
+	RelLocation       Relation = "location"
+	RelTMDBID         Relation = "tmdb-id"
+	RelIMDBID         Relation = "imdb-id"
+	RelTVDBID         Relation = "tvdb-id"
 )
 
 // Collection kinds beyond the TieType built-ins (audio-dir, image-dir, …).
@@ -170,9 +171,9 @@ func ParseMediaTime(s string) (time.Time, bool) {
 }
 
 // MediaValueTypes are the value-type declarations of the media vocabulary.
-var MediaValueTypes = map[string]ValueType{
-	str(TieYear):      ValueTypeInt,
-	str(TieTrack):     ValueTypeInt,
+var MediaValueTypes = map[Relation]ValueType{
+	RelYear:           ValueTypeInt,
+	RelTrack:          ValueTypeInt,
 	RelTrackTotal:     ValueTypeInt,
 	RelDisc:           ValueTypeInt,
 	RelDiscTotal:      ValueTypeInt,
@@ -217,8 +218,8 @@ func (tc *TieClient) EnsureMediaSchema() error {
 	}
 	missing := map[string]ValueType{}
 	for rel, t := range MediaValueTypes {
-		if have[rel] != t {
-			missing[rel] = t
+		if have[string(rel)] != t {
+			missing[string(rel)] = t
 		}
 	}
 	if err := tc.SetValueTypes(missing); err != nil {
@@ -236,16 +237,13 @@ func IsCollectionLabel(t string) bool {
 	case "", str(TieDirectory), str(TieFile), TypeDisc, TypePlayEvent:
 		return false
 	}
-	if strings.HasSuffix(t, "-file") {
-		return false
-	}
-	return true
+	return !strings.HasSuffix(t, "-file")
 }
 
 // collectionLabels returns a row's collection labels (see IsCollectionLabel).
 func collectionLabels(row Row) []string {
 	var out []string
-	for _, t := range RowValues(row, str(TieTypeProperty)) {
+	for _, t := range RowValues(row, RelType) {
 		if IsCollectionLabel(t) {
 			out = append(out, t)
 		}
@@ -265,20 +263,20 @@ func isAudioCollection(labels []string) bool {
 
 // isMediaFileRow reports whether row is a media file a collection can hold.
 func isMediaFileRow(row Row) bool {
-	for _, t := range RowValues(row, str(TieTypeProperty)) {
+	for _, t := range RowValues(row, RelType) {
 		switch t {
 		case str(TieImageFile), str(TieAudioFile), str(TieVideoFile), str(TieDocumentFile),
 			str(TieImageArchive), str(TieAudioArchive), str(TieVideoArchive), str(TieDocumentArchive):
 			return true
 		}
 	}
-	return strings.HasPrefix(RowFirst(row, str(TieMediaType)), "audio/")
+	return strings.HasPrefix(RowFirst(row, RelMediaType), "audio/")
 }
 
 // isAudioRow reports whether row is an audio file.
 func isAudioRow(row Row) bool {
-	return RowHas(row, str(TieTypeProperty), str(TieAudioFile)) ||
-		strings.HasPrefix(RowFirst(row, str(TieMediaType)), "audio/")
+	return RowHas(row, RelType, str(TieAudioFile)) ||
+		strings.HasPrefix(RowFirst(row, RelMediaType), "audio/")
 }
 
 // IndexResult summarizes what IndexCollection changed.
@@ -312,9 +310,9 @@ func discNumberFromName(name string) int {
 }
 
 // childRows returns the expanded rows of every child (files and subdirs) of a
-// directory via its reverse parent edges.
-func (tc *TieClient) childRows(collection string, uid string) ([]Row, error) {
-	rows, _, err := tc.QueryIn(collection, QuerySpec{Terms: []string{uid}, Reverse: true, Filter: str(TieParent), Expand: true, Limit: -1})
+// directory via its reverse parent edges, in the client's scoped collection.
+func (tc *TieClient) childRows(uid string) ([]Row, error) {
+	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: string(RelParent), Expand: true, Limit: -1})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -324,7 +322,7 @@ func (tc *TieClient) childRows(collection string, uid string) ([]Row, error) {
 // CollectionMembers returns the expanded rows of every subject with a
 // member-of edge to uid (one round trip). An empty result is not an error.
 func (tc *TieClient) CollectionMembers(uid string) ([]Row, error) {
-	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: RelMemberOf, Expand: true, Limit: -1})
+	rows, _, err := tc.Query(QuerySpec{Terms: []string{uid}, Reverse: true, Filter: string(RelMemberOf), Expand: true, Limit: -1})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil
 	}
@@ -341,7 +339,7 @@ type memberInfo struct {
 // descending into plain subdirectories (disc folders, artwork/, …) but not
 // into nested collections (their members belong to them) or version-history
 // "_prev" directories. It also returns the disc subdirectories it saw.
-func (tc *TieClient) walkCollection(collection, root string) (members []memberInfo, discDirs map[string]int, err error) {
+func (tc *TieClient) walkCollection(root string) (members []memberInfo, discDirs map[string]int, err error) {
 	discDirs = map[string]int{}
 	type item struct {
 		uid  string
@@ -352,7 +350,7 @@ func (tc *TieClient) walkCollection(collection, root string) (members []memberIn
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		rows, err := tc.childRows(collection, cur.uid)
+		rows, err := tc.childRows(cur.uid)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -360,11 +358,11 @@ func (tc *TieClient) walkCollection(collection, root string) (members []memberIn
 			if row.Key == cur.uid || seen[row.Key] {
 				continue
 			}
-			if RowHas(row, str(TieTypeProperty), str(TieDirectory)) && len(RowValues(row, str(TiePath))) > 0 {
+			if RowHas(row, RelType, str(TieDirectory)) && len(RowValues(row, RelPath)) > 0 {
 				seen[row.Key] = true
-				name := RowFirst(row, str(TieName))
+				name := RowFirst(row, RelName)
 				if name == "" {
-					name = path.Base(RowFirst(row, str(TiePath)))
+					name = path.Base(RowFirst(row, RelPath))
 				}
 				if strings.HasSuffix(name, "_prev") || len(collectionLabels(row)) > 0 {
 					continue
@@ -443,7 +441,7 @@ func topGenres(rows []Row, n int) []string {
 
 // setIfChanged queues Set(key, rel, values) unless row already holds exactly
 // values (order-insensitive). It reports whether an op was queued.
-func setIfChanged(b *api.Batch, row Row, key, rel string, values []string) bool {
+func setIfChanged(b *api.Batch, row Row, key string, rel Relation, values []string) bool {
 	have := slices.Clone(RowValues(row, rel))
 	want := slices.Clone(values)
 	sort.Strings(have)
@@ -451,7 +449,7 @@ func setIfChanged(b *api.Batch, row Row, key, rel string, values []string) bool 
 	if slices.Equal(have, want) {
 		return false
 	}
-	b.Set(key, rel, values)
+	b.Set(key, string(rel), values)
 	return true
 }
 
@@ -459,7 +457,7 @@ func setIfChanged(b *api.Batch, row Row, key, rel string, values []string) bool 
 // tag-date (the import time, as close to "first added" as old data allows),
 // else now.
 func addedAtFor(row Row, now time.Time) string {
-	if t, ok := ParseMediaTime(RowFirst(row, str(TieTagDate))); ok {
+	if t, ok := ParseMediaTime(RowFirst(row, RelTagDate)); ok {
 		return FormatMediaTime(t)
 	}
 	return FormatMediaTime(now)
@@ -477,21 +475,24 @@ func addedAtFor(row Row, now time.Time) string {
 // only (Ops == 0).
 func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult, error) {
 	res := IndexResult{Collection: uid}
-	root, err := tc.GetIn(opts.Collection, string(uid))
+	// Everything below addresses the collection the options name: reads, the
+	// walk and the batch cannot end up in different ones (§3.8).
+	tc = tc.In(opts.Collection)
+	root, err := tc.Get(string(uid))
 	if err != nil {
 		return res, fmt.Errorf("index %s: %w", uid, err)
 	}
-	if RowHas(root, str(TieTypeProperty), TypePlaylist) {
+	if RowHas(root, RelType, TypePlaylist) {
 		return res, nil // a playlist's membership is its explicit track list (playlist.go)
 	}
 	labels := collectionLabels(root)
-	members, discDirs, err := tc.walkCollection(opts.Collection, string(uid))
+	members, discDirs, err := tc.walkCollection(string(uid))
 	if err != nil {
 		return res, fmt.Errorf("index %s: %w", uid, err)
 	}
 	res.Members = len(members)
 	now := time.Now()
-	b := tc.NewBatchIn(opts.Collection)
+	b := tc.NewBatch()
 
 	inWalk := map[string]bool{}
 	var memberRows []Row
@@ -501,13 +502,13 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 		inWalk[row.Key] = true
 		memberRows = append(memberRows, row)
 		if !RowHas(row, RelMemberOf, string(uid)) {
-			b.Add(row.Key, RelMemberOf, string(uid))
+			b.Add(row.Key, string(RelMemberOf), string(uid))
 			res.AddedMembers++
 		}
 		added := RowFirst(row, RelAddedAt)
 		if added == "" {
 			added = addedAtFor(row, now)
-			b.Set(row.Key, RelAddedAt, []string{added})
+			b.Set(row.Key, string(RelAddedAt), []string{added})
 		}
 		if t, ok := ParseMediaTime(added); ok {
 			if s := FormatMediaTime(t); earliest == "" || s < earliest {
@@ -517,17 +518,17 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 		// A track below a disc folder without its own DISCNUMBER tag gets the
 		// folder's disc number, so readers can order discs uniformly.
 		if m.disc > 0 && isAudioRow(row) && RowFirst(row, RelDisc) == "" {
-			b.Set(row.Key, RelDisc, []string{strconv.Itoa(m.disc)})
+			b.Set(row.Key, string(RelDisc), []string{strconv.Itoa(m.disc)})
 		}
 	}
 
 	// Stale edges: members that left the collection (moved, deleted). Needs the
 	// reverse member-of index; an older triplestore without it yields nothing
 	// here, which merely leaves stale edges in place.
-	if existing, err := tc.collectionMembersIn(opts.Collection, string(uid)); err == nil {
+	if existing, err := tc.CollectionMembers(string(uid)); err == nil {
 		for _, row := range existing {
 			if !inWalk[row.Key] {
-				b.Delete(row.Key, RelMemberOf, string(uid))
+				b.Delete(row.Key, string(RelMemberOf), string(uid))
 				res.DroppedStale++
 			}
 		}
@@ -538,7 +539,7 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 		if v == "" {
 			v = addedAtFor(root, now)
 		}
-		b.Set(string(uid), RelAddedAt, []string{v})
+		b.Set(string(uid), string(RelAddedAt), []string{v})
 	}
 	setIfChanged(b, root, string(uid), RelMemberCount, []string{strconv.Itoa(len(members))})
 
@@ -559,10 +560,10 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 			if f, err := strconv.ParseFloat(RowFirst(r, RelDuration), 64); err == nil {
 				total += f
 			}
-			albums = append(albums, RowFirst(r, str(TieAlbum)))
-			artists = append(artists, RowFirst(r, str(TieArtist)))
+			albums = append(albums, RowFirst(r, RelAlbum))
+			artists = append(artists, RowFirst(r, RelArtist))
 			albumArtists = append(albumArtists, RowFirst(r, RelAlbumArtist))
-			years = append(years, RowFirst(r, str(TieYear)))
+			years = append(years, RowFirst(r, RelYear))
 		}
 		for _, d := range discDirs {
 			discs[d] = true
@@ -590,17 +591,17 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 		if albumArtist != "" {
 			setIfChanged(b, root, string(uid), RelAlbumArtist, []string{albumArtist})
 		}
-		if RowFirst(root, str(TieAlbum)) == "" {
+		if RowFirst(root, RelAlbum) == "" {
 			if a := uniqueNonEmpty(albums); len(a) == 1 {
-				b.Set(string(uid), str(TieAlbum), a)
+				b.Set(string(uid), string(RelAlbum), a)
 			}
 		}
-		if RowFirst(root, str(TieArtist)) == "" && albumArtist != "" {
-			b.Set(string(uid), str(TieArtist), []string{albumArtist})
+		if RowFirst(root, RelArtist) == "" && albumArtist != "" {
+			b.Set(string(uid), string(RelArtist), []string{albumArtist})
 		}
-		if RowFirst(root, str(TieYear)) == "" {
+		if RowFirst(root, RelYear) == "" {
 			if y := modeString(years); y != "" {
-				b.Set(string(uid), str(TieYear), []string{y})
+				b.Set(string(uid), string(RelYear), []string{y})
 			}
 		}
 		if len(discDirs) > 0 {
@@ -608,14 +609,14 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 			for id := range discDirs {
 				ids = append(ids, id)
 			}
-			rows, err := tc.ExpandIn(opts.Collection, ids)
+			rows, err := tc.Expand(ids)
 			if err != nil {
 				return res, fmt.Errorf("index %s: %w", uid, err)
 			}
 			for _, r := range rows {
 				n := discDirs[r.Key]
-				if !RowHas(r, str(TieTypeProperty), TypeDisc) {
-					b.Add(r.Key, str(TieTypeProperty), TypeDisc)
+				if !RowHas(r, RelType, TypeDisc) {
+					b.Add(r.Key, string(RelType), TypeDisc)
 					res.Discs++
 				}
 				setIfChanged(b, r, r.Key, RelDisc, []string{strconv.Itoa(n)})
@@ -636,14 +637,6 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 	return res, nil
 }
 
-func (tc *TieClient) collectionMembersIn(collection, uid string) ([]Row, error) {
-	rows, _, err := tc.QueryIn(collection, QuerySpec{Terms: []string{uid}, Reverse: true, Filter: RelMemberOf, Expand: true, Limit: -1})
-	if errors.Is(err, ErrNotFound) {
-		return nil, nil
-	}
-	return rows, err
-}
-
 func uniqueNonEmpty(values []string) []string {
 	var out []string
 	for _, v := range values {
@@ -656,19 +649,15 @@ func uniqueNonEmpty(values []string) []string {
 
 // EnsureAddedAt stamps added-at on subject unless it already has one.
 func (tc *TieClient) EnsureAddedAt(subject string) error {
-	return tc.ensureAddedAtIn("", subject)
-}
-
-func (tc *TieClient) ensureAddedAtIn(collection, subject string) error {
-	row, err := tc.GetIn(collection, subject)
+	row, err := tc.Get(subject)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	if RowFirst(row, RelAddedAt) != "" {
 		return nil
 	}
-	b := tc.NewBatchIn(collection)
-	b.Set(subject, RelAddedAt, []string{addedAtFor(row, time.Now())})
+	b := tc.NewBatch()
+	b.Set(subject, string(RelAddedAt), []string{addedAtFor(row, time.Now())})
 	_, err = tc.Batch(b)
 	return err
 }
@@ -715,7 +704,7 @@ func (tc *TieClient) Backfill(opts BackfillOptions) (BackfillResult, error) {
 	archives := map[string]Row{}
 	seen := map[string]bool{}
 	for _, t := range types {
-		rows, err := tc.allOfType("", t)
+		rows, err := tc.allOfType(t)
 		if err != nil {
 			return res, err
 		}
@@ -724,7 +713,7 @@ func (tc *TieClient) Backfill(opts BackfillOptions) (BackfillResult, error) {
 				continue
 			}
 			seen[r.Key] = true
-			if strings.HasSuffix(t, "-archive") && len(RowValues(r, str(TiePath))) == 0 {
+			if strings.HasSuffix(t, "-archive") && len(RowValues(r, RelPath)) == 0 {
 				archives[r.Key] = r
 				continue
 			}
@@ -749,7 +738,7 @@ func (tc *TieClient) Backfill(opts BackfillOptions) (BackfillResult, error) {
 		now := time.Now()
 		for key, r := range archives {
 			if RowFirst(r, RelAddedAt) == "" {
-				b.Set(key, RelAddedAt, []string{addedAtFor(r, now)})
+				b.Set(key, string(RelAddedAt), []string{addedAtFor(r, now)})
 				res.Archives++
 			}
 		}
@@ -797,7 +786,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	rows, err := tc.allOfType("", str(TieAudioFile))
+	rows, err := tc.allOfType(str(TieAudioFile))
 	if err != nil {
 		return 0, err
 	}
@@ -811,8 +800,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	if workers <= 0 {
 		workers = 8
 	}
-	hc := HTTPClientFor(host)
-	base := strings.TrimRight(host.URL, "/") + "/"
+	fh := FileHostClient(host)
 	type result struct {
 		hash string
 		ops  func(b *api.Batch)
@@ -826,7 +814,7 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 		go func() {
 			defer wg.Done()
 			for r := range jobs {
-				m, err := fetchAudioMeta(hc, base+r.Key)
+				m, err := fetchAudioMeta(fh, r.Key)
 				res := result{hash: r.Key, err: err}
 				if err == nil {
 					row := r
@@ -848,12 +836,12 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 							setIfChanged(b, row, k, RelComposer, []string{m.Composer})
 						}
 						if m.AlbumArtist != "" && RowFirst(row, RelAlbumArtist) == "" {
-							b.Set(k, RelAlbumArtist, []string{m.AlbumArtist})
+							b.Set(k, string(RelAlbumArtist), []string{m.AlbumArtist})
 						}
 						if m.Duration > 0 && RowFirst(row, RelDuration) == "" {
-							b.Set(k, RelDuration, []string{strconv.FormatFloat(m.Duration, 'f', 3, 64)})
+							b.Set(k, string(RelDuration), []string{strconv.FormatFloat(m.Duration, 'f', 3, 64)})
 						}
-						b.Set(k, RelMetaVersion, []string{MetaVersion})
+						b.Set(k, string(RelMetaVersion), []string{MetaVersion})
 					}
 				}
 				results <- res
@@ -901,35 +889,22 @@ func (tc *TieClient) RescanAudio(opts RescanOptions) (int, error) {
 	return updated, firstErr
 }
 
-// fetchAudioMeta reads a blob's audio tags, trying a ranged head fetch
-// before the whole blob.
-func fetchAudioMeta(hc *http.Client, url string) (metadata.Media, error) {
-	get := func(ranged bool) ([]byte, bool, error) {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
-		if err != nil {
-			return nil, false, err
-		}
-		if ranged {
-			req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", rescanHeadBytes-1))
-		}
-		resp, err := hc.Do(req)
-		if err != nil {
-			return nil, false, err
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-			return nil, false, fmt.Errorf("GET %s: %s", url, resp.Status)
-		}
-		data, err := io.ReadAll(resp.Body)
-		return data, resp.StatusCode == http.StatusPartialContent, err
-	}
-	data, partial, err := get(true)
+// fetchAudioMeta reads a blob's audio tags, trying a ranged head fetch before
+// the whole blob. A server that ignores Range hands back the whole body, so no
+// second request is needed.
+func fetchAudioMeta(fh *fhclient.Client, hash string) (metadata.Media, error) {
+	data, partial, err := fh.GetRange(hash, rescanHeadBytes)
 	if err != nil {
 		return metadata.Media{}, err
 	}
 	m := ExtractMediaMetadataFrom(bytes.NewReader(data))
 	if partial && m.Title == "" && m.Album == "" && m.Artist == "" {
-		data, _, err = get(false)
+		body, err := fh.Get(hash)
+		if err != nil {
+			return metadata.Media{}, err
+		}
+		defer body.Close()
+		data, err = io.ReadAll(body)
 		if err != nil {
 			return metadata.Media{}, err
 		}

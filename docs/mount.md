@@ -76,7 +76,7 @@ properties worth knowing when reading that file:
 
 `TieFuse.Close()` / `TieDBFuse.Close()` remove the temp dir; `cmdMount` defers
 it, so a normal unmount (Ctrl-C → `server.Unmount()`) cleans up. A hard `kill
--9` cannot run the defer and leaves a `/tmp/tie-fuse-cache-*` dir behind.
+-9` cannot run the defer and leaves a `/tmp/tie-cache-*` dir behind.
 
 ## The triples behind the trees
 

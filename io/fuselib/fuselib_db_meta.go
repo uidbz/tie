@@ -13,13 +13,13 @@ import (
 // metaFile is a writable text file whose contents are a set of string values,
 // one per line, sorted. Reading it snapshots the current set; writing it replaces
 // the set: editors truncate-then-rewrite, so the file buffers written bytes and,
-// on flush/close, parses the buffer into a set and commits it via the tiesfs
+// on flush/close, parses the buffer into a set and commits it via the tiefs
 // MetaBinding (a content hash's tags or a directory's tie-type labels). The
 // empty buffer clears the set.
 type metaFile struct {
 	fs.Inode
 	state *TieDBFuse
-	bind  tiesfs.MetaBinding
+	bind  tiefs.MetaBinding
 }
 
 var (
@@ -48,7 +48,7 @@ func (f *metaFile) render() []byte {
 	if err != nil {
 		return nil
 	}
-	return tiesfs.RenderMeta(vals)
+	return tiefs.RenderMeta(vals)
 }
 
 func (f *metaFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -129,7 +129,7 @@ func (h *metaFileHandle) Flush(ctx context.Context) syscall.Errno {
 	if !h.writable {
 		return 0
 	}
-	if err := h.file.bind.Store(tiesfs.ParseLines(h.buf)); err != nil {
+	if err := h.file.bind.Store(tiefs.ParseLines(h.buf)); err != nil {
 		return syscall.EIO
 	}
 	return 0

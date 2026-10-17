@@ -31,10 +31,8 @@ package client
 
 import (
 	"bytes"
-	"encoding/csv"
 	"fmt"
 	"io"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +40,7 @@ import (
 
 	"github.com/h2non/filetype"
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/io/fhclient"
 )
 
 // RepairOptions configures RepairTree.
@@ -78,11 +77,13 @@ type RepairResult struct {
 
 // repairSession carries the per-run caches of RepairTree.
 type repairSession struct {
-	tie        *TieClient
-	collection string
-	opts       RepairOptions
-	res        *RepairResult
-	journal    *csv.Writer
+	tie  *TieClient // scoped to the collection being repaired
+	opts RepairOptions
+	res  *RepairResult
+	// journal receives one escaped TSV record per applied operation (§6.4):
+	// time, op, key, relation, value, note. It is a file an operator reads and
+	// greps, so it uses the same codec as `tie dump`, not csv quoting.
+	journal io.Writer
 
 	liveDir   map[string]bool   // DirUIDs carrying a path triple
 	ghosts    map[string]bool   // ghost candidates
@@ -92,8 +93,7 @@ type repairSession struct {
 	handled   map[string]bool   // child\x00parent edges already re-parented
 	destUID   string
 
-	blobHC  *http.Client
-	blobURL string
+	fh *fhclient.Client
 }
 
 // RepairTree fixes the dangling-reference, ghost-node and file-metadata
@@ -101,7 +101,10 @@ type repairSession struct {
 // collection. Without opts.Apply it returns the plan and changes nothing. It
 // does not re-home orphans (RepairOrphans) or touch the index (CheckIndex);
 // `tie verify --fix` composes all three.
-func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts RepairOptions) (*RepairResult, error) {
+// RepairTree fixes the dangling-reference, ghost-node and file-metadata
+// problems in rep, in the client's scoped collection — which should be the one
+// the Verify that produced rep ran on.
+func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*RepairResult, error) {
 	if opts.Dest == "" {
 		opts.Dest = FileURIScheme + "/restored/" + time.Now().Format("2006-01-02")
 	}
@@ -109,14 +112,12 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 		opts.Dest = FileURIScheme + "/" + opts.Dest
 	}
 	r := &repairSession{
-		tie: tie, collection: collection, opts: opts, res: &RepairResult{},
+		tie: tie, opts: opts, res: &RepairResult{},
 		liveDir: map[string]bool{}, ghosts: map[string]bool{}, done: map[string]bool{},
 		protected: map[string]bool{}, ancestor: map[string]string{}, handled: map[string]bool{},
 	}
 	if opts.Apply && opts.Journal != nil {
-		r.journal = csv.NewWriter(opts.Journal)
-		r.journal.Comma = '\t'
-		defer r.journal.Flush()
+		r.journal = opts.Journal
 	}
 	if rep == nil {
 		return r.res, nil
@@ -137,11 +138,11 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 		if r.ghosts[gap.Subject] {
 			continue // the ghost loop owns it
 		}
-		row, err := tie.GetIn(collection, gap.Subject)
+		row, err := tie.Get(gap.Subject)
 		if err != nil {
 			continue // raced away; the final verify will report what's left
 		}
-		if RowHas(row, str(TieTypeProperty), str(TieDirectory)) && len(RowValues(row, str(TiePath))) == 0 {
+		if RowHas(row, RelType, str(TieDirectory)) && len(RowValues(row, RelPath)) == 0 {
 			r.ghosts[gap.Subject] = true
 		} else {
 			files = append(files, gap)
@@ -169,7 +170,7 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 			if r.done[g] || r.liveDir[g] || r.protected[g] {
 				continue
 			}
-			row, err := tie.GetIn(collection, g)
+			row, err := tie.Get(g)
 			if err != nil {
 				r.done[g] = true // already gone
 				continue
@@ -186,7 +187,7 @@ func (tie *TieClient) RepairTree(collection string, rep *VerifyReport, opts Repa
 				// A child that is no live dir and not a real file is itself a
 				// ghost — enqueue so chains resolve.
 				if !r.liveDir[child] && !r.ghosts[child] {
-					if crow, err := tie.GetIn(collection, child); err == nil && !fileLike(crow) {
+					if crow, err := tie.Get(child); err == nil && !fileLike(crow) {
 						r.ghosts[child] = true
 					}
 				}
@@ -258,11 +259,11 @@ func (r *repairSession) progress(format string, args ...any) {
 // reparentOps drops child's edge to the dead parent and adds one to the
 // nearest live ancestor (or the DEST placeholder).
 func (r *repairSession) reparentOps(child, parent string) []RepairOp {
-	ops := []RepairOp{{api.BatchDelete, child, str(TieParent), parent, "dangling ref"}}
+	ops := []RepairOp{{api.BatchDelete, child, string(RelParent), parent, "dangling ref"}}
 	if anc := r.nearestLiveAncestor(parent, child); anc != "" && anc != child {
-		ops = append(ops, RepairOp{api.BatchAdd, child, str(TieParent), anc, "re-parent to live ancestor of " + short(parent)})
+		ops = append(ops, RepairOp{api.BatchAdd, child, string(RelParent), anc, "re-parent to live ancestor of " + short(parent)})
 	} else {
-		ops = append(ops, RepairOp{api.BatchAdd, child, str(TieParent), "DEST", "re-parent to " + r.opts.Dest + " (no live ancestor)"})
+		ops = append(ops, RepairOp{api.BatchAdd, child, string(RelParent), "DEST", "re-parent to " + r.opts.Dest + " (no live ancestor)"})
 	}
 	return ops
 }
@@ -270,14 +271,14 @@ func (r *repairSession) reparentOps(child, parent string) []RepairOp {
 // loadLiveDirs builds the set of DirUIDs that carry a path triple (the same
 // universe Verify partitions on).
 func (r *repairSession) loadLiveDirs() error {
-	rows, _, err := r.tie.QueryIn(r.collection, QuerySpec{
-		Terms: []string{str(TieDirectory)}, Filter: str(TieTypeProperty), Reverse: true, Expand: true, Limit: -1,
+	rows, _, err := r.tie.Query(QuerySpec{
+		Terms: []string{str(TieDirectory)}, Filter: string(RelType), Reverse: true, Expand: true, Limit: -1,
 	})
 	if err != nil && err != ErrNotFound {
 		return err
 	}
 	for _, row := range rows {
-		if len(RowValues(row, str(TiePath))) > 0 {
+		if len(RowValues(row, RelPath)) > 0 {
 			r.liveDir[row.Key] = true
 		}
 	}
@@ -287,17 +288,17 @@ func (r *repairSession) loadLiveDirs() error {
 // fileLike reports whether a row carries the metadata of a real file (as
 // opposed to a ghost node, which holds structural triples at most).
 func fileLike(row Row) bool {
-	return len(RowValues(row, str(TieFilename))) > 0 ||
-		len(RowValues(row, str(TieName))) > 0 ||
-		len(RowValues(row, str(TieFilesize))) > 0 ||
-		len(RowValues(row, str(TieMediaType))) > 0 ||
-		RowHas(row, str(TieTypeProperty), str(TieFile))
+	return len(RowValues(row, RelFilename)) > 0 ||
+		len(RowValues(row, RelName)) > 0 ||
+		len(RowValues(row, RelFilesize)) > 0 ||
+		len(RowValues(row, RelMediaType)) > 0 ||
+		RowHas(row, RelType, str(TieFile))
 }
 
 // childrenOf returns the keys of every node with a parent edge to uid.
 func (r *repairSession) childrenOf(uid string) []string {
-	rows, _, err := r.tie.QueryIn(r.collection, QuerySpec{
-		Terms: []string{uid}, Filter: str(TieParent), Reverse: true, Limit: -1,
+	rows, _, err := r.tie.Query(QuerySpec{
+		Terms: []string{uid}, Filter: string(RelParent), Reverse: true, Limit: -1,
 	})
 	if err != nil {
 		return nil
@@ -329,11 +330,11 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 			r.ancestor[uid] = cur
 			return cur
 		}
-		row, err := r.tie.GetIn(r.collection, cur)
+		row, err := r.tie.Get(cur)
 		if err != nil {
 			break
 		}
-		cur = RowFirst(row, str(TieParent))
+		cur = RowFirst(row, RelParent)
 	}
 	r.ancestor[uid] = ""
 	return ""
@@ -343,8 +344,8 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 // tiedir-hash edge — such a node is a directory's content snapshot, not a
 // ghost.
 func (r *repairSession) noTiedirRefs(uid string) bool {
-	rows, _, err := r.tie.QueryIn(r.collection, QuerySpec{
-		Terms: []string{uid}, Filter: str(TieTiedirHash), Reverse: true, Limit: -1,
+	rows, _, err := r.tie.Query(QuerySpec{
+		Terms: []string{uid}, Filter: string(RelTiedirHash), Reverse: true, Limit: -1,
 	})
 	if err == nil && len(rows) > 0 {
 		r.protected[uid] = true
@@ -355,7 +356,7 @@ func (r *repairSession) noTiedirRefs(uid string) bool {
 
 // deleteAll expands every triple of uid into a delete op.
 func (r *repairSession) deleteAll(uid, note string) ([]RepairOp, error) {
-	row, err := r.tie.GetIn(r.collection, uid)
+	row, err := r.tie.Get(uid)
 	if err != nil {
 		return nil, err
 	}
@@ -377,12 +378,12 @@ func (r *repairSession) deleteAll(uid, note string) ([]RepairOp, error) {
 // can be derived from the blob, or delete the subject's triples when the file
 // is unrecoverable (no name at all, or blob absent from the filehost).
 func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
-	row, err := r.tie.GetIn(r.collection, subject)
+	row, err := r.tie.Get(subject)
 	if err != nil {
 		return nil, err
 	}
-	filename := RowFirst(row, str(TieFilename))
-	name := RowFirst(row, str(TieName))
+	filename := RowFirst(row, RelFilename)
+	name := RowFirst(row, RelName)
 
 	exists, size, err := r.statBlob(subject)
 	if err != nil {
@@ -394,13 +395,13 @@ func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
 	}
 
 	var ops []RepairOp
-	if len(RowValues(row, str(TieFilesize))) == 0 {
-		ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieFilesize), strconv.FormatInt(size, 10), "size from blob HEAD"})
+	if len(RowValues(row, RelFilesize)) == 0 {
+		ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelFilesize), strconv.FormatInt(size, 10), "size from blob HEAD"})
 	}
-	needMedia := len(RowValues(row, str(TieMediaType))) == 0
+	needMedia := len(RowValues(row, RelMediaType)) == 0
 	// Mirror Verify's rule: a real file needs a concrete media tie-type beyond
 	// the structural "file" marker.
-	types := RowValues(row, str(TieTypeProperty))
+	types := RowValues(row, RelType)
 	needType := len(types) == 0 || (len(types) == 1 && types[0] == str(TieFile))
 	var mediaType string
 	if needMedia || needType {
@@ -417,88 +418,55 @@ func (r *repairSession) fixFile(subject string) ([]RepairOp, error) {
 			return nil, err
 		}
 		if needMedia {
-			ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieMediaType), mediaType, "sniffed from blob"})
+			ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelMediaType), mediaType, "sniffed from blob"})
 		}
 		if needType {
-			ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieTypeProperty), tieType.String(), "sniffed from blob"})
+			ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelType), tieType.String(), "sniffed from blob"})
 		}
 	}
 	if filename == "" && name != "" {
 		if mediaType == "" {
-			mediaType = RowFirst(row, str(TieMediaType))
+			mediaType = RowFirst(row, RelMediaType)
 		}
-		ops = append(ops, RepairOp{api.BatchAdd, subject, str(TieFilename), name + extFor(mediaType), "reconstructed from name"})
+		ops = append(ops, RepairOp{api.BatchAdd, subject, string(RelFilename), name + extFor(mediaType), "reconstructed from name"})
 	}
 	return ops, nil
 }
 
-// blobClient returns the shared filehost HTTP client + base URL, built once
-// from the collection's first resolved host. One client for the whole run:
-// per-subject clients exhaust fds on large collections via TIME_WAIT pileup.
-func (r *repairSession) blobClient() (*http.Client, string, error) {
-	if r.blobHC != nil {
-		return r.blobHC, r.blobURL, nil
+// blobFH returns the shared filehost client, built once from the collection's
+// first resolved host. One client for the whole run: per-subject clients
+// exhaust fds on large collections via TIME_WAIT pileup.
+func (r *repairSession) blobFH() (*fhclient.Client, error) {
+	if r.fh != nil {
+		return r.fh, nil
 	}
-	hosts := r.tie.ResolveHosts(r.collection, nil)
-	if len(hosts) == 0 {
-		return nil, "", fmt.Errorf("no filehosts configured")
+	host, err := r.tie.ResolveHost("")
+	if err != nil {
+		return nil, err
 	}
-	host, ok := r.tie.Config.FileHosts[hosts[0]]
-	if !ok {
-		return nil, "", fmt.Errorf("filehost %q has no [FileHosts] entry", hosts[0])
-	}
-	r.blobHC = HTTPClientFor(host)
-	r.blobURL = strings.TrimRight(host.URL, "/")
-	return r.blobHC, r.blobURL, nil
+	r.fh = FileHostClient(host)
+	return r.fh, nil
 }
 
 // statBlob is StatBlob over the shared client: existence + size from a HEAD.
 func (r *repairSession) statBlob(hash string) (bool, int64, error) {
-	hc, base, err := r.blobClient()
+	fh, err := r.blobFH()
 	if err != nil {
 		return false, 0, err
 	}
-	req, err := http.NewRequest(http.MethodHead, base+"/"+hash, nil)
-	if err != nil {
-		return false, 0, err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return false, 0, err
-	}
-	resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, resp.ContentLength, nil
-	case http.StatusNotFound:
-		return false, 0, nil
-	default:
-		return false, 0, fmt.Errorf("filehost stat %s: %s", short(hash), resp.Status)
-	}
+	return fh.Stat(hash)
 }
 
 // blobHead fetches the first bytes of a blob for sniffing via an HTTP Range
-// request (the filehost serves blobs with http.ServeFile, which honors Range;
-// if it didn't, we simply read the prefix and close).
+// request (the filehost serves blobs with http.ServeContent, which honors
+// Range; if it doesn't, the whole body comes back and is simply discarded).
 func (r *repairSession) blobHead(hash string) ([]byte, error) {
-	hc, base, err := r.blobClient()
+	fh, err := r.blobFH()
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, base+"/"+hash, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Range", "bytes=0-511")
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		return nil, fmt.Errorf("filehost GET %s: %s", short(hash), resp.Status)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 512))
+	data, _, err := fh.GetRange(hash, 512)
+	return data, err
 }
 
 // extFor maps a sniffed media type to a filename extension. Unknown types get
@@ -551,7 +519,13 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 	}
 	const chunk = 500
 	for i := 0; i < len(ops); i += chunk {
-		batch := r.tie.NewBatchIn(r.collection)
+		batch := r.tie.NewBatch()
+		// The journal lines and the Applied count are held until the batch has
+		// succeeded: a journal line is a record of something that happened, and
+		// Applied counts operations that were executed. Writing them first made
+		// a failed batch leave a journal claiming mutations that never took
+		// place (§5.1 L16).
+		var pending [][]string
 		for _, o := range ops[i:min(i+chunk, len(ops))] {
 			val := o.Value
 			if val == "DEST" {
@@ -570,16 +544,30 @@ func (r *repairSession) run(label string, ops []RepairOp) error {
 			case api.BatchDelete:
 				batch.Delete(o.Key, o.Relation, val)
 			}
-			if r.journal != nil {
-				r.journal.Write([]string{time.Now().Format(time.RFC3339), o.Kind, o.Key, o.Relation, val, o.Note})
-			}
-			r.res.Applied++
+			pending = append(pending, []string{time.Now().Format(time.RFC3339), o.Kind, o.Key, o.Relation, val, o.Note})
 		}
 		if _, err := r.tie.Batch(batch); err != nil {
 			return fmt.Errorf("batch in phase %q: %w", label, err)
 		}
+		for _, line := range pending {
+			if r.journal != nil {
+				if _, err := fmt.Fprintln(r.journal, TSVRecord(line...)); err != nil {
+					return fmt.Errorf("journaling in phase %q: %w", label, err)
+				}
+			}
+		}
+		if r.journal != nil {
+			// Flush per chunk: if the run dies later, the journal still holds a
+			// complete record of everything that was applied.
+			if f, ok := r.journal.(interface{ Flush() error }); ok {
+				if err := f.Flush(); err != nil {
+					return fmt.Errorf("flushing journal in phase %q: %w", label, err)
+				}
+			}
+		}
+		r.res.Applied += len(pending)
 	}
-	return r.tie.SyncIn(r.collection)
+	return r.tie.Sync()
 }
 
 func short(s string) string {

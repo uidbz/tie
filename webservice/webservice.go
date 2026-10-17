@@ -3,13 +3,16 @@ package webservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"syscall"
 
 	"github.com/uidbz/tie/auth"
@@ -18,9 +21,12 @@ import (
 )
 
 type Webservice struct {
-	Config   WebserviceConfig
-	mux      *http.ServeMux
-	requests []RequestInterface
+	Config WebserviceConfig
+	mux    *http.ServeMux
+	// handlers maps a request id to its handler and access level. Registering
+	// a request states its access, so a new request cannot fall out of a
+	// separate read/write table (§7.5).
+	handlers map[string]registration
 	db       *tiedb.TieTree
 	// sem bounds how many requests run concurrently. A nil channel means no
 	// ceiling. Each request acquires a slot before Reply and releases it after.
@@ -28,17 +34,22 @@ type Webservice struct {
 }
 
 type WebserviceConfig struct {
-	ListenOn      string
-	Insecure      bool
-	CertFile      string
-	KeyFile       string
-	UserNamespace string
-	DbPath        string
+	ListenOn string
+	Insecure bool
+	CertFile string
+	KeyFile  string
+	DbPath   string
 
 	// Auth resolves each request's role from its Basic Auth credentials and gates
 	// read vs write operations. Access management is done by populating it from
 	// the server's config file; it is read-only at runtime.
 	Auth *auth.Store
+
+	// MaxRequestBytes caps the body of a single request. Restore batches are
+	// legitimately large, so the default is generous; the point is that the
+	// limit exists at all, because the body is read whole before it is parsed.
+	// Zero selects defaultMaxRequestBytes.
+	MaxRequestBytes int64
 
 	// ReverseRelations restricts which relations (value1) collections index in
 	// reverse. Empty/nil indexes every relation (the original behavior). Set it
@@ -52,6 +63,11 @@ type WebserviceConfig struct {
 	// here indexes exactly its relations in reverse; unlisted collections use the
 	// default. Applied at collection load time, so changes require a restart.
 	CollectionReverseRelations []CollectionReverseRelations
+
+	// LoadMemoryLimitMB is a soft heap ceiling (GOMEMLIMIT semantics) applied
+	// while a collection is loaded from disk, bounding the peak a relaxed load
+	// pacer can otherwise reach on a small machine. 0 = runtime default.
+	LoadMemoryLimitMB int
 
 	// MaxConcurrentRequests caps how many requests execute simultaneously.
 	// Zero or negative means unbounded. tiedb is concurrency-safe, so this is a
@@ -68,13 +84,18 @@ type CollectionReverseRelations struct {
 	Relations  []string
 }
 
-func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webservice {
+// NewWebservice builds an empty service: it knows no request types until they
+// are registered on it (api.RegisterAll installs the tie protocol).
+func NewWebservice(config WebserviceConfig) *Webservice {
 	ws := &Webservice{}
 	ws.mux = http.NewServeMux()
 	ws.Config = config
-	ws.requests = requests
+	ws.handlers = map[string]registration{}
 	ws.db = tiedb.NewDB(true)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
+	if config.LoadMemoryLimitMB > 0 {
+		ws.db.SetLoadMemoryLimit(int64(config.LoadMemoryLimitMB) * 1024 * 1024)
+	}
 	if len(config.CollectionReverseRelations) > 0 {
 		overrides := make(map[tiedb.CollectionKey][]string, len(config.CollectionReverseRelations))
 		for _, o := range config.CollectionReverseRelations {
@@ -83,7 +104,7 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 		}
 		ws.db.SetReverseRelationsOverrides(overrides)
 	}
-	ws.db.SetBlobPolicy(metadata.HexHashBlobPolicy())
+	ws.db.SetBlobPolicy(tiedb.HexHashBlobPolicy(metadata.IsHexHash))
 	if config.MaxConcurrentRequests > 0 {
 		ws.sem = make(chan struct{}, config.MaxConcurrentRequests)
 	}
@@ -91,12 +112,15 @@ func NewWebservice(config WebserviceConfig, requests []RequestInterface) *Webser
 	return ws
 }
 
-func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
+// ListenAndServe serves the API until the process is asked to stop. It returns
+// an error rather than exiting: whether a failure kills the process is main's
+// call (cmd/tie-triplestore), not a library's. On SIGINT/SIGTERM it drains
+// in-flight handlers, closes the DB, and returns nil.
+func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) error {
 	routes(ws.mux)
 
 	if !ws.Config.Insecure && (ws.Config.CertFile == "" || ws.Config.KeyFile == "") {
-		slog.Error("set CertFile and KeyFile in the config file, or set Insecure = true; exiting")
-		return
+		return errors.New("set CertFile and KeyFile in the config file, or set Insecure = true")
 	}
 
 	srv := &http.Server{Addr: ws.Config.ListenOn, Handler: ws.mux}
@@ -114,22 +138,28 @@ func (ws *Webservice) ListenAndServe(routes func(*http.ServeMux)) {
 			slog.Error("HTTP shutdown error", "err", err)
 		}
 		ws.Close()
-		os.Exit(0)
 	}()
 
-	if ws.Config.Insecure {
-		slog.Info("listening", "addr", "http://"+ws.Config.ListenOn)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
-		}
-	} else {
-		slog.Info("listening", "addr", "https://"+ws.Config.ListenOn)
-		if err := srv.ListenAndServeTLS(ws.Config.CertFile, ws.Config.KeyFile); err != nil && err != http.ErrServerClosed {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
-		}
+	// Bind before announcing it. ListenAndServe logs and then binds, so a port
+	// already in use still printed "listening" and left the caller staring at a
+	// server that was never there — the example's error was unchecked, and the
+	// log said it had worked.
+	ln, err := net.Listen("tcp", ws.Config.ListenOn)
+	if err != nil {
+		return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
 	}
+	if ws.Config.Insecure {
+		slog.Info("listening", "addr", "http://"+ln.Addr().String())
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
+		}
+		return nil
+	}
+	slog.Info("listening", "addr", "https://"+ln.Addr().String())
+	if err := srv.ServeTLS(ln, ws.Config.CertFile, ws.Config.KeyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("listening on %s: %w", ws.Config.ListenOn, err)
+	}
+	return nil
 }
 
 // Close flushes and closes every collection's disk writer. Call it on shutdown
@@ -139,57 +169,139 @@ func (ws *Webservice) Close() {
 	ws.db.Close()
 }
 
-// readRequests are the request Ids that only read state. Every other Id
-// (including any future one) is treated as a write, so a new write operation is
-// never accidentally exposed to a read-only user.
-var readRequests = map[string]bool{
-	"Dummy":      true,
-	"Query":      true,
-	"Expand":     true,
-	"Associated": true,
-	"CoTags":     true,
-	"Dump":       true,
-	"Version":    true,
-}
-
-// accessFor classifies a request Id as read or write. Unknown Ids default to
-// write (fail-safe).
-func accessFor(reqName string) auth.Access {
-	if readRequests[reqName] {
-		return auth.AccessRead
+// AccessFor classifies a request id as read or write from how it was
+// registered. An unknown id defaults to write (fail-safe), so a request that was
+// never registered cannot be reached with read-only credentials.
+func (ws *Webservice) AccessFor(reqName string) auth.Access {
+	if reg, ok := ws.handlers[reqName]; ok {
+		return reg.access
 	}
 	return auth.AccessWrite
 }
+
+// register installs a request type. Register and RegisterStream are the
+// type-safe front ends; this is the shared part.
+func (ws *Webservice) register(id string, reg registration) {
+	if ws.handlers == nil {
+		ws.handlers = map[string]registration{}
+	}
+	ws.handlers[id] = reg
+}
+
+// ErrCollectionNotFound is returned by the read-path collection resolution
+// when the collection does not exist. Reads must not create collections:
+// any read-role caller (anonymous by default) could otherwise mint an
+// unbounded number of them — a file, directory, writer goroutine and
+// channel buffers per name — just by querying random names.
+var ErrCollectionNotFound = errors.New("collection not found")
+
+// ErrInvalidName marks a request-supplied namespace or collection id that the
+// name pattern rejects. It reaches the HTTP layer as 400 rather than 500, so a
+// client bug or an attack is distinguishable from a server fault in logs and
+// monitoring.
+var ErrInvalidName = errors.New("invalid namespace/collection name")
+
+// defaultMaxRequestBytes caps a request body when the config does not. A body
+// is held whole in memory before it is parsed, so the cap has to exist; it is
+// generous because a Batch (restore, repair) legitimately carries many ops.
+const defaultMaxRequestBytes = 256 << 20
+
+func (ws *Webservice) maxRequestBytes() int64 {
+	if ws.Config.MaxRequestBytes > 0 {
+		return ws.Config.MaxRequestBytes
+	}
+	return defaultMaxRequestBytes
+}
+
+// statusForError maps an application error to an HTTP status. Application
+// errors used to be answered as 200 with Success:false, which leaves curl,
+// proxies and monitoring blind to them (§4.15).
+func statusForError(err error) int {
+	switch {
+	case errors.Is(err, ErrCollectionNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrInvalidName):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+// answerError writes an application error with a real status code and the JSON
+// ReplyStatus body the client decodes, so the message still reaches it.
+func answerError(w http.ResponseWriter, status int, prepend string, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	fmt.Fprint(w, ErrorToJsonString(prepend, err))
+}
+
+// collectionNamePattern bounds namespace and collection ids to name-safe
+// characters. Both arrive straight from the request and are used to build
+// filesystem paths (DbPath join + "<collection>.tie"); without this,
+// Namespace: "../../home/x" creates or appends .tie files anywhere the
+// service user can write, and Drop deletes them.
+var collectionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func validCollectionName(s string) bool { return collectionNamePattern.MatchString(s) }
 
 func (ws *Webservice) DbPath(namespace string) string {
 	return filepath.Join(ws.Config.DbPath, namespace)
 }
 
-func (ws *Webservice) GetAccount(account string) *tiedb.Collection {
-	key := tiedb.CollectionKey{Database: ws.DbPath(ws.Config.UserNamespace), Collection: account}
-
-	return ws.db.GetCollection(key)
+// collectionKey validates the request-supplied namespace and collection id
+// and builds the tiedb key. This is the single validation point for every
+// request-supplied collection name.
+func (ws *Webservice) collectionKey(namespace, collection string) (tiedb.CollectionKey, error) {
+	if !validCollectionName(namespace) || !validCollectionName(collection) {
+		return tiedb.CollectionKey{}, fmt.Errorf("%w %q/%q", ErrInvalidName, namespace, collection)
+	}
+	return tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}, nil
 }
 
-func (ws *Webservice) GetCollection(namespace, collection string) *tiedb.Collection {
-	key := tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}
-
-	return ws.db.GetCollection(key)
+// GetCollection resolves a request's collection. Write requests may create
+// it; read requests only ever look it up, and get ErrCollectionNotFound for
+// an absent one (handlers answer that like an empty collection).
+func (ws *Webservice) GetCollection(namespace, collection string, writable bool) (*tiedb.Collection, error) {
+	key, err := ws.collectionKey(namespace, collection)
+	if err != nil {
+		return nil, err
+	}
+	if writable {
+		col, err := ws.db.TryGetCollection(key)
+		if err != nil {
+			return nil, err
+		}
+		return col, nil
+	}
+	col, ok := ws.db.LookupCollection(key)
+	if !ok {
+		return nil, ErrCollectionNotFound
+	}
+	if err := col.Err(); err != nil {
+		return nil, err
+	}
+	return col, nil
 }
 
 func (ws *Webservice) DropCollection(namespace, collection string) error {
-	key := tiedb.CollectionKey{Database: ws.DbPath(namespace), Collection: collection}
+	key, err := ws.collectionKey(namespace, collection)
+	if err != nil {
+		return err
+	}
 
 	return ws.db.DropCollection(key)
 }
 
 func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
-	raw_data, _ := io.ReadAll(r.Body)
+	// The body is read whole before it is parsed, so it must be capped: one
+	// oversized request used to be enough to exhaust memory (§4.15).
+	r.Body = http.MaxBytesReader(w, r.Body, ws.maxRequestBytes())
+	raw_data, errRead := io.ReadAll(r.Body)
 	r.Body.Close()
 	reqName := r.PathValue("request")
 	slog.Info("request", "from", r.RemoteAddr, "request", reqName)
 
-	if ok, status := ws.Config.Auth.Authorize(r, accessFor(reqName)); !ok {
+	if ok, status := ws.Config.Auth.Authorize(r, ws.AccessFor(reqName)); !ok {
 		if status == http.StatusUnauthorized {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 		}
@@ -199,21 +311,34 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	username, _, _ := r.BasicAuth()
 
-	for _, x := range ws.requests {
-		if reqName == x.GetId() {
-			// Unmarshal into a fresh instance so concurrent requests never
-			// share the prototype's mutable fields. The HTTP server already
-			// runs each request on its own goroutine, so we answer inline.
-			if ws.sem != nil {
-				ws.sem <- struct{}{}
-				defer func() { <-ws.sem }()
-			}
-			ws.AnswerRequest(w, x.New(), raw_data, username)
-			return
-		}
+	if errRead != nil {
+		slog.Warn("reading request body", "from", r.RemoteAddr, "request", reqName, "err", errRead)
+		answerError(w, http.StatusRequestEntityTooLarge, "Request body too large:", errRead)
+		return
 	}
 
+	reg, known := ws.handlers[reqName]
+	if known {
+		// The handler decodes into a fresh request value, so concurrent
+		// requests never share mutable state. The HTTP server already runs
+		// each request on its own goroutine, so we answer inline.
+		if ws.sem != nil {
+			ws.sem <- struct{}{}
+			defer func() { <-ws.sem }()
+		}
+		// Write requests may create the collection; reads only look it up.
+		writable := reg.access == auth.AccessWrite
+		env := &Environment{username, func(ns, col string) (*tiedb.Collection, error) {
+			return ws.GetCollection(ns, col, writable)
+		}, ws}
+		reg.serve(env, raw_data, w)
+		return
+	}
+
+	// An unknown request id used to answer 200 with an empty body, which the
+	// client then failed to JSON-decode.
 	slog.Warn("unrecognized request", "from", r.RemoteAddr, "request", reqName)
+	answerError(w, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqName))
 }
 
 func ErrorToJsonString(prepend string, err error) string {
@@ -224,47 +349,15 @@ func ErrorToJsonString(prepend string, err error) string {
 	json_reply, err := json.Marshal(msg)
 
 	if err != nil {
-		return "[\"Success\": false, \"Message\": \"Internal error: " + err.Error() + "\"]"
+		// Marshal of ReplyStatus cannot realistically fail; if it does, the
+		// fallback still has to be JSON the client can decode (the old one was
+		// `["Success": false, ...]`, which is not JSON at all).
+		fallback, _ := json.Marshal(ReplyStatus{
+			Success: false,
+			Message: "Internal error: " + err.Error(),
+		})
+		return string(fallback)
 	}
 
 	return string(json_reply)
-}
-
-func (ws *Webservice) AnswerRequest(w http.ResponseWriter, request RequestInterface, rawData []byte, username string) {
-	errRequest := json.Unmarshal(rawData, request)
-	if errRequest != nil {
-		slog.Error("unmarshalling request", "err", errRequest)
-		msg := ErrorToJsonString("Error unmarshalling request:", errRequest)
-		fmt.Fprint(w, msg)
-		return
-	}
-
-	env := &Environment{username, ws.GetAccount, ws.GetCollection, ws}
-
-	// Streaming requests write their reply directly to w (NDJSON) so the whole
-	// reply is never held in memory. The caller's semaphore slot (see
-	// RequestHandler) is held for the full stream — that is the intended
-	// MaxConcurrentRequests load-shedding behavior for a large dump.
-	if s, ok := request.(StreamingRequestInterface); ok {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		if err := s.StreamReply(env, w); err != nil {
-			// Status and headers are already committed; we can only log.
-			slog.Error("stream reply error", "err", err)
-		}
-		return
-	}
-
-	reply, errReply := request.Reply(env)
-	if errReply != nil {
-		msg := ErrorToJsonString("Error:", errReply)
-		fmt.Fprint(w, msg)
-	} else {
-		json_reply, errMarshal := json.Marshal(reply.ReplyStructPtr)
-		if errMarshal != nil {
-			msg := ErrorToJsonString("Internal error:", errMarshal)
-			fmt.Fprint(w, msg)
-		} else {
-			fmt.Fprint(w, string(json_reply))
-		}
-	}
 }

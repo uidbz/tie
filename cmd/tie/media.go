@@ -17,9 +17,9 @@ import (
 
 // resolveSubject maps a CLI argument to a subject: a virtual path (leading
 // "/" or "tie:") resolves to its DirUID, anything else is taken verbatim.
-func resolveSubject(arg string) (string, error) {
+func resolveSubject(a *app, arg string) (string, error) {
 	if strings.HasPrefix(arg, "/") || strings.HasPrefix(arg, client.FileURIScheme) {
-		uid, err := tie.DirUIDFromPath(arg)
+		uid, err := a.tie.DirUIDFromPath(arg)
 		if err != nil {
 			return "", err
 		}
@@ -51,7 +51,22 @@ func parseSince(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("--since %q: want a duration (72h), days (30d) or a date (2026-01-31)", s)
 }
 
-func cmdMedia() *cli.Command {
+// indexResultRow prints one index pass as data: subject and the counts,
+// tab-separated in a fixed order. The old `members=… added=…` form mixed
+// labels into what should be a parseable row (§6.2).
+func indexResultRow(o *out, subject string, r client.IndexResult) {
+	o.row(subject,
+		strconv.Itoa(r.Members), strconv.Itoa(r.AddedMembers), strconv.Itoa(r.DroppedStale),
+		strconv.Itoa(r.Discs), strconv.Itoa(r.Ops))
+}
+
+// countRow prints a command's result count as a data row — label and value,
+// the shape `tie stat` already prints — instead of a sentence (§6.2).
+func countRow(o *out, label string, n int) {
+	o.row(label, strconv.Itoa(n))
+}
+
+func cmdMedia(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "media",
 		Usage: "Media collection model: index, backfill, rescan, restat",
@@ -62,42 +77,48 @@ func cmdMedia() *cli.Command {
 				ArgsUsage: "<path|uid>...",
 				Flags:     []cli.Flag{&cli.BoolFlag{Name: "dry-run", Usage: "Report what would change"}},
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
 					if c.Args().Len() == 0 {
 						return errors.New("need at least one collection path or uid")
 					}
-					for _, a := range c.Args().Slice() {
-						uid, err := resolveSubject(a)
-						if err != nil {
-							return err
-						}
-						r, err := tie.IndexCollection(client.DirUID(uid), client.IndexOptions{DryRun: c.Bool("dry-run")})
-						if err != nil {
-							return err
-						}
-						fmt.Printf("%s\tmembers=%d added=%d stale=%d discs=%d ops=%d\n", uid, r.Members, r.AddedMembers, r.DroppedStale, r.Discs, r.Ops)
+					o, err := a.outFor(c, "subject", "members", "added", "stale", "discs", "ops")
+					if err != nil {
+						return err
 					}
-					return nil
+					for _, arg := range c.Args().Slice() {
+						uid, err := resolveSubject(a, arg)
+						if err != nil {
+							return err
+						}
+						r, err := a.tie.IndexCollection(client.DirUID(uid), client.IndexOptions{DryRun: c.Bool("dry-run")})
+						if err != nil {
+							return err
+						}
+						indexResultRow(o, uid, r)
+					}
+					return o.flush()
 				},
 			},
 			{
 				Name:  "backfill",
 				Usage: "Index every collection in the store (data imported before the collection contract)",
+				Description: "One row per changed collection on stdout, tab-separated: subject,\n" +
+					"members, added-members, dropped-stale, discs, ops; then the summary\n" +
+					"as label/value rows.",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "dry-run", Usage: "Report what would change"},
 					&cli.StringSliceFlag{Name: "type", Usage: "Only collections with this label (repeatable; default: all)"},
 					&cli.BoolFlag{Name: "rescan", Usage: "Also re-read audio tags from the filehost for tracks predating genre/disc/composer (downloads file heads)"},
 					&cli.BoolFlag{Name: "playlists", Value: true, Usage: "Also migrate legacy playlists"},
+					&cli.BoolFlag{Name: "names", Value: true, Usage: "Also recompute name triples from filename (fixes pre-0.6 TrimRight corruption)"},
 				},
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
 					dry := c.Bool("dry-run")
+					o, err := a.outFor(c, "subject", "members", "added", "stale", "discs", "ops")
+					if err != nil {
+						return err
+					}
 					if c.Bool("rescan") {
-						n, err := tie.RescanAudio(client.RescanOptions{DryRun: dry, Progress: func(done, total int, hash string, err error) {
+						n, err := a.tie.RescanAudio(client.RescanOptions{DryRun: dry, Progress: func(done, total int, hash string, err error) {
 							if err != nil {
 								fmt.Fprintf(os.Stderr, "rescan %s: %v\n", hash, err)
 							}
@@ -105,66 +126,74 @@ func cmdMedia() *cli.Command {
 								fmt.Fprintf(os.Stderr, "rescanned %d/%d\n", done, total)
 							}
 						}})
-						fmt.Printf("rescanned tracks: %d\n", n)
+						countRow(o, "rescanned-tracks", n)
 						if err != nil {
 							fmt.Fprintln(os.Stderr, "rescan: first error:", err)
 						}
 					}
 					if c.Bool("playlists") && !dry {
-						n, err := tie.MigrateLegacyPlaylists()
+						n, err := a.tie.MigrateLegacyPlaylists()
 						if err != nil {
 							return err
 						}
-						fmt.Printf("migrated playlists: %d\n", n)
+						countRow(o, "migrated-playlists", n)
+					}
+					if c.Bool("names") {
+						n, err := a.tie.RepairNames()
+						if err != nil {
+							return err
+						}
+						countRow(o, "names-repaired", n)
 					}
 					var types []string
 					if t := c.StringSlice("type"); len(t) > 0 {
 						types = t
 					}
-					res, err := tie.Backfill(client.BackfillOptions{DryRun: dry, Types: types, Progress: func(done, total int, r client.IndexResult, err error) {
+					res, err := a.tie.Backfill(client.BackfillOptions{DryRun: dry, Types: types, Progress: func(done, total int, r client.IndexResult, err error) {
 						if err != nil {
 							fmt.Fprintln(os.Stderr, err)
 						} else if r.Ops > 0 {
-							fmt.Printf("%s\tmembers=%d added=%d stale=%d discs=%d ops=%d\n", r.Collection, r.Members, r.AddedMembers, r.DroppedStale, r.Discs, r.Ops)
+							indexResultRow(o, string(r.Collection), r)
 						}
 					}})
 					if err != nil {
 						return err
 					}
-					fmt.Printf("collections: %d, changed: %d, archives stamped: %d, errors: %d\n", res.Collections, res.Changed, res.Archives, len(res.Errors))
-					return nil
+					countRow(o, "collections", res.Collections)
+					countRow(o, "changed", res.Changed)
+					countRow(o, "archives-stamped", res.Archives)
+					countRow(o, "errors", len(res.Errors))
+					return o.flush()
 				},
 			},
 			{
 				Name:  "restat",
 				Usage: "Rebuild play-count / last-played statistics from the play events",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					n, err := tie.RecomputeStats()
+					o, err := a.outFor(c, "result", "count")
 					if err != nil {
 						return err
 					}
-					fmt.Printf("subjects updated: %d\n", n)
-					return nil
+					n, err := a.tie.RecomputeStats()
+					if err != nil {
+						return err
+					}
+					countRow(o, "subjects-updated", n)
+					return o.flush()
 				},
 			},
 			{
 				Name:  "schema",
 				Usage: "Declare the media value types (year, duration, added-at, …)",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					return tie.EnsureMediaSchema()
+					return a.tie.EnsureMediaSchema()
 				},
 			},
 		},
 	}
 }
 
-func cmdHistory() *cli.Command {
+func cmdHistory(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "history",
 		Usage: "List recorded plays, newest first",
@@ -174,9 +203,6 @@ func cmdHistory() *cli.Command {
 			&cli.BoolFlag{Name: "skips", Usage: "Include skipped plays"},
 		},
 		Action: func(_ context.Context, c *cli.Command) error {
-			if tie == nil {
-				return errors.New("Error: Config not loaded")
-			}
 			since, err := parseSince(c.String("since"))
 			if err != nil {
 				return err
@@ -188,7 +214,7 @@ func cmdHistory() *cli.Command {
 					q.Limit *= 2 // headroom for filtered-out skips
 				}
 			}
-			events, err := tie.RecentPlays(q)
+			events, err := a.tie.RecentPlays(q)
 			if err != nil {
 				return err
 			}
@@ -200,11 +226,11 @@ func cmdHistory() *cli.Command {
 				keys = append(keys, e.Subject)
 			}
 			names := map[string]string{}
-			if rows, err := tie.Expand(keys); err == nil {
+			if rows, err := a.tie.Expand(keys); err == nil {
 				for _, r := range rows {
 					n := client.RowFirst(r, "title")
-					if a := client.RowFirst(r, "artist"); a != "" && n != "" {
-						n = a + " — " + n
+					if artist := client.RowFirst(r, "artist"); artist != "" && n != "" {
+						n = artist + " — " + n
 					}
 					if n == "" {
 						n = client.RowFirst(r, "filename")
@@ -221,7 +247,7 @@ func cmdHistory() *cli.Command {
 	}
 }
 
-func cmdPlaylist() *cli.Command {
+func cmdPlaylist(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "playlist",
 		Usage: "Manage playlists: list, show, create, delete, migrate",
@@ -230,10 +256,7 @@ func cmdPlaylist() *cli.Command {
 				Name:  "list",
 				Usage: "List playlists",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					ps, err := tie.ListPlaylists()
+					ps, err := a.tie.ListPlaylists()
 					if err != nil {
 						return err
 					}
@@ -253,10 +276,7 @@ func cmdPlaylist() *cli.Command {
 				Usage:     "Print a playlist's track hashes in order",
 				ArgsUsage: "<uid>",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					p, err := tie.ReadPlaylist(c.Args().First())
+					p, err := a.tie.ReadPlaylist(c.Args().First())
 					if err != nil {
 						return err
 					}
@@ -271,13 +291,10 @@ func cmdPlaylist() *cli.Command {
 				Usage:     "Create a playlist from track hashes",
 				ArgsUsage: "<name> <hash>...",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
 					if c.Args().Len() < 1 {
 						return errors.New("need a name")
 					}
-					uid, err := tie.CreatePlaylist(c.Args().First(), c.Args().Tail(), nil)
+					uid, err := a.tie.CreatePlaylist(c.Args().First(), c.Args().Tail(), nil)
 					if err != nil {
 						return err
 					}
@@ -290,25 +307,23 @@ func cmdPlaylist() *cli.Command {
 				Usage:     "Delete a playlist (tracks are untouched)",
 				ArgsUsage: "<uid>",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					return tie.DeletePlaylist(c.Args().First())
+					return a.tie.DeletePlaylist(c.Args().First())
 				},
 			},
 			{
 				Name:  "migrate",
 				Usage: "Convert legacy (audio-dir) playlists to the playlist type",
 				Action: func(_ context.Context, c *cli.Command) error {
-					if tie == nil {
-						return errors.New("Error: Config not loaded")
-					}
-					n, err := tie.MigrateLegacyPlaylists()
+					o, err := a.outFor(c, "result", "count")
 					if err != nil {
 						return err
 					}
-					fmt.Printf("migrated: %d\n", n)
-					return nil
+					n, err := a.tie.MigrateLegacyPlaylists()
+					if err != nil {
+						return err
+					}
+					countRow(o, "migrated", n)
+					return o.flush()
 				},
 			},
 		},

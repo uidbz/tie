@@ -125,6 +125,13 @@ func (ri *retentionIndex) authorized(hash, token string) bool {
 func (ri *retentionIndex) recordUpload(hash string, expiresAt int64, token string, now int64, blobExisted bool) error {
 	ri.mu.Lock()
 	defer ri.mu.Unlock()
+	return ri.recordUploadLocked(hash, expiresAt, token, now, blobExisted)
+}
+
+// recordUploadLocked is recordUpload with the index lock already held. It exists
+// so a caller can make "is this blob on disk?" and "record its retention" one
+// atomic step — see blobStore.claimExisting.
+func (ri *retentionIndex) recordUploadLocked(hash string, expiresAt int64, token string, now int64, blobExisted bool) error {
 	e, ok := ri.entries[hash]
 	switch {
 	case ok:

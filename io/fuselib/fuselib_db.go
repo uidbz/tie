@@ -9,6 +9,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/uidbz/tie/client"
+	"github.com/uidbz/tie/io/fhclient"
 	"github.com/uidbz/tie/io/tiefs"
 )
 
@@ -35,17 +36,17 @@ import (
 // re-tagging is visible without remounting.
 //
 // All tree semantics (query parsing, disambiguation, path navigation, staged
-// writes, meta files) live in tiesfs; this file is the go-fuse adapter.
+// writes, meta files) live in tiefs; this file is the go-fuse adapter.
 type TieDBFuse struct {
-	tree     *tiesfs.Tree
+	tree     *tiefs.Tree
 	fuseTree *TieFuse // reused for content-addressed file/dir bytes + cache
 }
 
 func NewTieDBFuse(tie *client.TieClient, host client.FileHost, cacheSizeGB int, verify bool) *TieDBFuse {
-	store := tiesfs.NewStore(host, cacheSizeGB, verify)
+	store := tiefs.NewStore(host, cacheSizeGB, verify)
 	return &TieDBFuse{
-		tree:     tiesfs.NewTreeWithStore(store, tie),
-		fuseTree: &TieFuse{store: store, config: config{filehost: host.URL, client: client.HTTPClientFor(host), verify: verify}},
+		tree:     tiefs.NewTreeWithStore(store, tie),
+		fuseTree: &TieFuse{store: store, config: config{fh: fhclient.New(host.URL, client.HTTPClientFor(host)), verify: verify}},
 	}
 }
 
@@ -55,7 +56,7 @@ func (state *TieDBFuse) Close() error {
 	return state.tree.Close()
 }
 
-// errnoFor maps a tiesfs io/fs error onto the FUSE errno the kernel expects.
+// errnoFor maps a tiefs io/fs error onto the FUSE errno the kernel expects.
 // A nil error maps to 0 (success).
 func errnoFor(err error, fallback syscall.Errno) syscall.Errno {
 	if err == nil {
@@ -68,6 +69,8 @@ func errnoFor(err error, fallback syscall.Errno) syscall.Errno {
 		return syscall.EEXIST
 	case errors.Is(err, stdfs.ErrPermission):
 		return syscall.EACCES
+	case errors.Is(err, tiefs.ErrRenameLoop):
+		return syscall.EINVAL
 	default:
 		return fallback
 	}
@@ -125,9 +128,9 @@ var (
 
 func (q *tagQueryRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := []fuse.DirEntry{
-		{Name: tiesfs.ReadmeName, Mode: fuse.S_IFREG},
-		{Name: tiesfs.TagListName, Mode: fuse.S_IFREG},
-		{Name: tiesfs.TypeListName, Mode: fuse.S_IFREG},
+		{Name: tiefs.ReadmeName, Mode: fuse.S_IFREG},
+		{Name: tiefs.TagListName, Mode: fuse.S_IFREG},
+		{Name: tiefs.TypeListName, Mode: fuse.S_IFREG},
 	}
 	// Saved queries from config appear as ready-made query directories.
 	for name := range q.state.tree.Tie.Config.Queries {
@@ -138,14 +141,14 @@ func (q *tagQueryRoot) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno
 
 func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	switch name {
-	case tiesfs.ReadmeName:
-		child := &staticFile{data: []byte(tiesfs.ReadmeText)}
+	case tiefs.ReadmeName:
+		child := &staticFile{data: []byte(tiefs.ReadmeText)}
 		out.Size = uint64(len(child.data))
 		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
-	case tiesfs.TagListName:
+	case tiefs.TagListName:
 		child := &tagListFile{state: q.state}
 		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
-	case tiesfs.TypeListName:
+	case tiefs.TypeListName:
 		child := &typeListFile{state: q.state}
 		return q.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFREG}), 0
 	}
@@ -157,7 +160,7 @@ func (q *tagQueryRoot) Lookup(ctx context.Context, name string, out *fuse.EntryO
 	}
 	// Validate the query resolves before materializing the inode so a bogus
 	// query returns ENOENT rather than an empty directory.
-	scope, include, exclude := tiesfs.ParseTagQuery(query)
+	scope, include, exclude := tiefs.ParseTagQuery(query)
 	if len(include) == 0 && scope == "" {
 		return nil, syscall.ENOENT
 	}
@@ -182,7 +185,7 @@ func (f *tagListFile) contents() ([]byte, syscall.Errno) {
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	return tiesfs.RenderMeta(tags), 0
+	return tiefs.RenderMeta(tags), 0
 }
 
 func (f *tagListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -229,7 +232,7 @@ func (f *typeListFile) contents() ([]byte, syscall.Errno) {
 	if err != nil {
 		return nil, syscall.EIO
 	}
-	return tiesfs.RenderMeta(types), 0
+	return tiefs.RenderMeta(types), 0
 }
 
 func (f *typeListFile) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {

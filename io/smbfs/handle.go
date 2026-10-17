@@ -24,7 +24,7 @@ type handle interface {
 //
 // Two modes:
 //
-//   - Staged (wh != nil): every read and write goes to the tiesfs staging
+//   - Staged (wh != nil): every read and write goes to the tiefs staging
 //     temp file; Close commits the bytes to the store. WriteFile(p, nil)
 //     creates one immediately (the smb CREATE flow: stage, Stat, OpenFile).
 //   - Lazy (wh == nil): reads are served straight from the blob cache; the
@@ -46,8 +46,8 @@ type dataHandle struct {
 	forceCommit bool // created by WriteFile(p,nil): commit even if never written
 
 	mu     sync.Mutex
-	wh     *tiesfs.WriteHandle // non-nil once staged
-	blob   *tiesfs.Blob        // lazy read source, resolved on first read
+	wh     *tiefs.WriteHandle // non-nil once staged
+	blob   *tiefs.Blob        // lazy read source, resolved on first read
 	closed bool
 }
 
@@ -152,6 +152,11 @@ func (h *dataHandle) Close() error {
 			h.file = h.wh.File()
 		}
 	}
+	if h.blob != nil {
+		// Release the cache reference this handle took on first read.
+		h.blob.Close()
+		h.blob = nil
+	}
 	h.sh.dropPending(h.path, h)
 	return err
 }
@@ -196,7 +201,7 @@ func (h *dataHandle) readAll() ([]byte, error) {
 type metaHandle struct {
 	sh          *Share
 	path        string
-	bind        tiesfs.MetaBinding
+	bind        tiefs.MetaBinding
 	forceCommit bool // created by WriteFile(p,nil): commit even if never written
 
 	mu     sync.Mutex
@@ -277,7 +282,7 @@ func (h *metaHandle) Sync() error {
 	if !h.dirty && !h.forceCommit {
 		return nil
 	}
-	return h.bind.Store(tiesfs.ParseLines(h.buf))
+	return h.bind.Store(tiefs.ParseLines(h.buf))
 }
 
 func (h *metaHandle) Close() error {
@@ -310,7 +315,7 @@ func (h *metaHandle) readAll() []byte {
 // WriteFile, which answers fs.ErrPermission for read-only paths.
 type roFile struct {
 	data []byte
-	blob *tiesfs.Blob
+	blob *tiefs.Blob
 }
 
 var _ = (gofs.File)((*roFile)(nil))

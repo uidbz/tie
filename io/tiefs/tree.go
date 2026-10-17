@@ -1,4 +1,4 @@
-// Package tiesfs is the transport-agnostic virtual filesystem that tie
+// Package tiefs is the transport-agnostic virtual filesystem that tie
 // exposes: the live, tag-derived tree served by `tie mount --db` and by
 // tie-smb. It carries the semantics of the three top-level views - /query (tag
 // queries), /files (the path-based import tree), and /tags (writable tag/type
@@ -13,13 +13,14 @@
 // Errors follow io/fs conventions: a missing path reports an error wrapping
 // fs.ErrNotExist, a collision wraps fs.ErrExist. Transports map these onto
 // their own codes (ENOENT/EEXIST for FUSE, SMB status codes for tie-smb).
-package tiesfs
+package tiefs
 
 import (
+	"hash/fnv"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/uidbz/tie/client"
 )
@@ -31,12 +32,9 @@ type Store struct {
 	cache    *Cache
 	host     client.FileHost // filehost that receives uploads from the write path
 	writeDir string          // temp dir staging in-flight writes (no hash until commit)
+	spoolDir string          // where bytes whose commit failed are kept
 	uid      uint32          // owner uid for all files
 	gid      uint32          // owner gid for all files
-
-	inodes      uint64
-	hashToInode map[string]uint64
-	inodeLock   sync.RWMutex
 }
 
 // NewStore builds a store reading blobs from host. cacheSizeGB is the on-disk
@@ -44,13 +42,31 @@ type Store struct {
 func NewStore(host client.FileHost, cacheSizeGB int, verify bool) *Store {
 	writeDir, _ := os.MkdirTemp("", "tie-write-*")
 	return &Store{
-		cache:       NewCache(host.URL, client.HTTPClientFor(host), int64(cacheSizeGB)*1024*1024*1024, verify),
-		host:        host,
-		writeDir:    writeDir,
-		uid:         uint32(os.Getuid()),
-		gid:         uint32(os.Getgid()),
-		hashToInode: make(map[string]uint64),
+		cache:    NewCache(host.URL, client.HTTPClientFor(host), int64(cacheSizeGB)*1024*1024*1024, verify),
+		host:     host,
+		writeDir: writeDir,
+		spoolDir: defaultSpoolDir(),
+		uid:      uint32(os.Getuid()),
+		gid:      uint32(os.Getgid()),
 	}
+}
+
+// defaultSpoolDir is where a write whose commit failed is left for the user to
+// find (§4.9): $TIE_SPOOL_DIR, else $XDG_STATE_HOME/tie/unsaved, else
+// ~/.local/state/tie/unsaved, else the temp dir.
+func defaultSpoolDir() string {
+	if dir := os.Getenv("TIE_SPOOL_DIR"); dir != "" {
+		return dir
+	}
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return filepath.Join(os.TempDir(), "tie-unsaved")
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(base, "tie", "unsaved")
 }
 
 // Close releases the on-disk blob cache and the write-staging dir. Call once
@@ -73,23 +89,25 @@ func (s *Store) UID() uint32 { return s.uid }
 func (s *Store) GID() uint32 { return s.gid }
 
 // InodeID returns the stable inode number for a key (a content hash, a DirUID,
-// or a derived control-file key). Concurrent callers asking about the same key
-// get the same number, which is how both transports deduplicate identities.
+// or a derived control-file key). It is derived from the key itself, so it is
+// the same number in every mount and across restarts, and nothing is
+// remembered: the map this used to be grew by one entry per distinct key ever
+// listed and was never pruned, which leaked for months in a long-lived
+// tie-smb mount — and because the numbers came from a per-process counter, the
+// same file changed inode when the mount restarted (§4.17).
+//
+// Collisions are possible (64-bit FNV-1a) and tolerable: the inode is an
+// identity used to deduplicate handles, and a collision makes two files look
+// like hard links to one object. At library scale (10M keys) the chance of any
+// collision is around one in a million. 0 is reserved ("no inode" to FUSE and
+// to the SMB file ids), so it maps to 1.
 func (s *Store) InodeID(key string) uint64 {
-	s.inodeLock.RLock()
-	i, ok := s.hashToInode[key]
-	s.inodeLock.RUnlock()
-	if ok {
+	h := fnv.New64a()
+	h.Write([]byte(key))
+	if i := h.Sum64(); i != 0 {
 		return i
 	}
-
-	s.inodeLock.Lock()
-	defer s.inodeLock.Unlock()
-
-	s.inodes++
-	s.hashToInode[key] = s.inodes
-
-	return s.inodes
+	return 1
 }
 
 // Tree binds a Store to a triple-store client: the live tag-derived

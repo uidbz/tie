@@ -13,69 +13,76 @@ func (ic *Collection) CoTags(q TagQuery, tagRelation string) ([]string, bool) {
 		return nil, false
 	}
 
-	var set *AssociationSet
-	var found bool
-	if q.Reverse {
-		set, found = ic.GetReverseAssociations(q.Include[0])
-	} else {
-		set, found = ic.GetAssociations(q.Include[0])
-	}
+	set, found, empty := ic.resolveQuery(q)
 	if !found {
 		return nil, false
 	}
+	if empty {
+		return nil, true
+	}
 
-	for _, tag := range q.Include[1:] {
-		other, ok := ic.GetReverseAssociations(tag)
+	// No triple in the collection carries that relation: nothing to report,
+	// without walking the matches at all.
+	tagRelID, _, known := ic.getEntryFromString(tagRelation)
+	if !known {
+		return nil, true
+	}
+
+	// The answer is tag values, never the keys — so the keys are never decoded.
+	// One pass over the matched set resolves each association once, and only to
+	// learn the subject it names; association entries sharing a subject are
+	// skipped before the record read (§5.2 item 8).
+	type subject struct {
+		level int
+		id    uint64
+	}
+	var subjects []subject
+	seenSubject := make(map[uint64]bool, set.Size())
+	seenAssoc := make(map[uint64]bool, set.Size())
+	set.ForEach(func(ua UniqueAssociation, pos int64) {
+		// Within one set the same AssociateTo always names the same subject:
+		// in a reverse set it is the subject id, in a forward set every entry
+		// shares the seed.
+		if seenAssoc[ua.AssociateTo] {
+			return
+		}
+		seenAssoc[ua.AssociateTo] = true
+		t, ok := ic.resolveEntry(ua, pos)
 		if !ok {
-			return nil, true // unmet AND term: empty result
+			return
 		}
-		set = set.intersect(other)
-	}
-
-	for _, tag := range q.Exclude {
-		if other, ok := ic.GetReverseAssociations(tag); ok {
-			set = set.exclude(other)
+		if seenSubject[t.Key] {
+			return
 		}
-	}
+		seenSubject[t.Key] = true
+		subjects = append(subjects, subject{level: t.Level, id: t.Key})
+	})
 
-	if q.Scope != "" {
-		scope, ok := ic.GetReverseAssociations(q.Scope)
-		if !ok {
-			return nil, true // nothing carries the scope value
-		}
-		set = set.intersectByAssociate(scope)
-	}
-
-	// Resolve the result set to unique key strings (the matching content hashes).
-	// Sort with no value1 filter and Limit=-1 to enumerate all triples; the Key
-	// field of each triple is the content hash we care about.
-	allTriples, _ := ic.Sort(set, "", SortOptions{Limit: -1})
-	seenKey := make(map[string]bool, len(allTriples))
-	keys := make([]string, 0, len(allTriples))
-	for _, t := range allTriples {
-		if !seenKey[t.Key] {
-			seenKey[t.Key] = true
-			keys = append(keys, t.Key)
-		}
-	}
-
-	// For each matching hash, collect all of its tagRelation values via its
-	// forward associations. This is the same path ExpandKeys uses for Expand
-	// queries, restricted to one relation.
-	seenTag := make(map[string]bool)
+	// Second pass: each subject's values for tagRelation, filtered by relation
+	// id before the record read, and deduplicated by value id — a tag carried
+	// by a thousand files is decoded once, not a thousand times. The forward
+	// set is reached by (level, id), so the keys are never re-interned.
+	seenTag := make(map[uint64]bool)
 	var tags []string
-	for _, key := range keys {
-		tree, ok := ic.GetAssociations(key)
-		if !ok {
+	for _, s := range subjects {
+		tree := ic.getAssociations(s.level, s.id)
+		if tree.Size() == 0 {
 			continue
 		}
-		tagTriples, _ := ic.Sort(tree, tagRelation, SortOptions{Limit: -1})
-		for _, t := range tagTriples {
-			if !seenTag[t.Value2] {
-				seenTag[t.Value2] = true
-				tags = append(tags, t.Value2)
+		tree.ForEach(func(ua UniqueAssociation, pos int64) {
+			if ua.Relation != tagRelID {
+				return
 			}
-		}
+			t, ok := ic.resolveEntry(ua, pos)
+			if !ok || t.Value1 != tagRelID {
+				return
+			}
+			if seenTag[t.Value2] {
+				return
+			}
+			seenTag[t.Value2] = true
+			tags = append(tags, ic.getValueString(t.Value2Level, t.Value2))
+		})
 	}
 
 	return tags, true

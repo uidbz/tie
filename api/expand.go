@@ -26,18 +26,19 @@ type ExpandReply struct {
 	Rows []tiedb.Row `json:"rows"`
 }
 
-func (request *ExpandRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func expandHandler(env *ws.Environment, request *ExpandRequest) (*ExpandReply, error) {
 	reply := ExpandReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
-	reply.Rows = col.ExpandKeys(request.Keys, request.Filter)
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		reply.Rows = col.ExpandKeys(request.Keys, request.Filter)
+	}
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *ExpandRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewExpandRequest(nil, "")
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewExpandRequest(keys []string, filter string) *ExpandRequest {
@@ -45,7 +46,6 @@ func (c CollectionInfo) NewExpandRequest(keys []string, filter string) *ExpandRe
 	request.Id = IdExpand
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &ExpandReply{}
 	request.Keys = keys
 	request.Filter = filter
 

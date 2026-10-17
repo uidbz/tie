@@ -3,7 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -56,57 +56,61 @@ type VersionInfo struct {
 // When PrevVersions <= 0 no history is kept: the old edge is dropped outright
 // (and the content's metadata garbage-collected if it was the last reference),
 // matching the pre-existing no-history behavior.
-func supersedeToPrev(tc *TieClient, mainCollection string, parentUID DirUID, name, oldHash string) error {
+// supersedeToPrev runs on a client scoped to the live collection; the history
+// collection is that name plus the suffix, addressed through a scoped client of
+// its own (§7.2).
+func supersedeToPrev(tc *TieClient, parentUID DirUID, name, oldHash string) error {
 	if tc.Config.PrevVersions <= 0 {
-		return detachChild(tc, mainCollection, oldHash, parentUID)
+		return detachChild(tc, oldHash, parentUID)
 	}
 
-	oldRow, err := tc.GetIn(mainCollection, oldHash)
+	oldRow, err := tc.Get(oldHash)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 
-	prevCol := tc.prevCollectionFor(mainCollection)
+	prev := tc.In(tc.prevCollectionFor(""))
 	locKey := versionLocKey(parentUID, name)
 
 	// 1. Record the version in prev first. Replicate every descriptive triple
 	//    except parent — placement in history is expressed by version-of, not a
 	//    parent edge.
-	b := tc.NewBatchIn(prevCol)
+	b := prev.NewBatch()
 	for relation, values := range oldRow.Attributes {
-		if relation == str(TieParent) {
+		if relation == string(RelParent) {
 			continue
 		}
 		for _, v := range values {
 			b.Add(oldHash, relation, v)
 		}
 	}
-	b.Add(oldHash, str(TieVersionOf), locKey)
-	b.Set(oldHash, str(TieVersionDate), []string{time.Now().Format(tagDateFormat)})
-	if _, err := tc.Batch(b); err != nil {
+	b.Add(oldHash, string(RelVersionOf), locKey)
+	b.Set(oldHash, string(RelVersionDate), []string{time.Now().Format(tagDateFormat)})
+	if _, err := prev.Batch(b); err != nil {
 		return err
 	}
-	if err := tc.SyncIn(prevCol); err != nil {
+	if err := prev.Sync(); err != nil {
 		return err
 	}
 
 	// 2. Remove the old content from main (its edge, and its metadata if this
 	//    was its last parent — shared content stays live elsewhere).
-	if err := detachChild(tc, mainCollection, oldHash, parentUID); err != nil {
+	if err := detachChild(tc, oldHash, parentUID); err != nil {
 		return err
 	}
 
 	// 3. Retention: keep at most PrevVersions per logical file.
-	return trimVersions(tc, prevCol, locKey, tc.Config.PrevVersions)
+	return trimVersions(prev, locKey, tc.Config.PrevVersions)
 }
 
 // listVersionRecords returns the version records for one logical file as
 // childEntry values (Hash + Filename + supersession date), for retention
 // ordering via retentionDrops.
-func listVersionRecords(tc *TieClient, prevCol, locKey string) ([]childEntry, error) {
-	rows, _, err := tc.QueryIn(prevCol, QuerySpec{
+// listVersionRecords reads from a client scoped to the history collection.
+func listVersionRecords(prev *TieClient, locKey string) ([]childEntry, error) {
+	rows, _, err := prev.Query(QuerySpec{
 		Terms:   []string{locKey},
-		Filter:  str(TieVersionOf),
+		Filter:  string(RelVersionOf),
 		Reverse: true,
 		Expand:  true,
 	})
@@ -120,8 +124,8 @@ func listVersionRecords(tc *TieClient, prevCol, locKey string) ([]childEntry, er
 	for _, row := range rows {
 		out = append(out, childEntry{
 			Hash:     row.Key,
-			Filename: RowFirst(row, str(TieFilename)),
-			TagDate:  parseTagDate(RowFirst(row, str(TieVersionDate))),
+			Filename: RowFirst(row, RelFilename),
+			TagDate:  parseTagDate(RowFirst(row, RelVersionDate)),
 		})
 	}
 	return out, nil
@@ -129,13 +133,13 @@ func listVersionRecords(tc *TieClient, prevCol, locKey string) ([]childEntry, er
 
 // trimVersions drops the oldest version records for locKey so at most keep
 // remain (oldest-first, matching retentionDrops).
-func trimVersions(tc *TieClient, prevCol, locKey string, keep int) error {
-	versions, err := listVersionRecords(tc, prevCol, locKey)
+func trimVersions(prev *TieClient, locKey string, keep int) error {
+	versions, err := listVersionRecords(prev, locKey)
 	if err != nil {
 		return err
 	}
 	for _, d := range retentionDrops(versions, keep) {
-		if err := dropVersion(tc, prevCol, d.Hash, locKey); err != nil {
+		if err := dropVersion(prev, d.Hash, locKey); err != nil {
 			return err
 		}
 	}
@@ -147,48 +151,48 @@ func trimVersions(tc *TieClient, prevCol, locKey string, keep int) error {
 // replicated metadata (and version-date) are removed too; otherwise only this
 // location's version-of edge is dropped so shared-content records elsewhere
 // stay intact. This mirrors detachChild's shared-content guard, for version-of.
-func dropVersion(tc *TieClient, prevCol, hash, locKey string) error {
-	edge := tc.NewBatchIn(prevCol)
-	edge.Delete(hash, str(TieVersionOf), locKey)
-	if _, err := tc.Batch(edge); err != nil {
+func dropVersion(prev *TieClient, hash, locKey string) error {
+	edge := prev.NewBatch()
+	edge.Delete(hash, string(RelVersionOf), locKey)
+	if _, err := prev.Batch(edge); err != nil {
 		return err
 	}
-	if err := tc.SyncIn(prevCol); err != nil {
+	if err := prev.Sync(); err != nil {
 		return err
 	}
 
-	row, err := tc.GetIn(prevCol, hash)
+	row, err := prev.Get(hash)
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if len(RowValues(row, str(TieVersionOf))) > 0 {
+	if len(RowValues(row, RelVersionOf)) > 0 {
 		return nil // still a version of another location; keep its metadata
 	}
-	meta := tc.NewBatchIn(prevCol)
+	meta := prev.NewBatch()
 	for relation, values := range row.Attributes {
 		for _, v := range values {
 			meta.Delete(hash, relation, v)
 		}
 	}
-	if _, err := tc.Batch(meta); err != nil {
+	if _, err := prev.Batch(meta); err != nil {
 		return err
 	}
-	return tc.SyncIn(prevCol)
+	return prev.Sync()
 }
 
 // resolveFileLoc splits a virtual file path (e.g. "/docs/note.txt" or
 // "tie:/docs/note.txt") into the parent directory's DirUID (resolved in the
 // main collection) and the file's basename.
-func (tc *TieClient) resolveFileLoc(path string) (DirUID, string, error) {
-	clean := strings.TrimPrefix(path, FileURIScheme)
+func (tc *TieClient) resolveFileLoc(virtualPath string) (DirUID, string, error) {
+	clean := strings.TrimPrefix(virtualPath, FileURIScheme)
 	if !strings.HasPrefix(clean, "/") {
 		clean = "/" + clean
 	}
-	name := filepath.Base(clean)
-	dir := filepath.Dir(clean)
+	name := path.Base(clean)
+	dir := path.Dir(clean)
 	parentUID, err := tc.DirUIDFromPath(dir)
 	if err != nil {
 		return "", "", err
@@ -199,18 +203,17 @@ func (tc *TieClient) resolveFileLoc(path string) (DirUID, string, error) {
 	return parentUID, name, nil
 }
 
-// ListVersions returns the superseded versions of the file at path, newest
-// first. An empty mainCollection uses the configured default. A file with no
-// history yields an empty slice, not an error.
-func (tc *TieClient) ListVersions(mainCollection, path string) ([]VersionInfo, error) {
-	parentUID, name, err := tc.resolveFileLoc(path)
+// ListVersions returns the superseded versions of the file at virtualPath,
+// newest first, in the client's scoped collection. A file with no history
+// yields an empty slice, not an error.
+func (tc *TieClient) ListVersions(virtualPath string) ([]VersionInfo, error) {
+	parentUID, name, err := tc.resolveFileLoc(virtualPath)
 	if err != nil {
 		return nil, err
 	}
-	prevCol := tc.prevCollectionFor(mainCollection)
-	rows, _, err := tc.QueryIn(prevCol, QuerySpec{
+	rows, _, err := tc.In(tc.prevCollectionFor("")).Query(QuerySpec{
 		Terms:   []string{versionLocKey(parentUID, name)},
-		Filter:  str(TieVersionOf),
+		Filter:  string(RelVersionOf),
 		Reverse: true,
 		Expand:  true,
 	})
@@ -222,13 +225,13 @@ func (tc *TieClient) ListVersions(mainCollection, path string) ([]VersionInfo, e
 	}
 	out := make([]VersionInfo, 0, len(rows))
 	for _, row := range rows {
-		size, _ := strconv.Atoi(RowFirst(row, str(TieFilesize)))
+		size, _ := strconv.Atoi(RowFirst(row, RelFilesize))
 		out = append(out, VersionInfo{
 			Hash:     row.Key,
-			Filename: RowFirst(row, str(TieFilename)),
+			Filename: RowFirst(row, RelFilename),
 			Size:     size,
-			TieType:  StringToTieType(RowFirst(row, str(TieTypeProperty))),
-			Date:     parseTagDate(RowFirst(row, str(TieVersionDate))),
+			TieType:  StringToTieType(RowFirst(row, RelType)),
+			Date:     parseTagDate(RowFirst(row, RelVersionDate)),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -248,20 +251,20 @@ func (tc *TieClient) ListVersions(mainCollection, path string) ([]VersionInfo, e
 // the target's now-redundant history record is removed. The target's blob
 // already exists on the filehost, so no upload happens. Returns the restored
 // content hash.
-func (tc *TieClient) RestoreVersion(mainCollection, path, versionHash string) (string, error) {
-	parentUID, name, err := tc.resolveFileLoc(path)
+func (tc *TieClient) RestoreVersion(virtualPath, versionHash string) (string, error) {
+	parentUID, name, err := tc.resolveFileLoc(virtualPath)
 	if err != nil {
 		return "", err
 	}
-	prevCol := tc.prevCollectionFor(mainCollection)
+	prevCol := tc.prevCollectionFor("")
 	locKey := versionLocKey(parentUID, name)
 
-	versions, err := tc.ListVersions(mainCollection, path)
+	versions, err := tc.ListVersions(virtualPath)
 	if err != nil {
 		return "", err
 	}
 	if len(versions) == 0 {
-		return "", fmt.Errorf("no versions recorded for %s", path)
+		return "", fmt.Errorf("no versions recorded for %s", virtualPath)
 	}
 	target := versions[0].Hash
 	if versionHash != "" {
@@ -273,7 +276,7 @@ func (tc *TieClient) RestoreVersion(mainCollection, path, versionHash string) (s
 			}
 		}
 		if target == "" {
-			return "", fmt.Errorf("no version %q for %s", versionHash, path)
+			return "", fmt.Errorf("no version %q for %s", versionHash, virtualPath)
 		}
 	}
 
@@ -293,37 +296,37 @@ func (tc *TieClient) RestoreVersion(mainCollection, path, versionHash string) (s
 	}
 
 	if current != "" {
-		if err := supersedeToPrev(tc, mainCollection, parentUID, name, current); err != nil {
+		if err := supersedeToPrev(tc, parentUID, name, current); err != nil {
 			return "", err
 		}
 	}
 
-	prevRow, err := tc.GetIn(prevCol, target)
+	prevRow, err := tc.In(prevCol).Get(target)
 	if err != nil {
 		return "", err
 	}
-	b := tc.NewBatchIn(mainCollection)
+	b := tc.NewBatch()
 	for relation, values := range prevRow.Attributes {
-		if relation == str(TieVersionOf) || relation == str(TieVersionDate) {
+		if relation == string(RelVersionOf) || relation == string(RelVersionDate) {
 			continue
 		}
 		for _, v := range values {
 			b.Add(target, relation, v)
-			if relation == str(TieTag) {
-				b.Add(str(TieTags), str(TieAll), v) // keep the tag registry consistent
+			if relation == string(RelTag) {
+				b.Add(string(RelTags), string(RelAll), v) // keep the tag registry consistent
 			}
 		}
 	}
-	b.Add(target, str(TieParent), str(parentUID))
+	b.Add(target, string(RelParent), str(parentUID))
 	if _, err := tc.Batch(b); err != nil {
 		return "", err
 	}
-	if err := tc.SyncIn(mainCollection); err != nil {
+	if err := tc.Sync(); err != nil {
 		return "", err
 	}
 
 	// The target is live again, so it is no longer a version of this location.
-	if err := dropVersion(tc, prevCol, target, locKey); err != nil {
+	if err := dropVersion(tc.In(prevCol), target, locKey); err != nil {
 		return "", err
 	}
 	return target, nil

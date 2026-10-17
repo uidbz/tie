@@ -72,7 +72,7 @@ type StatOptions struct {
 }
 
 // mediaMetaProps are the optional media-metadata relations surfaced in Meta.
-var mediaMetaProps = []TieProperty{TieTitle, TieArtist, TieAlbum, TieYear, TieTrack}
+var mediaMetaProps = []Relation{RelTitle, RelArtist, RelAlbum, RelYear, RelTrack}
 
 // Stat gathers metadata for a subject key (a content hash for files/archives, or
 // a DirUID for directories). tie-fm passes the key it already holds on a
@@ -130,31 +130,31 @@ func (tc *TieClient) stat(subject, knownPath string, opts StatOptions) (StatInfo
 		return StatInfo{}, err
 	}
 
-	types := RowValues(row, str(TieTypeProperty))
-	size, _ := strconv.ParseInt(RowFirst(row, str(TieFilesize)), 10, 64)
+	types := RowValues(row, RelType)
+	size, _ := strconv.ParseInt(RowFirst(row, RelFilesize), 10, 64)
 	info := StatInfo{
 		Key:        subject,
-		Filename:   RowFirst(row, str(TieFilename)),
-		Name:       RowFirst(row, str(TieName)),
-		MediaType:  RowFirst(row, str(TieMediaType)),
+		Filename:   RowFirst(row, RelFilename),
+		Name:       RowFirst(row, RelName),
+		MediaType:  RowFirst(row, RelMediaType),
 		Size:       size,
-		Tags:       sortedCopy(RowValues(row, str(TieTag))),
-		TagDate:    parseTagDate(RowFirst(row, str(TieTagDate))),
-		ParentUIDs: RowValues(row, str(TieParent)),
-		Paths:      RowValues(row, str(TiePath)),
+		Tags:       sortedCopy(RowValues(row, RelTag)),
+		TagDate:    parseTagDate(RowFirst(row, RelTagDate)),
+		ParentUIDs: RowValues(row, RelParent),
+		Paths:      RowValues(row, RelPath),
 		Attributes: row.Attributes,
 	}
 	for _, p := range mediaMetaProps {
-		if v := RowFirst(row, str(p)); v != "" {
+		if v := RowFirst(row, p); v != "" {
 			if info.Meta == nil {
 				info.Meta = make(map[string]string)
 			}
-			info.Meta[str(p)] = v
+			info.Meta[string(p)] = v
 		}
 	}
 
 	switch {
-	case RowHas(row, str(TieTypeProperty), str(TieDirectory)):
+	case RowHas(row, RelType, str(TieDirectory)):
 		info.Kind = StatDirectory
 		info.TieType = TieDirectory
 		dir, err := ReadTieDir(tc, DirUID(subject))
@@ -199,7 +199,7 @@ func (tc *TieClient) stat(subject, knownPath string, opts StatOptions) (StatInfo
 				path = tc.reconstructPath(info)
 			}
 			if path != "" {
-				if vers, err := tc.ListVersions("", path); err == nil {
+				if vers, err := tc.ListVersions(path); err == nil {
 					info.Versions = vers
 				}
 			}
@@ -265,7 +265,7 @@ func (tc *TieClient) reconstructPath(info StatInfo) string {
 	if err != nil {
 		return ""
 	}
-	base := normalizePath(RowFirst(parent, str(TiePath)))
+	base := normalizePath(RowFirst(parent, RelPath))
 	if base == "" {
 		return ""
 	}

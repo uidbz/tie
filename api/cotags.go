@@ -34,13 +34,21 @@ type CoTagsReply struct {
 	Tags []string `json:"tags"`
 }
 
-func (request *CoTagsRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+func coTagsHandler(env *ws.Environment, request *CoTagsRequest) (*CoTagsReply, error) {
 	reply := CoTagsReply{}
 	if len(request.Terms) > 0 {
 		reply.OrigKey = request.Terms[0]
 	}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		reply.Success = false
+		reply.Message = "Key has no associated values"
+		return &reply, nil
+	}
 
 	q := tiedb.TagQuery{
 		Include: request.Terms,
@@ -52,18 +60,14 @@ func (request *CoTagsRequest) Reply(env *ws.Environment) (ws.Reply, error) {
 	if !found {
 		reply.Success = false
 		reply.Message = "Key has no associated values"
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
+		return &reply, nil
 	}
 
 	sort.Strings(tags)
 	reply.Tags = tags
 	reply.Success = true
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
-
-func (request *CoTagsRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewCoTagsRequest(nil, nil, "")
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewCoTagsRequest(terms, exclude []string, scope string) *CoTagsRequest {
@@ -71,7 +75,6 @@ func (c CollectionInfo) NewCoTagsRequest(terms, exclude []string, scope string) 
 	request.Id = IdCoTags
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &CoTagsReply{}
 
 	request.Terms = terms
 	request.Exclude = exclude

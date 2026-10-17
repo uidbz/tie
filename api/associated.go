@@ -5,14 +5,6 @@ import (
 	ws "github.com/uidbz/tie/webservice"
 )
 
-/*
-To create a new request type:
-1. Copy this file and rename to 'newname'
-2. Rename all instances of Associated to 'NewName'
-3. Implement Reply and define fields in structs
-4. Add to request slice and pass to NewWebservice on server
-*/
-
 const (
 	IdAssociated = "Associated"
 )
@@ -31,35 +23,51 @@ type AssociatedOptions struct {
 
 type AssociatedReply struct {
 	ws.ReplyStatus
-	Result tiedb.TripleSet
+	// Result is one Row per subject associated with the requested key, holding
+	// that subject's forward attributes filtered by MatchValue1. It used to be a
+	// tiedb.TripleSet — nested maps keyed by subject, relation and value, which
+	// made the JSON reply order-nondeterministic and cost a map allocation per
+	// value (§8 S9). Rows are the shape every other read returns.
+	Rows []tiedb.Row `json:"rows"`
 }
 
-func (request *AssociatedRequest) Reply(env *ws.Environment) (ws.Reply, error) {
+// associatedHandler answers "what is associated with this key": the subjects
+// with a reverse edge to Key, each expanded with its own attributes under
+// MatchValue1. That is exactly Query{Terms: [Key], Reverse: true, Filter:
+// MatchValue1, Expand: true}, and new callers should use Query; Associated stays
+// for clients already speaking it.
+func associatedHandler(env *ws.Environment, request *AssociatedRequest) (*AssociatedReply, error) {
 	reply := AssociatedReply{}
 
-	col := env.Collection(request.Namespace, request.CollectionId)
-
-	if assPtr, found := col.GetReverseAssociations(request.Key); found {
-		set, _ := col.GetTripleSet(assPtr, "", tiedb.SortOptions{})
-		set.ForEachKey(func(key string) {
-			if t, ok := col.GetAssociations(key); ok {
-				set2, _ := col.GetTripleSet(t, request.MatchValue1, tiedb.SortOptions{})
-				set[key] = set2[key]
-			}
-		})
-		reply.Result = set
-		reply.Success = true
-		reply.OrigKey = request.Key
-
-		return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
+	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
+	if err != nil {
+		return nil, err
 	}
-	reply.Success = false
 
-	return ws.Reply{RequestName: request.Id, ReplyStructPtr: reply}, nil
-}
+	var subjects []string
+	if found {
+		if set, ok := col.GetReverseAssociations(request.Key); ok {
+			// Unlimited: Associated has no limit parameter.
+			sorted, _ := col.GetPage(set, "", tiedb.SortOptions{Limit: -1})
+			seen := make(map[string]bool, len(sorted))
+			for _, t := range sorted {
+				if !seen[t.Key] {
+					seen[t.Key] = true
+					subjects = append(subjects, t.Key)
+				}
+			}
+		}
+	}
+	if len(subjects) == 0 {
+		reply.Success = false
+		return &reply, nil
+	}
 
-func (request *AssociatedRequest) New() ws.RequestInterface {
-	return CollectionInfo{}.NewAssociatedRequest("")
+	reply.Rows = col.ExpandKeys(subjects, request.MatchValue1)
+	reply.Success = true
+	reply.OrigKey = request.Key
+
+	return &reply, nil
 }
 
 func (c CollectionInfo) NewAssociatedRequest(key string) *AssociatedRequest {
@@ -67,7 +75,6 @@ func (c CollectionInfo) NewAssociatedRequest(key string) *AssociatedRequest {
 	request.Id = IdAssociated
 	request.Namespace = c.Namespace
 	request.CollectionId = c.CollectionId
-	request.ReplyStructPtr = &AssociatedReply{}
 
 	request.Key = key
 

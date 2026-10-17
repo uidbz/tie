@@ -26,10 +26,8 @@ func verifyTestConfig() Config {
 	c.Collection = "verifytesting"
 	if ws := os.Getenv("TIE_TEST_WEBSERVICE"); ws != "" {
 		c.TripleStoreURL = ws
-	} else {
-		c.TripleStoreURL = "http://localhost:2161"
 	}
-	fh := "http://localhost:2162"
+	fh := testingFileHostURL
 	if h := os.Getenv("TIE_TEST_FILEHOST"); h != "" {
 		fh = h
 	}
@@ -59,11 +57,11 @@ func TestVerifyCleanTree(t *testing.T) {
 	mkdir(t, dir+"/sub")
 	writeFile(t, dir+"/sub/b.txt", "world")
 
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -85,21 +83,21 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 	mkdir(t, dir+"/sub")
 	writeFile(t, dir+"/sub/b.txt", "keep me")
 
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
 	// Find the file's hash and its parent UID, then cut the edge.
 	hash := hashOf(t, dir+"/a.txt")
 	parent := singleParent(t, tie, hash)
-	if _, err := tie.Delete(hash, str(TieParent), parent); err != nil {
+	if _, err := tie.Delete(hash, string(RelParent), parent); err != nil {
 		t.Fatalf("Delete parent edge: %v", err)
 	}
 	if err := tie.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -107,7 +105,7 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 		t.Fatalf("OrphanFiles = %v, want [%s]", rep.OrphanFiles, hash)
 	}
 
-	n, err := tie.RepairOrphans("", rep, "")
+	n, err := tie.RepairOrphans(rep, "")
 	if err != nil {
 		t.Fatalf("RepairOrphans: %v", err)
 	}
@@ -115,7 +113,7 @@ func TestVerifyDetectsOrphanFile(t *testing.T) {
 		t.Errorf("RepairOrphans restored %d nodes, want 1", n)
 	}
 
-	rep2, err := tie.Verify("", false)
+	rep2, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify after repair: %v", err)
 	}
@@ -134,7 +132,7 @@ func TestVerifyDetectsOrphanDir(t *testing.T) {
 	mkdir(t, dir+"/sub")
 	writeFile(t, dir+"/sub/b.txt", "nested")
 
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -144,14 +142,14 @@ func TestVerifyDetectsOrphanDir(t *testing.T) {
 		t.Fatalf("DirUIDFromPath: uid=%q err=%v", subUID, err)
 	}
 	parent := singleParent(t, tie, string(subUID))
-	if _, err := tie.Delete(string(subUID), str(TieParent), parent); err != nil {
+	if _, err := tie.Delete(string(subUID), string(RelParent), parent); err != nil {
 		t.Fatalf("Delete parent edge: %v", err)
 	}
 	if err := tie.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -162,10 +160,10 @@ func TestVerifyDetectsOrphanDir(t *testing.T) {
 		t.Errorf("OrphanFiles = %v, want empty (nested file keeps its parent)", rep.OrphanFiles)
 	}
 
-	if _, err := tie.RepairOrphans("", rep, ""); err != nil {
+	if _, err := tie.RepairOrphans(rep, ""); err != nil {
 		t.Fatalf("RepairOrphans: %v", err)
 	}
-	rep2, err := tie.Verify("", false)
+	rep2, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify after repair: %v", err)
 	}
@@ -180,7 +178,7 @@ func TestVerifyMissingMetadata(t *testing.T) {
 	tie := freshVerifyClient(t)
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "metadata")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -191,17 +189,17 @@ func TestVerifyMissingMetadata(t *testing.T) {
 	if err != nil || parentUID == "" {
 		t.Fatalf("DirUIDFromPath: uid=%q err=%v", parentUID, err)
 	}
-	if _, err := tie.Add(bare, str(TieTypeProperty), str(TieFile)); err != nil {
+	if _, err := tie.Add(bare, string(RelType), str(TieFile)); err != nil {
 		t.Fatalf("Add tie-type: %v", err)
 	}
-	if _, err := tie.Add(bare, str(TieParent), string(parentUID)); err != nil {
+	if _, err := tie.Add(bare, string(RelParent), string(parentUID)); err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
 	if err := tie.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -215,7 +213,7 @@ func TestVerifyMissingMetadata(t *testing.T) {
 	if found == nil {
 		t.Fatalf("no metadata gap reported for %s; report=%+v", bare, rep)
 	}
-	for _, want := range []string{str(TieFilename), str(TieFilesize), str(TieMediaType)} {
+	for _, want := range []string{string(RelFilename), string(RelFilesize), string(RelMediaType)} {
 		if !contains(found.Missing, want) {
 			t.Errorf("gap %v missing expected relation %q", found.Missing, want)
 		}
@@ -229,7 +227,7 @@ func TestVerifyDetectsCycle(t *testing.T) {
 	dir := t.TempDir()
 	mkdir(t, dir+"/one")
 	mkdir(t, dir+"/two")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -239,23 +237,23 @@ func TestVerifyDetectsCycle(t *testing.T) {
 		t.Fatalf("could not resolve dir UIDs: one=%q two=%q", one, two)
 	}
 	// Reparent one -> two and two -> one, forming a 2-cycle detached from root.
-	if _, err := tie.Delete(string(one), str(TieParent), singleParent(t, tie, string(one))); err != nil {
+	if _, err := tie.Delete(string(one), string(RelParent), singleParent(t, tie, string(one))); err != nil {
 		t.Fatalf("Delete one parent: %v", err)
 	}
-	if _, err := tie.Delete(string(two), str(TieParent), singleParent(t, tie, string(two))); err != nil {
+	if _, err := tie.Delete(string(two), string(RelParent), singleParent(t, tie, string(two))); err != nil {
 		t.Fatalf("Delete two parent: %v", err)
 	}
-	if _, err := tie.Add(string(one), str(TieParent), string(two)); err != nil {
+	if _, err := tie.Add(string(one), string(RelParent), string(two)); err != nil {
 		t.Fatalf("Add one->two: %v", err)
 	}
-	if _, err := tie.Add(string(two), str(TieParent), string(one)); err != nil {
+	if _, err := tie.Add(string(two), string(RelParent), string(one)); err != nil {
 		t.Fatalf("Add two->one: %v", err)
 	}
 	if err := tie.Sync(); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -283,7 +281,7 @@ func singleParent(t *testing.T, tie *TieClient, subject string) string {
 	if err != nil {
 		t.Fatalf("Get(%s): %v", subject, err)
 	}
-	parents := RowValues(row, str(TieParent))
+	parents := RowValues(row, RelParent)
 	if len(parents) != 1 {
 		t.Fatalf("%s has %d parents %v, want exactly 1", subject, len(parents), parents)
 	}
@@ -331,7 +329,7 @@ func TestCheckIndexRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "hello")
 	writeFile(t, dir+"/b.txt", "world")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 
@@ -339,7 +337,7 @@ func TestCheckIndexRoundTrip(t *testing.T) {
 		name         string
 		deep, repair bool
 	}{{"plain", false, false}, {"deep", true, false}, {"repair", false, true}} {
-		rep, err := tie.CheckIndex("", mode.deep, mode.repair)
+		rep, err := tie.CheckIndex(mode.deep, mode.repair)
 		if err != nil {
 			t.Fatalf("%s: CheckIndex: %v", mode.name, err)
 		}
@@ -375,7 +373,7 @@ func TestRepairTree(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir+"/a.txt", "repair me please")
 	writeFile(t, dir+"/b.txt", "i will dangle")
-	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "", "directory", nil, "", 0); err != nil {
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
 		t.Fatalf("ImportDir: %v", err)
 	}
 	root, err := tie.DirUIDFromPath(FileURIScheme + dir)
@@ -402,29 +400,29 @@ func TestRepairTree(t *testing.T) {
 	// 1. Ghost: a dir-typed node with no path, parented to the live root, and
 	//    b.txt re-pointed at it (so b's parent edge is dangling).
 	ghost := "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface"
-	mustAdd("add ghost tie-type", ghost, str(TieTypeProperty), str(TieDirectory))
-	mustAdd("add ghost parent", ghost, str(TieParent), string(root))
+	mustAdd("add ghost tie-type", ghost, string(RelType), str(TieDirectory))
+	mustAdd("add ghost parent", ghost, string(RelParent), string(root))
 	b := hashOf(t, dir+"/b.txt")
-	mustDel("cut b parent", b, str(TieParent), string(root))
-	mustAdd("dangle b", b, str(TieParent), ghost)
+	mustDel("cut b parent", b, string(RelParent), string(root))
+	mustAdd("dangle b", b, string(RelParent), ghost)
 
 	// 2. Blobless leftover: tie-type file + parent, no name, no blob uploaded.
 	bare := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	mustAdd("add bare tie-type", bare, str(TieTypeProperty), str(TieFile))
-	mustAdd("add bare parent", bare, str(TieParent), string(root))
+	mustAdd("add bare tie-type", bare, string(RelType), str(TieFile))
+	mustAdd("add bare parent", bare, string(RelParent), string(root))
 
 	// 3. Metadata gap on a real file: strip size and media-type.
 	a := hashOf(t, dir+"/a.txt")
 	row, err := tie.Get(a)
 	must("get a", err)
-	for _, rel := range []string{str(TieFilesize), str(TieMediaType)} {
+	for _, rel := range []Relation{RelFilesize, RelMediaType} {
 		for _, v := range RowValues(row, rel) {
-			mustDel("strip "+rel, a, rel, v)
+			mustDel("strip "+string(rel), a, string(rel), v)
 		}
 	}
 	must("sync", tie.Sync())
 
-	rep, err := tie.Verify("", false)
+	rep, err := tie.Verify(false)
 	must("verify", err)
 	if len(rep.DanglingParentRefs) != 1 || rep.DanglingParentRefs[0].Child != b || rep.DanglingParentRefs[0].Parent != ghost {
 		t.Fatalf("DanglingParentRefs = %+v, want b -> ghost", rep.DanglingParentRefs)
@@ -434,12 +432,12 @@ func TestRepairTree(t *testing.T) {
 	}
 
 	// Dry run: a plan, and nothing changes.
-	plan, err := tie.RepairTree("", rep, RepairOptions{})
+	plan, err := tie.RepairTree(rep, RepairOptions{})
 	must("plan", err)
 	if len(plan.Planned) == 0 || plan.Applied != 0 {
 		t.Fatalf("dry run: planned=%d applied=%d", len(plan.Planned), plan.Applied)
 	}
-	rep2, err := tie.Verify("", false)
+	rep2, err := tie.Verify(false)
 	must("verify after dry run", err)
 	if rep2.Problems() != rep.Problems() {
 		t.Fatalf("dry run changed the tree: %d -> %d problems", rep.Problems(), rep2.Problems())
@@ -447,7 +445,7 @@ func TestRepairTree(t *testing.T) {
 
 	// Apply.
 	var journal bytes.Buffer
-	res, err := tie.RepairTree("", rep, RepairOptions{Apply: true, Journal: &journal})
+	res, err := tie.RepairTree(rep, RepairOptions{Apply: true, Journal: &journal})
 	must("apply", err)
 	if res.Applied != len(res.Planned) || res.Applied == 0 {
 		t.Fatalf("applied %d of %d planned", res.Applied, len(res.Planned))
@@ -456,7 +454,7 @@ func TestRepairTree(t *testing.T) {
 		t.Errorf("journal has %d lines, want %d", lines, res.Applied)
 	}
 
-	rep3, err := tie.Verify("", false)
+	rep3, err := tie.Verify(false)
 	must("verify after apply", err)
 	if rep3.Problems() != 0 {
 		t.Fatalf("tree still has problems after RepairTree: %+v", rep3)
@@ -472,10 +470,10 @@ func TestRepairTree(t *testing.T) {
 	}
 	row, err = tie.Get(a)
 	must("get a after", err)
-	if RowFirst(row, str(TieFilesize)) != strconv.Itoa(len("repair me please")) {
-		t.Errorf("a.txt filesize = %q, want %d", RowFirst(row, str(TieFilesize)), len("repair me please"))
+	if RowFirst(row, RelFilesize) != strconv.Itoa(len("repair me please")) {
+		t.Errorf("a.txt filesize = %q, want %d", RowFirst(row, RelFilesize), len("repair me please"))
 	}
-	if RowFirst(row, str(TieMediaType)) == "" {
+	if RowFirst(row, RelMediaType) == "" {
 		t.Error("a.txt media-type not re-derived")
 	}
 }

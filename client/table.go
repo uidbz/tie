@@ -192,7 +192,7 @@ func decodeColumnLevels(values []string, keys []string) [][]string {
 func validateColumnKeys(keys []string) error {
 	seen := make(map[string]struct{}, len(keys))
 	for _, k := range keys {
-		if k == str(TieTypeProperty) {
+		if k == string(RelType) {
 			return fmt.Errorf("client: column name %q is reserved and cannot be used as a table header", k)
 		}
 		if _, dup := seen[k]; dup {
@@ -261,7 +261,7 @@ func (tc *TieClient) insertTable(uid string, keys []string, levels [][]string, r
 	for j, key := range keys {
 		columns[j] = encodeOrdered(j, key)
 	}
-	batch.Set(uid, str(TieTypeProperty), []string{tieTypeTable})
+	batch.Set(uid, string(RelType), []string{tieTypeTable})
 	batch.Set(uid, tableColumnsRel, columns)
 
 	var levelEntries []string
@@ -277,7 +277,7 @@ func (tc *TieClient) insertTable(uid string, keys []string, levels [][]string, r
 	for i, cells := range rows {
 		rowUID := string(tc.newDirUID())
 		rowRefs[i] = encodeOrdered(i, rowUID)
-		batch.Set(rowUID, str(TieTypeProperty), []string{tieTypeTableRow})
+		batch.Set(rowUID, string(RelType), []string{tieTypeTableRow})
 		for j, key := range keys {
 			if j < len(cells) && cells[j] != "" {
 				batch.Add(rowUID, key, cells[j])
@@ -358,7 +358,7 @@ func (tc *TieClient) readTable(uid string) (keys []string, levels [][]string, ro
 		r := byKey[rowUID]
 		cells := make([]string, len(keys))
 		for j, key := range keys {
-			cells[j] = RowFirst(r, key)
+			cells[j] = RowFirst(r, Relation(key))
 		}
 		rows[i] = cells
 	}
@@ -375,7 +375,7 @@ func (tc *TieClient) DeleteTable(uid string) error {
 	batch.Set(uid, tableColumnsRel, nil)
 	batch.Set(uid, tableColumnLevelsRel, nil)
 	batch.Set(uid, tableRowsRel, nil)
-	batch.Set(uid, str(TieTypeProperty), nil)
+	batch.Set(uid, string(RelType), nil)
 	_, err := tc.Batch(batch)
 	return err
 }
@@ -401,7 +401,7 @@ func (tc *TieClient) appendClearTable(batch *api.Batch, uid string) error {
 	}
 	for _, r := range oldRows {
 		for rel := range r.Attributes {
-			batch.Set(r.Key, rel, nil)
+			batch.Set(r.Key, string(rel), nil)
 		}
 	}
 	return nil

@@ -110,16 +110,33 @@ func (t *lockedTree[K, V]) Size() int {
 	return n
 }
 
+// kv is a snapshot pair used by lockedTree.ForEach.
+type kv[K comparable, V any] struct {
+	k K
+	v V
+}
+
 // ForEach visits every (key, value). Order is unspecified: the only caller
 // (full-collection export) re-sorts by resolved strings, so map order is fine.
+//
+// Each shard is snapshotted under its read lock and fn runs with NO lock
+// held: fn must not touch this tree. Calling fn under the RLock would make
+// any re-entrant lookup (ForEachTriple resolving each key's association set,
+// CheckIndex calling levelOf) a recursive read lock, which sync.RWMutex
+// forbids: a queued writer wedges the re-entrant RLock and deadlocks the
+// whole collection against concurrent Add.
 func (t *lockedTree[K, V]) ForEach(fn func(key K, value V)) {
 	for i := range t.shards {
 		sh := &t.shards[i]
 		sh.mu.RLock()
+		snap := make([]kv[K, V], 0, len(sh.m))
 		for k, v := range sh.m {
-			fn(k, v)
+			snap = append(snap, kv[K, V]{k, v})
 		}
 		sh.mu.RUnlock()
+		for _, e := range snap {
+			fn(e.k, e.v)
+		}
 	}
 }
 

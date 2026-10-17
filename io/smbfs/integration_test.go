@@ -152,7 +152,7 @@ func TestSMBEndToEnd(t *testing.T) {
 }
 
 // TestSMBNameEscapingOverTheWire creates tie names that SMB display rules
-// forbid (through tiesfs, bypassing the escape), then verifies a real SMB
+// forbid (through tiefs, bypassing the escape), then verifies a real SMB
 // client sees the escaped spellings and can open them: the escape must
 // round-trip through the transport, not just in-process.
 func TestSMBNameEscapingOverTheWire(t *testing.T) {
@@ -163,7 +163,7 @@ func TestSMBNameEscapingOverTheWire(t *testing.T) {
 	if _, err := sh.tree.Mkdir(base, raw); err != nil {
 		t.Fatalf("tree.Mkdir: %v", err)
 	}
-	wh, err := sh.tree.NewWriteHandle(tiesfs.ChildPath(base, raw), "trail.", client.File{})
+	wh, err := sh.tree.NewWriteHandle(tiefs.ChildPath(base, raw), "trail.", client.File{})
 	if err != nil {
 		t.Fatalf("NewWriteHandle: %v", err)
 	}

@@ -245,11 +245,18 @@ func (s *AssociationSet) Size() int {
 
 // ForEach visits every (key, position). Order is unspecified (the query paths
 // re-sort by resolved strings, so tree ordering was never used).
+//
+// The small tier is copied under the read lock before fn runs: fn can take
+// time (resolveEntry hits disk) and must not hold the lock, but iterating the
+// shared backing array unlocked races a concurrent Put's in-place update or
+// Delete's swap-remove (issue #15). The copy costs <= shardThreshold entries
+// x 24 B, which is cheaper than blocking writers.
 func (s *AssociationSet) ForEach(fn func(key UniqueAssociation, pos int64)) {
 	s.changeLock.RLock()
 	if s.shards == nil {
 		if s.small != nil {
-			entries := s.small
+			entries := make([]assocEntry, len(s.small))
+			copy(entries, s.small)
 			s.changeLock.RUnlock()
 			for i := range entries {
 				fn(entries[i].key, entries[i].pos)

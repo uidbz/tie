@@ -2,6 +2,9 @@ package metadata
 
 import (
 	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,5 +75,107 @@ func TestIsDirHead(t *testing.T) {
 	}
 	if IsDirHead([]byte{0x89, 'P', 'N', 'G'}) {
 		t.Error("PNG magic should not be a directory")
+	}
+}
+
+// TestContentAddressIsStable pins the address space. The key that defines it
+// used to exist four times (client, metadata, the filehost, and a copy in
+// Config); one of them drifting would silently fork the store — the same bytes
+// would have two names, and uploads would not find their blobs.
+func TestContentAddressIsStable(t *testing.T) {
+	for _, tc := range []struct {
+		input, want string
+	}{
+		{"hello", "c738b072be8b8484d62c7399de2db2c0707b31ae65f4a325dfd6d7f690453cb5"},
+		{DirHeader + "x", "a828b7370654c9b22d2319b63de039f0da7d8079ce8d8a7322012a12c704c7ed"},
+	} {
+		got, err := HashReader(strings.NewReader(tc.input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Errorf("content address of %q changed: got %s, want %s", tc.input, got, tc.want)
+		}
+	}
+}
+
+// TestHashKeyIsDefinedOnce is the guard against re-forking: the key literal may
+// appear in exactly one file in this module.
+func TestHashKeyIsDefinedOnce(t *testing.T) {
+	const key = "A00102030405060708090A0B0C0D0E0FF0E0D0C0B0A090807060504030201000"
+
+	root, err := moduleRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found []string
+	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
+			return err
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil // this test names the key on purpose
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), key) {
+			found = append(found, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(found) != 1 {
+		t.Errorf("the content-address key is defined in %d files (%v); it must live in metadata/tiedir.go alone", len(found), found)
+	}
+	if len(found) == 1 && filepath.Base(found[0]) != "tiedir.go" {
+		t.Errorf("the content-address key lives in %s, not metadata/tiedir.go", found[0])
+	}
+}
+
+// moduleRoot walks up from the working directory to the module root, so the walk
+// covers the whole repo rather than this package.
+func moduleRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", errors.New("no go.mod above the test's working directory")
+		}
+		dir = parent
+	}
+}
+
+// TestMetadataDoesNotImportTiedb guards the layering: metadata describes the
+// on-disk and wire formats, so it must not depend on the storage engine. The
+// blob policy that used to live here needed tiedb for it; the engine now offers
+// the policy and the caller supplies the shape rule (§5.1 L21).
+func TestMetadataDoesNotImportTiedb(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(".", "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue // this file names the import path on purpose
+		}
+		b, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), `"github.com/uidbz/tie/tiedb"`) {
+			t.Errorf("%s imports the storage engine; metadata must not depend on tiedb", name)
+		}
 	}
 }

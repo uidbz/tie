@@ -28,26 +28,25 @@ func main() {
 	flag.Parse()
 
 	config := webservice.WebserviceConfig{
-		ListenOn:      *addr,
-		Insecure:      *insecure,
-		CertFile:      *certFile,
-		KeyFile:       *keyFile,
-		UserNamespace: "userdata",
+		ListenOn: *addr,
+		Insecure: *insecure,
+		CertFile: *certFile,
+		KeyFile:  *keyFile,
 		Auth: auth.NewStore(
 			map[string]auth.User{"myuser": {Password: "mypassword", Role: auth.RoleWrite}},
 			auth.RoleNone,
 		),
 	}
 
-	requests := []webservice.RequestInterface{
-		api.NewDummyRequest(),
-	}
-
-	ws := webservice.NewWebservice(config, requests)
+	ws := webservice.NewWebservice(config)
+	api.Register(ws)
 
 	routes := func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)
 	}
 
-	ws.ListenAndServe(routes)
+	if err := ws.ListenAndServe(routes); err != nil {
+		fmt.Fprintln(os.Stderr, "server:", err)
+		os.Exit(1)
+	}
 }

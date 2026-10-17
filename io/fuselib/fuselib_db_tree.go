@@ -70,7 +70,7 @@ func (d *taggedDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+len(dir.Archives))
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if name := tiesfs.BaseName(p); name != "" {
+			if name := tiefs.BaseName(p); name != "" {
 				entries = append(entries, fuse.DirEntry{
 					Name: name,
 					Mode: fuse.S_IFDIR,
@@ -86,7 +86,7 @@ func (d *taggedDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Ino:  d.state.tree.InodeID(a.Hash),
 		})
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
 			Name: f.Filename,
 			Mode: fuse.S_IFREG,
@@ -103,7 +103,7 @@ func (d *taggedDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if tiesfs.BaseName(p) != name {
+			if tiefs.BaseName(p) != name {
 				continue
 			}
 			child := &taggedDir{state: d.state, uid: sub.Uid}
@@ -119,7 +119,7 @@ func (d *taggedDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: d.state.tree.InodeID(a.Hash)}
 		return d.NewInode(ctx, child, stable), 0
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		if f.Filename != name {
 			continue
 		}
@@ -172,7 +172,7 @@ func (d *pathDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	entries := make([]fuse.DirEntry, 0, len(dir.SubDirs)+len(dir.Files)+len(dir.Archives))
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if name := tiesfs.BaseName(p); name != "" {
+			if name := tiefs.BaseName(p); name != "" {
 				entries = append(entries, fuse.DirEntry{Name: name, Mode: fuse.S_IFDIR})
 			}
 		}
@@ -184,7 +184,7 @@ func (d *pathDir) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 			Ino:  d.state.tree.InodeID(a.Hash),
 		})
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		entries = append(entries, fuse.DirEntry{
 			Name: f.Filename,
 			Mode: fuse.S_IFREG,
@@ -204,10 +204,10 @@ func (d *pathDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 	}
 	for _, sub := range dir.SubDirs {
 		for _, p := range sub.Paths {
-			if tiesfs.BaseName(p) != name {
+			if tiefs.BaseName(p) != name {
 				continue
 			}
-			child := &pathDir{state: d.state, path: tiesfs.ChildPath(d.path, name)}
+			child := &pathDir{state: d.state, path: tiefs.ChildPath(d.path, name)}
 			return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 		}
 	}
@@ -219,7 +219,7 @@ func (d *pathDir) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 		stable := fs.StableAttr{Mode: fuse.S_IFDIR, Ino: d.state.tree.InodeID(a.Hash)}
 		return d.NewInode(ctx, child, stable), 0
 	}
-	for _, f := range tiesfs.DisambiguateFiles(dir.Files) {
+	for _, f := range tiefs.DisambiguateFiles(dir.Files) {
 		if f.Filename != name {
 			continue
 		}
@@ -259,7 +259,7 @@ func (d *pathDir) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 	if _, err := d.state.tree.Mkdir(d.path, name); err != nil {
 		return nil, errnoFor(err, syscall.EIO)
 	}
-	child := &pathDir{state: d.state, path: tiesfs.ChildPath(d.path, name)}
+	child := &pathDir{state: d.state, path: tiefs.ChildPath(d.path, name)}
 	return d.NewInode(ctx, child, fs.StableAttr{Mode: fuse.S_IFDIR}), 0
 }
 
@@ -275,7 +275,7 @@ func (d *pathDir) Unlink(ctx context.Context, name string) syscall.Errno {
 // Rmdir removes an empty subdirectory. A non-empty directory returns ENOTEMPTY.
 func (d *pathDir) Rmdir(ctx context.Context, name string) syscall.Errno {
 	err := d.state.tree.DeleteDir(d.path, name)
-	if errors.Is(err, tiesfs.ErrNotEmpty) {
+	if errors.Is(err, tiefs.ErrNotEmpty) {
 		return syscall.ENOTEMPTY
 	}
 	return errnoFor(err, syscall.EIO)

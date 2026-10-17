@@ -27,14 +27,17 @@ import (
 // recomputed from the new bytes (filename/name/filesize/tag-date/media-type/
 // tie-type) and the parent edge are set fresh. An unchanged re-save (identical
 // bytes → identical hash) is a no-op. Returns the new content hash.
-func (tc *TieClient) WriteFile(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string) (string, error) {
-	return tc.WriteFileWithProgress(host, collection, parent, name, srcPath, extraTags, nil)
+func (tc *TieClient) WriteFile(host FileHost, parent DirUID, name, srcPath string, extraTags []string) (string, error) {
+	return tc.WriteFileWithProgress(host, parent, name, srcPath, extraTags, nil)
 }
 
 // WriteFileWithProgress behaves exactly like WriteFile but, when progress is
 // non-nil, writes each chunk of uploaded bytes to it so callers can render an
 // upload progress bar. The total byte count equals srcPath's size.
-func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, parent DirUID, name, srcPath string, extraTags []string, progress io.Writer) (string, error) {
+// WriteFileWithProgress and WriteFile write in the client's scoped collection:
+// the children and old metadata they read and the batch they write belong to the
+// same one (§3.8).
+func (tc *TieClient) WriteFileWithProgress(host FileHost, parent DirUID, name, srcPath string, extraTags []string, progress io.Writer) (string, error) {
 	stat, err := os.Stat(srcPath)
 	if err != nil {
 		return "", err
@@ -71,7 +74,7 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 		fileType = TieFile
 	}
 
-	batch := tc.NewBatchIn(collection)
+	batch := tc.NewBatch()
 	appendTagOps(batch, TagInfo{
 		Hash:      newHash,
 		File:      name,
@@ -86,13 +89,13 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 	// skipping the fields recomputed above (and parent, written by appendTagOps).
 	if hasOld {
 		recomputed := map[string]bool{
-			str(TieFilename):     true,
-			str(TieName):         true,
-			str(TieFilesize):     true,
-			str(TieTagDate):      true,
-			str(TieMediaType):    true,
-			str(TieTypeProperty): true,
-			str(TieParent):       true,
+			string(RelFilename):  true,
+			string(RelName):      true,
+			string(RelFilesize):  true,
+			string(RelTagDate):   true,
+			string(RelMediaType): true,
+			string(RelType):      true,
+			string(RelParent):    true,
 		}
 		oldRow, err := tc.Get(oldHash)
 		if err != nil && !errors.Is(err, ErrNotFound) {
@@ -104,17 +107,14 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 			}
 			for _, v := range values {
 				batch.Add(newHash, relation, v)
-				if relation == str(TieTag) {
-					batch.Add(str(TieTags), str(TieAll), v) // keep the tag registry consistent
+				if relation == string(RelTag) {
+					batch.Add(string(RelTags), string(RelAll), v) // keep the tag registry consistent
 				}
 			}
 		}
 	}
 
 	if _, err := tc.Batch(batch); err != nil {
-		return "", err
-	}
-	if err := tc.Sync(); err != nil {
 		return "", err
 	}
 
@@ -124,7 +124,7 @@ func (tc *TieClient) WriteFileWithProgress(host FileHost, collection string, par
 
 	// Version (or, at PrevVersions<=0, drop) the superseded content into the
 	// isolated history collection. Same helper reconcileDir uses.
-	if err := supersedeToPrev(tc, collection, parent, name, oldHash); err != nil {
+	if err := supersedeToPrev(tc, parent, name, oldHash); err != nil {
 		return "", err
 	}
 	return newHash, nil

@@ -1,10 +1,8 @@
 package client
 
 import (
-	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -19,19 +17,21 @@ func DefaultConfig() Config {
 	return conf
 }
 
+// Testing URLs are package vars so the test environment (testenv_test.go)
+// can point them at in-process servers; outside `go test` they keep the
+// test-env defaults.
+var (
+	testingTripleStoreURL = "http://localhost:2161"
+	testingFileHostURL    = "http://localhost:2162"
+)
+
 func TestingConfig() Config {
 	config := defaultConfig
 	config.Namespace = "testing"
 	config.Collection = "testing"
-	config.TripleStoreURL = "http://localhost:2161"
-	config.FileHosts = map[string]FileHost{"default": {URL: "http://localhost:2162"}}
+	config.TripleStoreURL = testingTripleStoreURL
+	config.FileHosts = map[string]FileHost{"default": {URL: testingFileHostURL}}
 	return config
-}
-
-// Deprecated - use LoadConfig instead
-func ReadConfig(configName string) Config {
-	c, _ := LoadConfig(configName)
-	return c
 }
 
 // ConfigFileName lets callers omit the extension: `tie -c myconf` resolves to
@@ -75,27 +75,26 @@ func LoadConfig(configName string) (Config, error) {
 		return defaultConfig, err
 	}
 	c.configPath = loadPath
-	normalizeConfig(&c)
 
-	return c, nil
-}
-
-// normalizeConfig applies backward-compatible defaults after decode: the
-// deprecated Webservice field maps to TripleStoreURL (and vice versa).
-//
-// A config with no [Collections] is deliberately left without one. Synthesizing
-// an entry from the flat Namespace/Collection fields would make that entry
-// shadow the fields it was copied from, so a caller that loads a config and then
-// overrides Config.Namespace/Config.Collection (the documented way to target a
-// collection programmatically) would be silently ignored. ResolveCollection's
-// unnamed path already resolves the flat fields identically.
-func normalizeConfig(c *Config) {
+	// `Webservice` was the name of the triplestore URL before TripleStoreURL,
+	// and the alias was honored through v0.6.0. Dropping the field silently
+	// would leave the client dialling an empty URL, so name the key and the fix.
 	if c.TripleStoreURL == "" {
-		c.TripleStoreURL = c.Webservice
+		var legacy struct{ Webservice string }
+		if err := conf.ReadConfig(loadPath, &legacy); err == nil && legacy.Webservice != "" {
+			return defaultConfig, fmt.Errorf(
+				"config %s: the Webservice key is no longer supported; it named the triplestore URL, now written as TripleStoreURL", loadPath)
+		}
 	}
-	if c.Webservice == "" {
-		c.Webservice = c.TripleStoreURL
-	}
+
+	// A config with no [Collections] is deliberately left without one.
+	// Synthesizing an entry from the flat Namespace/Collection fields would make
+	// that entry shadow the fields it was copied from, so a caller that loads a
+	// config and then overrides Config.Namespace/Config.Collection (the
+	// documented way to target a collection programmatically) would be silently
+	// ignored. ResolveCollection's unnamed path already resolves the flat fields
+	// identically.
+	return c, nil
 }
 
 // LoadOrCreateConfig loads configName like LoadConfig, but when no config file
@@ -124,45 +123,25 @@ func LoadOrCreateConfig(configName string) (Config, bool, error) {
 }
 
 func SaveConfig(name string, config Config) error {
+	_, err := SaveConfigTo(name, config)
+	return err
+}
+
+// SaveConfigTo writes the config and reports where it landed. `tie conf create`
+// is the only thing that writes a config (§6.6), so it has to be able to say
+// where the file went — and where it went follows the same rule as loading:
+// an explicit path (what -C or $TIE_CONFIG names) is written there, a bare name
+// goes to the user config dir.
+func SaveConfigTo(name string, config Config) (string, error) {
 	name = ConfigFileName(name)
-	// An explicit path is written directly (so LoadOrCreateConfig can create the
-	// default at the exact path -C names); a bare name goes to the user config dir.
 	if isConfigPath(name) {
-		return conf.WriteConfig(name, config)
+		if err := conf.WriteConfig(name, config); err != nil {
+			return "", err
+		}
+		return name, nil
 	}
-	return conf.SaveToUserConfigDir("tie", name, config)
-}
-
-func (tc *TieClient) PrintState() {
-	if tc.Config.verbose {
-		fmt.Println("Using triplestore:", tc.active.TripleStoreURL)
-		fmt.Println("Current namespace/collection is " + tc.active.Namespace + "/" + tc.active.Collection)
+	if err := conf.SaveToUserConfigDir("tie", name, config); err != nil {
+		return "", err
 	}
-}
-
-func InitKey() []byte {
-	k, err := hex.DecodeString(tieKey)
-	if err != nil {
-		fmt.Printf("Cannot decode hex key: %v", err) // add error handling
-		return nil
-	}
-
-	return k
-}
-func GetVideoHeight(source string) string {
-	//ffprobe -v error -select_streams v:0 -show_entries stream=height -of default=nw=1:nk=1
-	args := []string{
-		"-v", "error",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=height",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		source,
-	}
-	cmd := exec.Command("ffprobe", args...)
-	if out, err := cmd.Output(); err != nil {
-		fmt.Println(err)
-		return ""
-	} else {
-		return strings.TrimSpace(string(out)) + "p"
-	}
+	return conf.PathUserConfigDir("tie", name)
 }

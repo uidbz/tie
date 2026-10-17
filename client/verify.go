@@ -16,9 +16,10 @@ package client
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -84,7 +85,10 @@ const rootPathValue = FileURIScheme + "/"
 // The pass is read-only. It fetches the full directory and file universes
 // (unpaginated) and expands each node's forward attributes; memory is O(tree
 // size), consistent with the rest of the client.
-func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport, error) {
+// Verify reads the whole tree of the client's scoped collection and reports what
+// is wrong with it. checkBlobs additionally stats every content hash on the
+// collection's filehost.
+func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	rep := &VerifyReport{DuplicatePaths: make(map[string][]DirUID)}
 
 	// The structural tie-type "directory" marker is written on two different
@@ -96,18 +100,18 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 	// any other content). Partition the universe on the presence of a path
 	// triple so tiedir blobs are verified as files, not mistaken for orphaned
 	// directories.
-	dirRows, err := tie.allOfType(collection, str(TieDirectory))
+	dirRows, err := tie.allOfType(str(TieDirectory))
 	if err != nil {
 		return nil, err
 	}
-	fileRows, err := tie.allOfType(collection, str(TieFile))
+	fileRows, err := tie.allOfType(str(TieFile))
 	if err != nil {
 		return nil, err
 	}
 	var dirs []Row
 	files := fileRows
 	for _, row := range dirRows {
-		if len(RowValues(row, str(TiePath))) > 0 {
+		if len(RowValues(row, RelPath)) > 0 {
 			dirs = append(dirs, row)
 		} else {
 			files = append(files, row) // tiedir blob: a directory's content, not a node
@@ -123,7 +127,7 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 	pathClaim := make(map[string][]DirUID)
 	for _, row := range dirs {
 		dirByUID[row.Key] = row
-		for _, p := range RowValues(row, str(TiePath)) {
+		for _, p := range RowValues(row, RelPath) {
 			pathClaim[p] = append(pathClaim[p], DirUID(row.Key))
 		}
 	}
@@ -137,8 +141,8 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 	// Structural checks on directories.
 	for _, row := range dirs {
 		uid := row.Key
-		parents := RowValues(row, str(TieParent))
-		isRoot := RowHas(row, str(TiePath), rootPathValue)
+		parents := RowValues(row, RelParent)
+		isRoot := RowHas(row, RelPath, rootPathValue)
 
 		if !isRoot && len(parents) == 0 {
 			rep.OrphanDirs = append(rep.OrphanDirs, DirUID(uid))
@@ -157,7 +161,7 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 
 	// Structural + metadata checks on files.
 	for _, row := range files {
-		parents := RowValues(row, str(TieParent))
+		parents := RowValues(row, RelParent)
 		if len(parents) == 0 {
 			rep.OrphanFiles = append(rep.OrphanFiles, row.Key)
 		}
@@ -193,11 +197,12 @@ func (tie *TieClient) Verify(collection string, checkBlobs bool) (*VerifyReport,
 
 // allOfType returns every Row carrying the structural tie-type value (e.g.
 // "directory", "file"), unpaginated, via a reverse tie-type query with
-// Expand. ErrNotFound maps to an empty set (no such items yet).
-func (tie *TieClient) allOfType(collection, typeValue string) ([]Row, error) {
-	rows, _, err := tie.QueryIn(collection, QuerySpec{
+// Expand. ErrNotFound maps to an empty set (no such items yet). It reads the
+// client's scoped collection.
+func (tie *TieClient) allOfType(typeValue string) ([]Row, error) {
+	rows, _, err := tie.Query(QuerySpec{
 		Terms:   []string{typeValue},
-		Filter:  str(TieTypeProperty),
+		Filter:  string(RelType),
 		Reverse: true,
 		Expand:  true,
 		Limit:   -1, // no limit: verify must see the whole universe
@@ -230,25 +235,25 @@ func (rep *VerifyReport) checkDirMetadata(row Row) {
 // likewise only applied to real files, which should carry a concrete media
 // tie-type beyond the structural "file" marker.
 func (rep *VerifyReport) checkFileMetadata(row Row) {
-	isTiedir := RowHas(row, str(TieTypeProperty), str(TieDirectory)) ||
-		RowFirst(row, str(TieMediaType)) == "inode/directory"
+	isTiedir := RowHas(row, RelType, str(TieDirectory)) ||
+		RowFirst(row, RelMediaType) == "inode/directory"
 	var missing []string
-	required := []TieProperty{TieFilename, TieFilesize}
+	required := []Relation{RelFilename, RelFilesize}
 	if !isTiedir {
-		required = append(required, TieMediaType)
+		required = append(required, RelMediaType)
 	}
 	for _, rel := range required {
-		if len(RowValues(row, str(rel))) == 0 {
-			missing = append(missing, str(rel))
+		if len(RowValues(row, rel)) == 0 {
+			missing = append(missing, string(rel))
 		}
 	}
 	if !isTiedir {
 		// A real file should carry a concrete media tie-type beyond the
 		// structural "file" marker (image-file, audio-file, ...); only the
 		// marker means the type was never classified.
-		types := RowValues(row, str(TieTypeProperty))
+		types := RowValues(row, RelType)
 		if len(types) == 0 || (len(types) == 1 && types[0] == str(TieFile)) {
-			missing = append(missing, str(TieTypeProperty))
+			missing = append(missing, string(RelType))
 		}
 	}
 	if len(missing) > 0 {
@@ -263,7 +268,7 @@ func (rep *VerifyReport) checkFileMetadata(row Row) {
 func detectCycles(dirByUID map[string]Row) [][]DirUID {
 	parents := make(map[string][]string, len(dirByUID))
 	for uid, row := range dirByUID {
-		for _, p := range RowValues(row, str(TieParent)) {
+		for _, p := range RowValues(row, RelParent) {
 			if p != uid { // skip the root self-edge
 				parents[uid] = append(parents[uid], p)
 			}
@@ -322,61 +327,80 @@ func detectCycles(dirByUID map[string]Row) [][]DirUID {
 	return cycles
 }
 
+// blobCheckWorkers bounds how many blob HEADs the check keeps in flight. One at
+// a time, a 1M-file check costs 1M round trips — hours; 16 concurrent HEADs
+// bring it to minutes without hammering the filehost (§5.2 item 7).
+const blobCheckWorkers = 16
+
 // checkBlobsExist stats every file's content hash on each configured default
 // filehost and returns the hashes absent from all of them. One HEAD request per
-// hash per host; concurrency is kept modest to avoid hammering the server.
+// hash; the work runs through a small worker pool and the result is sorted, so
+// it is the same list whatever the scheduling.
 func (tie *TieClient) checkBlobsExist(files []Row) ([]string, error) {
-	hosts := tie.active.FileHosts
-	if len(hosts) == 0 {
-		return nil, errors.New("no filehosts configured for blob check")
+	// The first host of the collection being verified, not of the client's
+	// bound collection: `tie verify -c other --check-blobs` has to ask the
+	// filehost that collection writes to (§8 S11). Only the first host is
+	// asked, because content-addressed blobs are identical across hosts and
+	// presence on any one is what matters for reachability.
+	host, err := tie.ResolveHost("")
+	if err != nil {
+		return nil, err
 	}
-	// Use the first configured host for existence; content-addressed blobs are
-	// identical across hosts, so presence on any one is what matters for
-	// reachability of the canonical copy.
-	host, ok := tie.Config.FileHosts[hosts[0]]
-	if !ok {
-		return nil, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
-	}
-	hc := HTTPClientFor(host)
+	fh := FileHostClient(host)
 
-	var missing []string
+	var (
+		wg       sync.WaitGroup
+		jobs     = make(chan string, blobCheckWorkers*2)
+		results  = make([][]string, blobCheckWorkers)
+		firstErr error
+		errOnce  sync.Once
+		// stop is what the workers poll: firstErr itself is only safe to read
+		// after wg.Wait.
+		stop atomic.Bool
+	)
+	for w := 0; w < blobCheckWorkers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for hash := range jobs {
+				// After the first error the workers keep draining (so the
+				// feeder never blocks) but do no more work.
+				if stop.Load() {
+					continue
+				}
+				ok, _, err := fh.Stat(hash)
+				if err != nil {
+					errOnce.Do(func() {
+						firstErr = err
+						stop.Store(true)
+					})
+					continue
+				}
+				if !ok {
+					results[w] = append(results[w], hash)
+				}
+			}
+		}(w)
+	}
 	for _, row := range files {
 		hash := row.Key
 		if len(hash) != 64 {
 			continue // not a content hash (shouldn't happen for a file); skip
 		}
-		ok, err := blobExists(hc, host.URL, hash)
-		if err != nil {
-			return missing, err
-		}
-		if !ok {
-			missing = append(missing, hash)
-		}
+		jobs <- hash
+	}
+	close(jobs)
+	wg.Wait()
+
+	var missing []string
+	for _, r := range results {
+		missing = append(missing, r...)
+	}
+	sort.Strings(missing)
+	if firstErr != nil {
+		return missing, firstErr
 	}
 	return missing, nil
-}
-
-// blobExists issues a HEAD request for hash against the filehost and reports
-// whether the blob is present (200) or absent (404). Any other status or a
-// transport error is surfaced as an error rather than misreported as absence.
-func blobExists(hc *http.Client, baseURL, hash string) (bool, error) {
-	req, err := http.NewRequest(http.MethodHead, baseURL+"/"+hash, nil)
-	if err != nil {
-		return false, err
-	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, nil
-	case http.StatusNotFound:
-		return false, nil
-	default:
-		return false, fmt.Errorf("filehost stat %s: unexpected status %s", hash, resp.Status)
-	}
 }
 
 // StatBlob issues a HEAD for hash against the first configured default filehost
@@ -384,33 +408,11 @@ func blobExists(hc *http.Client, baseURL, hash string) (bool, error) {
 // Content-Length header). A 404 returns (false, 0, nil); any other non-200
 // status or transport error is surfaced as an error.
 func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) {
-	hosts := tc.active.FileHosts
-	if len(hosts) == 0 {
-		return false, 0, errors.New("no filehosts configured for blob stat")
-	}
-	host, ok := tc.Config.FileHosts[hosts[0]]
-	if !ok {
-		return false, 0, fmt.Errorf("default filehost %q has no [FileHosts] entry", hosts[0])
-	}
-	hc := HTTPClientFor(host)
-
-	req, err := http.NewRequest(http.MethodHead, host.URL+"/"+hash, nil)
+	fh, err := tc.BlobClient("")
 	if err != nil {
 		return false, 0, err
 	}
-	resp, err := hc.Do(req)
-	if err != nil {
-		return false, 0, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK:
-		return true, resp.ContentLength, nil
-	case http.StatusNotFound:
-		return false, 0, nil
-	default:
-		return false, 0, fmt.Errorf("filehost stat %s: unexpected status %s", hash, resp.Status)
-	}
+	return fh.Stat(hash)
 }
 
 // RepairOrphans re-homes every orphan in rep under a timestamped restored/
@@ -427,7 +429,9 @@ func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) 
 // rep should come from a just-run Verify on the same collection; stale reports
 // are harmless (re-parenting an already-parented node just adds another parent
 // edge), but a fresh pass avoids re-homing nodes another client already fixed.
-func (tie *TieClient) RepairOrphans(collection string, rep *VerifyReport, destDir string) (int, error) {
+// RepairOrphans re-homes the orphan files and directories verify found in the
+// client's scoped collection, under destDir.
+func (tie *TieClient) RepairOrphans(rep *VerifyReport, destDir string) (int, error) {
 	if rep == nil || (len(rep.OrphanDirs) == 0 && len(rep.OrphanFiles) == 0) {
 		return 0, nil
 	}
@@ -442,20 +446,20 @@ func (tie *TieClient) RepairOrphans(collection string, rep *VerifyReport, destDi
 		return 0, err
 	}
 
-	batch := tie.NewBatchIn(collection)
+	batch := tie.NewBatch()
 	n := 0
 	for _, uid := range rep.OrphanDirs {
-		batch.Add(string(uid), str(TieParent), string(parentUID))
+		batch.Add(string(uid), string(RelParent), string(parentUID))
 		n++
 	}
 	for _, hash := range rep.OrphanFiles {
-		batch.Add(hash, str(TieParent), string(parentUID))
+		batch.Add(hash, string(RelParent), string(parentUID))
 		n++
 	}
 	if _, err := tie.Batch(batch); err != nil {
 		return 0, err
 	}
-	if err := tie.SyncIn(collection); err != nil {
+	if err := tie.Sync(); err != nil {
 		return 0, err
 	}
 	return n, nil
