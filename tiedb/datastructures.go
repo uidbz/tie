@@ -40,15 +40,7 @@ const (
 	// fields carry HASH_LEVEL, so getValue resolves it from hashEntries instead
 	// of walking ParentId links.
 	HASH_LEVEL = -1
-
-	// ASSOCIATED = "associated"
 )
-
-type FileIndexer interface {
-	defaultRelations() []string
-	defaultHandlers() []string
-	defaultTypes() []string
-}
 
 type CollectionKey struct {
 	Database   string
