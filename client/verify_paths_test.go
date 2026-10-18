@@ -87,6 +87,82 @@ func TestVerifyPathlessDirNotMissingBlob(t *testing.T) {
 	}
 }
 
+// TestVerifyDirectoryWithoutTieType covers #122. A node with a `path` triple is
+// a directory — content nodes carry no path — but verify's tree universe comes
+// from the reverse tie-type query, so a directory whose structural tie-type
+// triple was destroyed is in neither universe. Its children then read as
+// dangling parent references, and a fixing repair re-parents them to the
+// grandparent: a folder's contents moved a level up, away from the folder that
+// is sitting right there.
+func TestVerifyDirectoryWithoutTieType(t *testing.T) {
+	tie := freshVerifyClient(t)
+	dir := t.TempDir()
+	mkdir(t, dir+"/keep/photos")
+	writeFile(t, dir+"/keep/photos/a.jpg", "one")
+	if err := tie.ImportDir(dir, tie.Config.FileHosts["default"], "directory", nil, "", 0); err != nil {
+		t.Fatalf("ImportDir: %v", err)
+	}
+	keep, err := tie.DirUIDFromPath(FileURIScheme + dir + "/keep")
+	if err != nil || keep == "" {
+		t.Fatalf("DirUIDFromPath(keep) = %q, %v", keep, err)
+	}
+	photos, err := tie.DirUIDFromPath(FileURIScheme + dir + "/keep/photos")
+	if err != nil || photos == "" {
+		t.Fatalf("DirUIDFromPath(photos) = %q, %v", photos, err)
+	}
+	row, err := tie.Get(string(photos))
+	if err != nil {
+		t.Fatalf("Get(%s): %v", short(string(photos)), err)
+	}
+	for _, v := range RowValues(row, RelType) {
+		if _, err := tie.Delete(string(photos), string(RelType), v); err != nil {
+			t.Fatalf("dropping tie-type %q: %v", v, err)
+		}
+	}
+	if err := tie.Sync(); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	a := hashOf(t, dir+"/keep/photos/a.jpg")
+	rep, err := tie.Verify(false)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if f := findingOf(rep, "dangling-parent", a); f != nil {
+		t.Errorf("%s's parent carries a path, so it is a directory; findings=%v", short(a), rep.Findings())
+	}
+	if findingOf(rep, "missing-tie-type", string(photos)) == nil {
+		t.Errorf("verify should report the directory whose structural marker is gone; findings=%v", rep.Findings())
+	}
+
+	res, err := tie.RepairTree(rep, RepairOptions{Apply: true})
+	if err != nil {
+		t.Fatalf("RepairTree --fix: %v", err)
+	}
+	if !planHasOp(res.Planned, api.BatchAdd, string(photos), string(RelType)) {
+		t.Errorf("repair should plan to re-derive the tie-type of %s; planned=%v", short(string(photos)), res.Planned)
+	}
+	after, err := tie.Get(string(photos))
+	if err != nil || !RowHas(after, RelType, str(TieDirectory)) {
+		t.Errorf("%s is not marked a directory after repair: %+v err=%v", short(string(photos)), after, err)
+	}
+	crow, err := tie.Get(a)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", short(a), err)
+	}
+	if !RowHas(crow, RelParent, string(photos)) {
+		t.Errorf("%s should still be a child of %s, parents=%v", short(a), short(string(photos)), RowValues(crow, RelParent))
+	}
+	rep2, err := tie.Verify(false)
+	if err != nil {
+		t.Fatalf("Verify after repair: %v", err)
+	}
+	if rep2.Problems() != 0 {
+		t.Errorf("problems left after repair: %+v", rep2)
+	}
+	_ = keep
+}
+
 // TestRepairKeepsPathlessDirWithManifest is the destructive half of #118. The
 // node above was saved from the ghost test by triples it happens to carry (a
 // name, a size); strip those and nothing but the structural marker, the manifest

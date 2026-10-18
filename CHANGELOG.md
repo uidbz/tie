@@ -16,6 +16,11 @@ to follow semantic versioning.
   carries what a repair needs — the recorded name and the path to restore, or the
   claimed path and where a parent actually lists the node. The findings wire
   format is unchanged; only new `kind` values appear.
+- **A lost structural marker is re-derivable.** A node carrying a `path` triple
+  but no `tie-type` — only directory nodes have paths — is reported as
+  `missing-tie-type`, joins the tree scan instead of leaving its children
+  looking dangling, and `repair plan` adds the `(uid, tie-type, directory)`
+  triple back.
 - **`tie repair plan` can put those directories back.** A node that lost its path
   gets `<live parent path>/<recorded name>` added; a node whose path and parent
   disagree adopts the path it claims, creating any missing intermediate directory
@@ -33,6 +38,15 @@ to follow semantic versioning.
   edges the recorded one replaces.
 
 ### Fixed
+
+- **A directory whose structural marker is gone is still seen as a directory.**
+  `Verify` seeded its tree universe from the reverse `tie-type: directory` query,
+  so a node carrying a `path` but no `tie-type` was in neither universe: it
+  escaped every check, each of its children's edges answered as a **dangling
+  parent reference**, and `repair apply --fix` moved a folder's contents up a
+  level — re-parenting them to the grandparent, away from the directory that is
+  sitting right there. Such a node now joins the tree scan, is reported, and
+  repair re-derives the marker from the path.
 
 - **A re-home no longer leaves a directory whose path contradicts its new
   parent.** `tie verify --repair` re-homed every orphan — files and directories
