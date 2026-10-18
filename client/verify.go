@@ -212,6 +212,28 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 		rep.MissingTieType = append(rep.MissingTieType, MarkerGap{UID: DirUID(p), Path: ps[0]})
 	}
 
+	// The scan above is edge-driven: it finds a marker gap because something
+	// points at the node. A childless directory that lost its marker, and whose
+	// own parent edge is gone too, is referenced by nothing and so turns up
+	// nowhere — it stays browsable while escaping the orphan, metadata and cycle
+	// checks. The store can answer the question directly: every subject carrying a
+	// `path` triple, whatever its value (#124). Only directory nodes carry a path,
+	// so anything here the tree does not already know is such a node.
+	pathHolders, err := tie.allHoldingRelation(string(RelPath))
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range pathHolders {
+		if _, known := dirByUID[row.Key]; known {
+			continue // already a known directory, or found through an edge above
+		}
+		dirByUID[row.Key] = row
+		for _, pp := range RowValues(row, RelPath) {
+			pathClaim[pp] = append(pathClaim[pp], DirUID(row.Key))
+		}
+		rep.MissingTieType = append(rep.MissingTieType, MarkerGap{UID: DirUID(row.Key), Path: RowFirst(row, RelPath)})
+	}
+
 	for p, uids := range pathClaim {
 		if len(uids) > 1 {
 			sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
@@ -359,6 +381,27 @@ func (tie *TieClient) allOfType(typeValue string) ([]Row, error) {
 		Reverse: true,
 		Expand:  true,
 		Limit:   -1, // no limit: verify must see the whole universe
+	})
+	if errors.Is(err, ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// allHoldingRelation returns every Row carrying at least one triple under
+// relation, whatever its value, unpaginated and with its full attributes. It is
+// the client shape of the store's relation-presence predicate (#124): the
+// question neither query direction can ask from a term, because both key on a
+// value. ErrNotFound maps to an empty set.
+func (tie *TieClient) allHoldingRelation(relation string) ([]Row, error) {
+	rows, _, err := tie.Query(QuerySpec{
+		HasRelation: relation,
+		Filter:      relation,
+		Expand:      true,
+		Limit:       -1, // no limit: verify must see the whole universe
 	})
 	if errors.Is(err, ErrNotFound) {
 		return nil, nil

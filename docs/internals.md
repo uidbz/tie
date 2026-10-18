@@ -152,6 +152,17 @@ the 16-shard array on the *second* key, so every 2-entry set paid the full
 ~1 KiB shard overhead — a large regression on a bimodal collection. Set algebra
 (`intersect`/`exclude`, used by `QueryTags`) stays internal to `tiedb`.
 
+Neither index is keyed by relation alone: forward is keyed by the subject,
+reverse by the value. So "which subjects hold relation R, whatever the value"
+has no index to answer it — the `HasRelation` predicate (`query.go`, #124)
+walks the forward trees the way `ForEachTriple` does and keeps one entry per
+subject carrying that relation. That is a full pass, the shape of an export
+rather than a lookup, and it is still the cheaper place to answer the question:
+the alternative is shipping every triple to the caller. It exists because
+`verify` needs it — a directory node whose structural `tie-type` triple is gone
+is invisible to a `tie-type`-driven universe, and the nodes that reference
+nothing are invisible to an edge-driven scan too.
+
 `insertAssociation` (`collection.go`) builds the forward node always, and the
 reverse node only when `shouldBuildReverse` allows it (see below).
 

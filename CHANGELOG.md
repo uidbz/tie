@@ -46,6 +46,17 @@ to follow semantic versioning.
   `getlib.ReadFileContext`/`ReadBytesContext`/`DownloadFileContext`/`TotalSizeContext`/`IsDirContext`
   and `getlib.Cache.ReadFileContext`, and `putlib.PutConfig.Context` stops a directory
   walk between items. The existing methods keep their signatures and behaviour.
+- **A query can ask which subjects hold a relation.** `QuerySpec.HasRelation`
+  (wire field `hasRelation`) keeps only subjects carrying at least one triple
+  under a named relation, whatever its value — `MissingRelation`'s mirror, and
+  usable as the seed on its own. That is the question neither query direction
+  could ask before, because both key on a *value*. In `tiedb` it walks the
+  forward index (no index is keyed by relation alone) and answers one entry per
+  subject, so `Expand` is what shows all of a subject's values. `verify` now
+  enumerates path-carrying nodes this way instead of only the ones an edge points
+  at, so a directory whose structural marker is gone is reported even when it has
+  no children and no parent edge; `repair plan` re-derives the marker **and**
+  re-homes the node under the directory its path names, in one pass.
 
 ### Fixed
 
