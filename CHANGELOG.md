@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- **An interrupted download no longer leaves a truncated file where a complete
+  one should be.** `getlib.DownloadFile` wrote each entry straight to its final
+  path, and the checksum that catches a short or tampered transfer only ran
+  after those bytes were already sitting there under the right name. Callers
+  that materialize blobs by content address — tie-gui's cache, the mounts,
+  `tie download` — treat "the file exists" as "the file is complete", so one
+  cancelled request or dropped connection poisoned the cache permanently. Each
+  file is now staged in a sibling temp file, fsynced, and renamed into place
+  only once its bytes have hashed to the address they were fetched under; any
+  failure removes the staged file, so a failed download leaves nothing at the
+  final path. Downloaded files land with mode 0644 rather than whatever the
+  umask allowed.
+
 ## [v0.7.1] - 2026-10-18
 
 ### Fixed

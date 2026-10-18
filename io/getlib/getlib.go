@@ -34,9 +34,97 @@ const maxDepth = 128
 // it was requested under, i.e. the server returned the wrong or tampered bytes.
 var ErrChecksum = errors.New("getlib: downloaded content does not match its hash")
 
-// tieFunc consumes one regular file's verified content and its path relative to
-// the download root. execForEach invokes it for every file in the tree.
-type tieFunc func(file io.Reader, relPath string) error
+// sink is where one downloaded file's bytes go, and how the download commits
+// them. write receives the bytes; commit runs only once every byte has been
+// read and hashed to the address it was requested under, and abort runs on any
+// failure. The pair exists because verification finishes after the consumer has
+// taken the bytes: writing straight to the final path would leave a truncated or
+// tampered file sitting there, named exactly like a good one, while the checksum
+// error travels back up to the caller. Callers that cache materialized blobs by
+// content address (tie-gui, the mounts, `tie download`) treat "the file exists"
+// as "the file is complete", so that leftover poisons them permanently.
+type sink struct {
+	write  io.Writer
+	commit func() error
+	abort  func()
+}
+
+// tieFunc opens the sink for one file of the tree, addressed by its path
+// relative to the download root.
+type tieFunc func(relPath string) (*sink, error)
+
+// DownloadFile downloads sourceHash — a file, or a whole tree of directory
+// manifests — into destination. Each file is staged beside its final name and
+// moved into place only after its bytes hash to the address they were fetched
+// under, so a cancelled request, a dropped connection, a short write or a
+// tampering server leaves nothing at the final path.
+func DownloadFile(client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
+	return execForEach(client, url, sourceHash, stageInto(destination), "", progress, 0)
+}
+
+// tmpPrefix names the staged files a download leaves in the destination
+// directory while bytes are in flight. The leading dot keeps them out of the
+// way of a directory listing, and they are removed on every failure path.
+const tmpPrefix = ".tie-dl-"
+
+// stageInto returns the sink that stages each downloaded file in its destination
+// directory and renames it into place on commit.
+func stageInto(destination string) tieFunc {
+	return func(relPath string) (*sink, error) {
+		fullpath := filepath.Join(destination, relPath)
+		dir := filepath.Dir(fullpath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, errors.New("Error making directories: " + err.Error())
+		}
+		tmp, err := os.CreateTemp(dir, tmpPrefix)
+		if err != nil {
+			return nil, err
+		}
+		tmpName := tmp.Name()
+		return &sink{
+			write: tmp,
+			commit: func() error {
+				// Flush the bytes before the name appears, then move the name.
+				if err := tmp.Sync(); err != nil {
+					tmp.Close()
+					os.Remove(tmpName)
+					return err
+				}
+				if err := tmp.Close(); err != nil {
+					os.Remove(tmpName)
+					return err
+				}
+				// os.CreateTemp is 0600; downloaded library files are ordinary
+				// readable files, as os.Create would have made them.
+				if err := os.Chmod(tmpName, 0644); err != nil {
+					os.Remove(tmpName)
+					return err
+				}
+				if err := os.Rename(tmpName, fullpath); err != nil {
+					os.Remove(tmpName)
+					return err
+				}
+				syncDir(dir)
+				return nil
+			},
+			abort: func() {
+				tmp.Close()
+				os.Remove(tmpName)
+			},
+		}, nil
+	}
+}
+
+// syncDir best-effort fsyncs a directory so the renamed entry itself survives a
+// crash. Platforms that cannot open a directory for syncing just get nothing.
+func syncDir(dir string) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	f.Sync()
+	f.Close()
+}
 
 // fetch GETs sourceHash and returns the body only on 200 OK, plus the size the
 // filehost reported (-1 when it did not say). The caller must close the body.
@@ -70,27 +158,6 @@ func readBlob(client *http.Client, url, sourceHash string) ([]byte, error) {
 		return nil, ErrChecksum
 	}
 	return data, nil
-}
-
-func DownloadFile(client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
-	writeFile := func(file io.Reader, relPath string) error {
-		fullpath := filepath.Join(destination, relPath)
-		dir := filepath.Dir(fullpath)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return errors.New("Error making directories: " + err.Error())
-		}
-		dest, err := os.Create(fullpath)
-		if err != nil {
-			return err
-		}
-		defer dest.Close()
-		if _, err := io.Copy(dest, file); err != nil {
-			return err
-		}
-		return nil
-	}
-
-	return execForEach(client, url, sourceHash, writeFile, "", progress, 0)
 }
 
 // TotalSize returns the number of file bytes a download of sourceHash would
@@ -307,9 +374,12 @@ func execForEach(client *http.Client, url string, sourceHash string, fn tieFunc,
 	isDir := header.String() == dirHeader
 
 	if !isDir {
-		// Regular file: stream body -> hasher -> Run, so a multi-GB blob is
-		// never fully buffered. verifyReader hashes every byte the consumer
-		// reads; content is verified before it is trusted.
+		// Regular file: stream body -> hasher -> sink, so a multi-GB blob is
+		// never fully buffered. verifyReader hashes every byte that flows, and
+		// the sink is committed only once checkComplete agrees these are the
+		// bytes this address names; any other outcome aborts the sink, which
+		// removes what it staged. Verification therefore finishes before the
+		// bytes become visible under their final name.
 		hasher, err := metadata.NewHash()
 		if err != nil {
 			return err
@@ -317,14 +387,23 @@ func execForEach(client *http.Client, url string, sourceHash string, fn tieFunc,
 		full := io.MultiReader(bytes.NewReader(header.Bytes()), body)
 		vr := &verifyReader{r: full, hasher: hasher, want: sourceHash}
 
-		var consumer io.Reader = vr
-		if progress != nil {
-			consumer = io.TeeReader(vr, progress)
-		}
-		if err := fn(consumer, relPath); err != nil {
+		s, err := fn(relPath)
+		if err != nil {
 			return err
 		}
-		return vr.checkComplete()
+		src := io.Reader(vr)
+		if progress != nil {
+			src = io.TeeReader(vr, progress)
+		}
+		if _, err := io.Copy(s.write, src); err != nil {
+			s.abort()
+			return err
+		}
+		if err := vr.checkComplete(); err != nil {
+			s.abort()
+			return err
+		}
+		return s.commit()
 	}
 
 	// Directory manifest: buffer (small) and verify the whole blob.
