@@ -4,6 +4,38 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- **The filehost read cache no longer holds one file descriptor per cached
+  blob.** Indexing `CachePath` at start-up opened every cached file and kept the
+  handle open, so a cache of any size exhausted the process descriptor budget
+  before the listening socket could be created: with 3 000 cached blobs and
+  `ulimit -n 512` the server died with `socket: too many open files`, and a
+  supervisor that respawns (`Restart=on-failure`, OpenRC `respawn_max=0`)
+  restarted it every few seconds forever — the log said it was starting, and
+  every connection was refused. Descriptors now belong to the handle that is
+  reading and close with it: 3 000 adopted entries cost 7 descriptors, and
+  eviction is still safe mid-read because an open fd survives the unlink.
+
+- **The filehost binds before it says it is listening.** Its serve block logged
+  `listening` and *then* called `ListenAndServe`, so a port already in use — the
+  usual upgrade mistake, the old instance still holding 1162 — printed a log
+  line claiming a server existed. It now opens the socket first and logs the
+  address the socket actually got.
+
+- **The blob-store dir index is built by the reaper, not at start-up.** Building
+  it opens every blob in the store; on a large cold store that was minutes with
+  the listener still closed, and a respawning supervisor restarted the scan
+  before it could finish. Start-up now only reads the index.
+- **An incomplete dir index is never trusted to mark.** The index file can
+  appear without ever having seen the store (the first directory-blob upload
+  creates it with one line), and the cheap repair path only looks at blobs newer
+  than that file — so every directory predating it was invisible and the blobs
+  under it were swept. The index now carries a completion marker, and a scan
+  interrupted by a crash is redone rather than trusted.
+
 ## [v0.7.0] - 2026-10-17
 
 ### Added
