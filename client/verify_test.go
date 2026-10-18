@@ -424,8 +424,14 @@ func TestRepairTree(t *testing.T) {
 
 	rep, err := tie.Verify(false)
 	must("verify", err)
-	if len(rep.DanglingParentRefs) != 1 || rep.DanglingParentRefs[0].Child != b || rep.DanglingParentRefs[0].Parent != ghost {
-		t.Fatalf("DanglingParentRefs = %+v, want b -> ghost", rep.DanglingParentRefs)
+	// The ghost is dir-typed, so it is a (broken) directory node rather than
+	// content: b's edge to it is not a dangling reference, and the node itself
+	// is what verify reports (#118).
+	if len(rep.DanglingParentRefs) != 0 {
+		t.Fatalf("DanglingParentRefs = %+v, want none: the parent is a dir-typed node", rep.DanglingParentRefs)
+	}
+	if len(rep.PathlessDirs) != 1 || rep.PathlessDirs[0].UID != DirUID(ghost) {
+		t.Fatalf("PathlessDirs = %+v, want the ghost node", rep.PathlessDirs)
 	}
 	if len(rep.MissingMetadata) < 2 {
 		t.Fatalf("MissingMetadata = %+v, want at least the bare node and a.txt", rep.MissingMetadata)

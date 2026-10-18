@@ -27,12 +27,15 @@ func cmdRepair(a *app) *cli.Command {
 		Description: "plan reads the findings `tie verify` writes and answers the triple operations\n" +
 			"that would fix them; apply reads those operations and runs them, echoing\n" +
 			"the journal. A journal is a plan with a timestamp in front, so a journal\n" +
-			"can be replayed with apply. Cycles and duplicate path claims are reported\n" +
-			"by verify and never auto-fixed; index divergences are fixed by\n" +
+			"can be replayed with apply. A directory that lost its path, or whose path and\n" +
+			"parent edge disagree, is restored additively; --drop-stale also deletes the\n" +
+			"edges that contradict an adopted path. Cycles and duplicate path claims are\n" +
+			"reported by verify and never auto-fixed; index divergences are fixed by\n" +
 			"`tie verify --index --repair`.",
 		Commands: []*cli.Command{
 			repairPlanCommand(a),
 			repairApplyCommand(a),
+			repairRelinkCommand(a),
 		},
 	}
 }
@@ -49,6 +52,7 @@ func repairPlanCommand(a *app) *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "collection", Usage: "Collection to plan against (default: config Collection)"},
 			&cli.StringFlag{Name: "dest", Usage: "Fallback parent for children with no live ancestor (default: tie:/restored/<today>)"},
+			&cli.BoolFlag{Name: "drop-stale", Usage: "When a directory adopts its own path, also delete the parent edges that contradict it (default: keep both)"},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
 			src, closeSrc, err := inputReader(ctx)
@@ -68,7 +72,8 @@ func repairPlanCommand(a *app) *cli.Command {
 
 			scoped := a.tie.In(ctx.String("collection"))
 			res, err := scoped.RepairTree(client.ReportFromFindings(findings), client.RepairOptions{
-				Dest: ctx.String("dest"),
+				Dest:      ctx.String("dest"),
+				DropStale: ctx.Bool("drop-stale"),
 			})
 			if err != nil {
 				return operationalError("repair plan: %v", err)
@@ -153,6 +158,86 @@ func repairApplyCommand(a *app) *cli.Command {
 				return operationalError("repair apply: %v (%d operation(s) applied before it failed)", err, applied)
 			}
 			fmt.Fprintf(os.Stderr, "applied %s\n", pluralWith(applied, "operation", "operations"))
+			return nil
+		},
+	}
+}
+
+// repairRelinkCommand is the containment half of #120: undoing the flat pile a
+// bulk re-home leaves behind. It reads the collection's own records (each
+// directory's tiedir manifest) rather than a finding stream, so it is its own
+// stage: plan, review, apply.
+func repairRelinkCommand(a *app) *cli.Command {
+	return &cli.Command{
+		Name:  "relink",
+		Usage: "Rebuild directory containment from tiedir manifests (plan, or apply with --apply)",
+		Description: "Every directory links the immutable tiedir manifest it was imported from, and\n" +
+			"that manifest records each entry's content hash and name. So a bulk re-home\n" +
+			"that left a folder's contents flat in one recovery directory can be undone:\n" +
+			"relink re-asserts the recorded (child, parent, directory) edge for every child\n" +
+			"whose only parents today are recovery directories, resolving a subdirectory\n" +
+			"entry through the manifest it is the snapshot of rather than by name. Children\n" +
+			"under a live directory are left as they are.\n" +
+			"\n" +
+			"Without --apply it prints the operations (the same records `tie repair plan`\n" +
+			"answers, so they can be reviewed or fed to `tie repair apply`); with --apply it\n" +
+			"runs them and echoes the journal. --drop-stale also removes the recovery-\n" +
+			"directory edges once the recorded one is in place, so a node ends up in one\n" +
+			"place rather than two.",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "collection", Usage: "Collection to relink (default: config Collection)"},
+			&cli.BoolFlag{Name: "apply", Usage: "Run the operations instead of only printing them"},
+			&cli.StringFlag{Name: "recovery-prefix", Usage: "Path prefix marking a re-home's recovery directories (default: tie:/restored/)"},
+			&cli.IntFlag{Name: "limit", Usage: "Read at most this many directory manifests, to try a bounded slice first"},
+			&cli.BoolFlag{Name: "drop-stale", Usage: "Delete the recovery-directory parent edges the recorded edge replaces"},
+			&cli.StringFlag{Name: "journal", Usage: "With --apply, also write the journal to this file"},
+		},
+		Action: func(_ context.Context, ctx *cli.Command) error {
+			apply := ctx.Bool("apply")
+			opts := client.RelinkOptions{
+				Apply:          apply,
+				RecoveryPrefix: ctx.String("recovery-prefix"),
+				DropStale:      ctx.Bool("drop-stale"),
+				ManifestLimit:  ctx.Int("limit"),
+				Progress:       os.Stderr,
+			}
+			if apply {
+				journal := io.Writer(os.Stdout)
+				if path := ctx.String("journal"); path != "" {
+					f, err := os.Create(path)
+					if err != nil {
+						return operationalError("repair relink: creating journal: %v", err)
+					}
+					defer f.Close()
+					journal = io.MultiWriter(os.Stdout, f)
+					fmt.Fprintln(os.Stderr, "Journal:", path)
+				}
+				opts.Journal = journal
+			}
+
+			scoped := a.tie.In(ctx.String("collection"))
+			res, err := scoped.RelinkFromManifests(opts)
+			if err != nil {
+				return operationalError("repair relink: %v", err)
+			}
+			if !apply {
+				o, err := a.outFor(ctx, "op", "key", "relation", "value", "note")
+				if err != nil {
+					return err
+				}
+				for _, op := range res.Planned {
+					o.row(op.Kind, op.Key, op.Relation, op.Value, op.Note)
+				}
+				if err := o.flush(); err != nil {
+					return operationalError("repair relink: %v", err)
+				}
+			}
+			if apply {
+				fmt.Fprintf(os.Stderr, "applied %s\n", pluralWith(res.Applied, "operation", "operations"))
+			} else {
+				fmt.Fprintf(os.Stderr, "planned %s; nothing changed — add --apply to run them\n",
+					pluralWith(len(res.Planned), "operation", "operations"))
+			}
 			return nil
 		},
 	}

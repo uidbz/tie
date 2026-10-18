@@ -36,6 +36,14 @@ const (
 	FindingDuplicatePath  = "duplicate-path"
 	FindingMissingMeta    = "missing-metadata"
 	FindingMissingBlob    = "missing-blob"
+	// FindingPathlessDir is a dir-typed node with no path triple (#118): a real
+	// directory that no path-based view can reach. Value1 is its recorded name,
+	// Value2 the path a repair would restore.
+	FindingPathlessDir = "pathless-dir"
+	// FindingPathMismatch is a directory whose path triple and parent edge
+	// disagree (#119): Value1 is the path it claims, Value2 where a parent
+	// actually lists it. It is missing from the branch its own path names.
+	FindingPathMismatch = "path-mismatch"
 )
 
 // Finding is one problem Verify found: the class, the node it was found on, and
@@ -92,6 +100,12 @@ func (rep *VerifyReport) Findings() []Finding {
 	for _, h := range rep.MissingBlobs {
 		out = append(out, Finding{FindingMissingBlob, h, "", ""})
 	}
+	for _, d := range rep.PathlessDirs {
+		out = append(out, Finding{FindingPathlessDir, string(d.UID), d.Name, d.Path})
+	}
+	for _, m := range rep.PathMismatch {
+		out = append(out, Finding{FindingPathMismatch, string(m.UID), m.Path, m.ParentPath})
+	}
 	return out
 }
 
@@ -132,6 +146,14 @@ func ReportFromFindings(findings []Finding) *VerifyReport {
 			})
 		case FindingMissingBlob:
 			rep.MissingBlobs = append(rep.MissingBlobs, f.Subject)
+		case FindingPathlessDir:
+			rep.PathlessDirs = append(rep.PathlessDirs, PathlessDir{
+				UID: DirUID(f.Subject), Name: f.Value1, Path: f.Value2,
+			})
+		case FindingPathMismatch:
+			rep.PathMismatch = append(rep.PathMismatch, PathMismatch{
+				UID: DirUID(f.Subject), Path: f.Value1, ParentPath: f.Value2,
+			})
 		}
 	}
 	return rep

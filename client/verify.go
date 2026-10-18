@@ -48,9 +48,34 @@ type VerifyReport struct {
 	// MissingBlobs are file hashes whose content is absent from the filehost
 	// (never uploaded, or reaped). Only populated when checkBlobs is set.
 	MissingBlobs []string
+	// PathlessDirs are dir-typed nodes with no path triple (#118): real
+	// directories that lost their path, so no path-based view (tie-view's tree,
+	// tie-fm, the FUSE mount) can reach them. They are not content — their key
+	// is a DirUID — so they are never blob-checked.
+	PathlessDirs []PathlessDir
+	// PathMismatch are directories whose path triple claims a location that
+	// none of their parents is at (#119). Such a node is missing from the
+	// branch its own path names and shows up, mislabelled, wherever a parent
+	// happens to list it.
+	PathMismatch []PathMismatch
 	// Counts of the universes scanned, for the summary line.
 	DirCount  int
 	FileCount int
+}
+
+// PathlessDir is one dir-typed node without a path triple, with what a repair
+// would restore it to.
+type PathlessDir struct {
+	UID  DirUID
+	Name string // its recorded filename/name triple, if any
+	Path string // <live parent path>/<Name>, or "" when not derivable
+}
+
+// PathMismatch is one directory whose location and path disagree.
+type PathMismatch struct {
+	UID        DirUID
+	Path       string // the location the node claims
+	ParentPath string // where a parent actually lists it ("" when unknowable)
 }
 
 // ParentRef is one (child, parent) edge, used to report a dangling reference.
@@ -69,7 +94,8 @@ type MetadataGap struct {
 // Problems reports whether any check failed (i.e. the store is not clean).
 func (r *VerifyReport) Problems() int {
 	n := len(r.OrphanDirs) + len(r.OrphanFiles) + len(r.DanglingParentRefs) +
-		len(r.Cycles) + len(r.DuplicatePaths) + len(r.MissingMetadata) + len(r.MissingBlobs)
+		len(r.Cycles) + len(r.DuplicatePaths) + len(r.MissingMetadata) + len(r.MissingBlobs) +
+		len(r.PathlessDirs) + len(r.PathMismatch)
 	return n
 }
 
@@ -92,14 +118,14 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	rep := &VerifyReport{DuplicatePaths: make(map[string][]DirUID)}
 
 	// The structural tie-type "directory" marker is written on two different
-	// kinds of node: a live path-tree DirUID (which also carries a "path"
-	// triple), and an immutable tiedir snapshot blob (a file-addressed manifest,
-	// media-type inode/directory) that ImportDir links from its live node via a
-	// "tiedir-hash" edge. Only the former is a directory for tree purposes; the
-	// latter is structurally a file (it has no children and needs a parent like
-	// any other content). Partition the universe on the presence of a path
-	// triple so tiedir blobs are verified as files, not mistaken for orphaned
-	// directories.
+	// kinds of node: a live path-tree DirUID, and an immutable tiedir snapshot
+	// blob (a file-addressed manifest) that ImportDir links from its live node
+	// via a "tiedir-hash" edge. Partition on that relation, not on whether a
+	// node still carries a path triple: keying the split on the path mistook a
+	// live directory that had *lost* its path for a content blob, which made
+	// --check-blobs report a DirUID as a missing blob and hid the real defect
+	// (#118). A dir-typed node nobody references via tiedir-hash is a tree node
+	// — a broken one when it has no path — and its key is never content.
 	dirRows, err := tie.allOfType(str(TieDirectory))
 	if err != nil {
 		return nil, err
@@ -111,10 +137,17 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 	var dirs []Row
 	files := fileRows
 	for _, row := range dirRows {
-		if len(RowValues(row, RelPath)) > 0 {
+		switch {
+		case len(RowValues(row, RelPath)) > 0:
 			dirs = append(dirs, row)
-		} else {
-			files = append(files, row) // tiedir blob: a directory's content, not a node
+		case tie.referencedByTiedir(row.Key):
+			files = append(files, row) // a tiedir snapshot blob: a directory's content, not a node
+		default:
+			dirs = append(dirs, row)
+			rep.PathlessDirs = append(rep.PathlessDirs, PathlessDir{
+				UID:  DirUID(row.Key),
+				Name: firstOf(RowFirst(row, RelFilename), RowFirst(row, RelName)),
+			})
 		}
 	}
 	rep.DirCount = len(dirs)
@@ -135,6 +168,70 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 		if len(uids) > 1 {
 			sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
 			rep.DuplicatePaths[p] = uids
+		}
+	}
+
+	// A path triple is only meaningful if a parent of the node lives at the
+	// location that path names. Every path-based view walks that relation twice,
+	// from opposite ends — ReadTieDir lists children by the reverse parent query
+	// and names them by their path, DirUIDFromPath resolves that name back to a
+	// node — so a node whose parents sit elsewhere is missing from the branch
+	// its own path claims (#119). Duplicate claims were checked; this was not.
+	for _, row := range dirs {
+		ps := RowValues(row, RelPath)
+		if len(ps) == 0 || RowHas(row, RelPath, rootPathValue) {
+			continue
+		}
+		parents := RowValues(row, RelParent)
+		if len(parents) == 0 {
+			continue // already reported as an orphan
+		}
+		var actual []string
+		consistent := false
+		for _, p := range parents {
+			if p == row.Key {
+				continue // the root's self-edge
+			}
+			prow, ok := dirByUID[p]
+			if !ok {
+				continue // dangling reference, reported separately
+			}
+			for _, pp := range RowValues(prow, RelPath) {
+				actual = append(actual, pp)
+				if pathUnder(ps[0], pp) {
+					consistent = true
+				}
+			}
+		}
+		if consistent || len(actual) == 0 {
+			continue // agrees, or no parent has a path to compare against
+		}
+		sort.Strings(actual)
+		rep.PathMismatch = append(rep.PathMismatch, PathMismatch{
+			UID: DirUID(row.Key), Path: ps[0], ParentPath: actual[0],
+		})
+	}
+
+	// Work out what a path-less directory should be called where it lives, so
+	// the finding carries the repair and a human sees which folder it was.
+	for i := range rep.PathlessDirs {
+		pd := &rep.PathlessDirs[i]
+		if pd.Name == "" {
+			continue
+		}
+		var cands []string
+		for _, p := range RowValues(dirByUID[string(pd.UID)], RelParent) {
+			prow, ok := dirByUID[p]
+			if !ok {
+				continue
+			}
+			for _, pp := range RowValues(prow, RelPath) {
+				cands = append(cands, joinVirtualPath(pp, pd.Name))
+			}
+		}
+		sort.Strings(cands)
+		if len(cands) > 0 {
+			pd.Path = cands[0]
 		}
 	}
 
@@ -183,6 +280,13 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 		return rep.DanglingParentRefs[i].Parent < rep.DanglingParentRefs[j].Parent
 	})
 	sort.Slice(rep.MissingMetadata, func(i, j int) bool { return rep.MissingMetadata[i].Subject < rep.MissingMetadata[j].Subject })
+	sort.Slice(rep.PathlessDirs, func(i, j int) bool { return rep.PathlessDirs[i].UID < rep.PathlessDirs[j].UID })
+	sort.Slice(rep.PathMismatch, func(i, j int) bool {
+		if rep.PathMismatch[i].UID != rep.PathMismatch[j].UID {
+			return rep.PathMismatch[i].UID < rep.PathMismatch[j].UID
+		}
+		return rep.PathMismatch[i].Path < rep.PathMismatch[j].Path
+	})
 
 	if checkBlobs {
 		missing, err := tie.checkBlobsExist(files)
@@ -214,6 +318,50 @@ func (tie *TieClient) allOfType(typeValue string) ([]Row, error) {
 		return nil, err
 	}
 	return rows, nil
+}
+
+// referencedByTiedir reports whether any node references uid through a
+// tiedir-hash edge — which makes uid that directory's immutable content
+// snapshot rather than a node in the path tree. It is the structural test both
+// Verify and Repair need: shape (tie-type, or the presence of a path) cannot
+// tell a snapshot blob from a live directory that lost its path.
+func (tie *TieClient) referencedByTiedir(uid string) bool {
+	rows, _, err := tie.Query(QuerySpec{
+		Terms: []string{uid}, Filter: string(RelTiedirHash), Reverse: true, Limit: -1,
+	})
+	return err == nil && len(rows) > 0
+}
+
+// pathUnder reports whether child sits inside the virtual directory parentPath
+// ("tie:/a/b" is under "tie:/a", not under "tie:/a/b" itself).
+func pathUnder(child, parentPath string) bool {
+	if child == "" || parentPath == "" || child == parentPath {
+		return false
+	}
+	prefix := parentPath
+	if !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+	return strings.HasPrefix(child, prefix)
+}
+
+// joinVirtualPath appends one name to a virtual directory path without
+// doubling the separator, so the root ("tie:/") joins cleanly.
+func joinVirtualPath(parentPath, name string) string {
+	if strings.HasSuffix(parentPath, "/") {
+		return parentPath + name
+	}
+	return parentPath + "/" + name
+}
+
+// firstOf returns the first non-empty string.
+func firstOf(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // checkDirMetadata records a gap for each required directory relation a row
@@ -421,10 +569,14 @@ func (tc *TieClient) StatBlob(hash string) (exists bool, size int64, err error) 
 // (`tie verify --repair`). Only orphans are repaired — duplicate paths, cycles,
 // dangling refs and missing metadata are reported but left for a human decision.
 //
-// Each orphan is re-parented under tie:/restored/<date>/ (directories and files
-// share the one recovery dir); its own metadata is left untouched. The restore
-// directory is created via MkTieDirAll (so it also gets its structural triples
-// and is itself browsable).
+// Each orphan is re-parented where its own triples say it belongs. A directory
+// with a `path` triple goes back under the directory that path names — created
+// by MkTieDirAll when it is gone as well — because its path is the record of
+// where it was, and re-homing it flat somewhere else leaves a node whose path
+// and parent edge contradict each other (#120). Everything else goes under
+// tie:/restored/<date>/: files have no path triple of their own (their position
+// is only their parent edge), and a directory whose path is gone too has nothing
+// to go by. Nothing else about the orphan is touched, and no edge is removed.
 //
 // rep should come from a just-run Verify on the same collection; stale reports
 // are harmless (re-parenting an already-parented node just adds another parent
@@ -441,19 +593,54 @@ func (tie *TieClient) RepairOrphans(rep *VerifyReport, destDir string) (int, err
 	if !strings.HasPrefix(destDir, FileURIScheme) {
 		destDir = FileURIScheme + "/" + destDir
 	}
-	parentUID, err := tie.MkTieDirAll(destDir)
-	if err != nil {
-		return 0, err
-	}
-
 	batch := tie.NewBatch()
 	n := 0
+	destUID := DirUID("")
+	recovery := func() (DirUID, error) {
+		if destUID == "" {
+			uid, err := tie.MkTieDirAll(destDir)
+			if err != nil {
+				return "", err
+			}
+			destUID = uid
+		}
+		return destUID, nil
+	}
 	for _, uid := range rep.OrphanDirs {
-		batch.Add(string(uid), string(RelParent), string(parentUID))
+		// A directory that still carries a path triple says where it belonged,
+		// so put it back there — creating the chain when the parent is gone too
+		// — instead of moving it somewhere its own path contradicts (#120).
+		if row, err := tie.Get(string(uid)); err == nil {
+			if ps := RowValues(row, RelPath); len(ps) > 0 {
+				parentPath := FileURIScheme + virtualDir(ps[0])
+				if parentPath != ps[0] {
+					puid, err := tie.MkTieDirAll(parentPath)
+					if err != nil {
+						return n, err
+					}
+					if puid != uid {
+						batch.Add(string(uid), string(RelParent), string(puid))
+						n++
+						continue
+					}
+				}
+			}
+		}
+		// No path to go by (or only itself): the recovery dir is the one place
+		// known to be reachable from the root.
+		puid, err := recovery()
+		if err != nil {
+			return n, err
+		}
+		batch.Add(string(uid), string(RelParent), string(puid))
 		n++
 	}
 	for _, hash := range rep.OrphanFiles {
-		batch.Add(hash, string(RelParent), string(parentUID))
+		puid, err := recovery()
+		if err != nil {
+			return n, err
+		}
+		batch.Add(hash, string(RelParent), string(puid))
 		n++
 	}
 	if _, err := tie.Batch(batch); err != nil {

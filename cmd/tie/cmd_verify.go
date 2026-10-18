@@ -28,13 +28,18 @@ func cmdVerify(a *app) *cli.Command {
 			"scan itself — unreliable), then scans the whole collection and reports structural\n" +
 			"and metadata problems: orphaned directories/files (no parent edge — unreachable\n" +
 			"from the root), dangling parent references, parent cycles, duplicate path claims,\n" +
-			"files missing core metadata, and (with --check-blobs) files whose content is absent\n" +
-			"from the filehost. It is read-only. --repair fixes the index in memory (adds lost\n" +
-			"reverse entries, drops phantom reverse-only ones) and re-homes orphans under\n" +
-			"tie:/restored/<date>/ — additive only. --fix additionally applies the destructive\n" +
-			"repairs: dangling parent refs are re-parented to the nearest live ancestor, ghost\n" +
-			"nodes (dir-typed, no path, no children, no tiedir-hash referrer, no blob) are\n" +
-			"deleted, files get missing size/media-type/tie-type/filename re-derived from their\n" +
+			"directories with no path triple (pathless-dir) or whose path and parent edge\n" +
+			"disagree (path-mismatch), files missing core metadata, and (with --check-blobs)\n" +
+			"files whose content is absent from the filehost. It is read-only. --repair fixes\n" +
+			"the index in memory (adds lost reverse entries, drops phantom reverse-only ones)\n" +
+			"and puts orphans back where their own path says they belonged — files and\n" +
+			"directories with no path go under tie:/restored/<date>/ — additive only. --fix\n" +
+			"additionally applies the destructive repairs: dangling parent refs are\n" +
+			"re-parented to the nearest live ancestor, a directory that lost its path gets one\n" +
+			"back from its parent and recorded name, a directory whose path and parent\n" +
+			"disagree adopts the path it claims, ghost nodes (dir-typed, no path, no name, no\n" +
+			"manifest link, no children, no tiedir-hash referrer, no blob) are deleted, files\n" +
+			"get missing size/media-type/tie-type/filename re-derived from their\n" +
 			"blob, and nameless leftovers or files whose blob is gone are deleted. Take a\n" +
 			"`tie dump` before any repair. Cycles and duplicate paths are always reported,\n" +
 			"never auto-fixed. --index runs only the index check; --deep also validates every\n" +
@@ -49,7 +54,7 @@ func cmdVerify(a *app) *cli.Command {
 			"run (server unreachable, partial report).",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "collection", Usage: "Collection to verify (default: config Collection)"},
-			&cli.BoolFlag{Name: "repair", Usage: "Repair the index in memory and re-home orphaned files/dirs under a restored/ directory (default: report only)"},
+			&cli.BoolFlag{Name: "repair", Usage: "Repair the index in memory and put orphans back where their own path says they belonged (files and path-less dirs go under a restored/ directory) (default: report only)"},
 			&cli.BoolFlag{Name: "check-blobs", Usage: "Also stat every file's content hash on the filehost (slow on a large store)"},
 			&cli.BoolFlag{Name: "index", Usage: "Only cross-check the forward/reverse indexes; skip the tree scan"},
 			&cli.BoolFlag{Name: "deep", Usage: "Index check also resolves every position against its on-disk record (slow; blocks writers meanwhile)"},
