@@ -955,5 +955,6 @@ reworked CLI. All three binaries now report a build version (`tie --version`,
 - The `certmagic` dependency (filehost), the `gods` v1 dependency, and dead
   code across client/getlib.
 
+[v0.7.0]: https://github.com/uidbz/tie/releases/tag/v0.7.0
 [v0.4.3]: https://github.com/uidbz/tie/releases/tag/v0.4.3
 [v0.4.0]: https://github.com/uidbz/tie/releases/tag/v0.4.0
