@@ -28,6 +28,12 @@ RDEPEND="
 "
 DEPEND="${RDEPEND}"
 
+# go.mod's go directive is a build requirement. The live ebuild may fetch
+# modules over the network (RESTRICT="network-sandbox"), but Go fetching a
+# newer *toolchain* silently papers over the mismatch; this makes the
+# requirement explicit. Keep it in step with go.mod.
+BDEPEND=">=dev-lang/go-1.27.2"
+
 DOCS=( README.md CHANGELOG.md docs/ )
 
 src_compile() {
