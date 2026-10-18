@@ -19,6 +19,12 @@ to follow semantic versioning.
   reading and close with it: 3 000 adopted entries cost 7 descriptors, and
   eviction is still safe mid-read because an open fd survives the unlink.
 
+- **The filehost binds before it says it is listening.** Its serve block logged
+  `listening` and *then* called `ListenAndServe`, so a port already in use — the
+  usual upgrade mistake, the old instance still holding 1162 — printed a log
+  line claiming a server existed. It now opens the socket first and logs the
+  address the socket actually got.
+
 ## [v0.7.0] - 2026-10-17
 
 ### Added

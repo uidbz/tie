@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -432,22 +433,32 @@ set CertFile/KeyFile to serve HTTPS directly.
 
 	startReaper(reapInterval, cfg.ReapDryRun, srv)
 
-	listenOn := cfg.ListenOn
-	if cfg.Insecure {
-		slog.Info("listening", "addr", "http://"+listenOn)
-		if err := http.ListenAndServe(listenOn, router); err != nil {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
-		}
-	} else {
-		if cfg.CertFile == "" || cfg.KeyFile == "" {
-			slog.Error("set CertFile and KeyFile in the config file, or set Insecure = true")
-			os.Exit(1)
-		}
-		slog.Info("listening", "addr", "https://"+listenOn)
-		if err := http.ListenAndServeTLS(listenOn, cfg.CertFile, cfg.KeyFile, router); err != nil {
-			slog.Error("server error", "err", err)
-			os.Exit(1)
-		}
+	if err := serve(router, cfg); err != nil {
+		slog.Error("server error", "err", err)
+		os.Exit(1)
 	}
+}
+
+// serve binds the configured address and serves the router on it.
+//
+// Bind before announcing it. http.ListenAndServe logs and then binds, so a port
+// already in use — the usual upgrade mistake, the old filehost still holding
+// 1162 while the new one is restarted every few seconds — printed "listening"
+// anyway, and the operator was left reading a log that claimed a server existed
+// while every connection was refused. Here the log line only appears once the
+// socket is open, and names the address the socket actually got.
+func serve(router http.Handler, cfg FilehostConfig) error {
+	if !cfg.Insecure && (cfg.CertFile == "" || cfg.KeyFile == "") {
+		return errors.New("set CertFile and KeyFile in the config file, or set Insecure = true")
+	}
+	ln, err := net.Listen("tcp", cfg.ListenOn)
+	if err != nil {
+		return fmt.Errorf("listening on %s: %w", cfg.ListenOn, err)
+	}
+	if cfg.Insecure {
+		slog.Info("listening", "addr", "http://"+ln.Addr().String())
+		return http.Serve(ln, router)
+	}
+	slog.Info("listening", "addr", "https://"+ln.Addr().String())
+	return http.ServeTLS(ln, router, cfg.CertFile, cfg.KeyFile)
 }
