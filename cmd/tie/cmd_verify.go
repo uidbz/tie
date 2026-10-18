@@ -29,7 +29,8 @@ func cmdVerify(a *app) *cli.Command {
 			"and metadata problems: orphaned directories/files (no parent edge — unreachable\n" +
 			"from the root), dangling parent references, parent cycles, duplicate path claims,\n" +
 			"directories with no path triple (pathless-dir) or whose path and parent edge\n" +
-			"disagree (path-mismatch), files missing core metadata, and (with --check-blobs)\n" +
+			"disagree (path-mismatch), directories missing their structural tie-type\n" +
+			"(missing-tie-type), files missing core metadata, and (with --check-blobs)\n" +
 			"files whose content is absent from the filehost. It is read-only. --repair fixes\n" +
 			"the index in memory (adds lost reverse entries, drops phantom reverse-only ones)\n" +
 			"and puts orphans back where their own path says they belonged — files and\n" +

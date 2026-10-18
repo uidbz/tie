@@ -58,6 +58,11 @@ type VerifyReport struct {
 	// branch its own path names and shows up, mislabelled, wherever a parent
 	// happens to list it.
 	PathMismatch []PathMismatch
+	// MissingTieType are nodes that carry a path triple — which only a directory
+	// does — but have lost the structural `tie-type` marker, so neither of
+	// verify's tie-type universes contains them and they escape every other
+	// check (#122). The marker is re-derivable from the path.
+	MissingTieType []MarkerGap
 	// Counts of the universes scanned, for the summary line.
 	DirCount  int
 	FileCount int
@@ -78,6 +83,13 @@ type PathMismatch struct {
 	ParentPath string // where a parent actually lists it ("" when unknowable)
 }
 
+// MarkerGap is one node that carries a path but no structural tie-type, with
+// the path that identifies what it is.
+type MarkerGap struct {
+	UID  DirUID
+	Path string
+}
+
 // ParentRef is one (child, parent) edge, used to report a dangling reference.
 type ParentRef struct {
 	Child  string // DirUID or content hash carrying the edge
@@ -95,7 +107,7 @@ type MetadataGap struct {
 func (r *VerifyReport) Problems() int {
 	n := len(r.OrphanDirs) + len(r.OrphanFiles) + len(r.DanglingParentRefs) +
 		len(r.Cycles) + len(r.DuplicatePaths) + len(r.MissingMetadata) + len(r.MissingBlobs) +
-		len(r.PathlessDirs) + len(r.PathMismatch)
+		len(r.PathlessDirs) + len(r.PathMismatch) + len(r.MissingTieType)
 	return n
 }
 
@@ -164,6 +176,42 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 			pathClaim[p] = append(pathClaim[p], DirUID(row.Key))
 		}
 	}
+
+	// A parent value the tie-type universe does not know may still be a
+	// directory. `path` triples are written only on directory nodes — a content
+	// node's position is its parent edge alone — so a node carrying one that has
+	// lost its structural tie-type marker is a directory whose children would
+	// otherwise be reported as dangling references, and a fixing repair would
+	// move those children up a level, away from the parent standing right there
+	// (#122). Look each unknown parent up once and bring the path-carrying ones
+	// into the tree, recording that the marker has to be put back.
+	var unknown []string
+	seen := map[string]bool{}
+	for _, set := range [][]Row{dirs, files} {
+		for _, row := range set {
+			for _, p := range RowValues(row, RelParent) {
+				if _, known := dirByUID[p]; known || p == row.Key || seen[p] {
+					continue
+				}
+				seen[p] = true
+				unknown = append(unknown, p)
+			}
+		}
+	}
+	sort.Strings(unknown)
+	for _, p := range unknown {
+		row, err := tie.Get(p)
+		if err != nil || len(RowValues(row, RelPath)) == 0 {
+			continue // no such node, or nothing a path says: genuinely dangling
+		}
+		dirByUID[p] = row
+		ps := RowValues(row, RelPath)
+		for _, pp := range ps {
+			pathClaim[pp] = append(pathClaim[pp], DirUID(p))
+		}
+		rep.MissingTieType = append(rep.MissingTieType, MarkerGap{UID: DirUID(p), Path: ps[0]})
+	}
+
 	for p, uids := range pathClaim {
 		if len(uids) > 1 {
 			sort.Slice(uids, func(i, j int) bool { return uids[i] < uids[j] })
@@ -287,6 +335,7 @@ func (tie *TieClient) Verify(checkBlobs bool) (*VerifyReport, error) {
 		}
 		return rep.PathMismatch[i].Path < rep.PathMismatch[j].Path
 	})
+	sort.Slice(rep.MissingTieType, func(i, j int) bool { return rep.MissingTieType[i].UID < rep.MissingTieType[j].UID })
 
 	if checkBlobs {
 		missing, err := tie.checkBlobsExist(files)

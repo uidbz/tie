@@ -138,6 +138,18 @@ func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*Repair
 		return r.res, fmt.Errorf("loading directory universe: %w", err)
 	}
 
+	// Put back any missing structural marker first: a directory whose tie-type
+	// triple is gone is in neither of verify's universes, so the live-directory
+	// set the rest of this repair reasons with does not contain it, and its
+	// children look like dangling references (#122).
+	markerOps, err := r.markerRestoreOps(rep)
+	if err != nil {
+		return r.res, fmt.Errorf("planning structural restores: %w", err)
+	}
+	if err := r.run("restore structural markers", markerOps); err != nil {
+		return r.res, err
+	}
+
 	// Put back the triples that make a directory reachable by path (#118, #119),
 	// first: every restore is an addition, and a node that gets its path back is
 	// a live directory the rest of this function must not treat as leftover.
@@ -296,6 +308,36 @@ func (r *repairSession) progress(format string, args ...any) {
 	if r.opts.Progress != nil {
 		fmt.Fprintf(r.opts.Progress, format+"\n", args...)
 	}
+}
+
+// markerRestoreOps re-derives the structural tie-type triple of a node that
+// carries a path triple. Only directory nodes have paths — a content node's
+// position is its parent edge alone — so the marker is not lost information, and
+// without it the node is invisible to both of verify's tie-type universes while
+// its children keep pointing at it (#122).
+func (r *repairSession) markerRestoreOps(rep *VerifyReport) ([]RepairOp, error) {
+	if rep == nil {
+		return nil, nil
+	}
+	var ops []RepairOp
+	for _, g := range rep.MissingTieType {
+		uid := string(g.UID)
+		row, err := r.tie.Get(uid)
+		if err != nil {
+			continue // gone since verify
+		}
+		if len(RowValues(row, RelType)) > 0 {
+			continue // somebody already put the marker back
+		}
+		if len(RowValues(row, RelPath)) == 0 {
+			r.progress("%s: no path left either — nothing says what it is", short(uid))
+			continue
+		}
+		ops = append(ops, RepairOp{api.BatchAdd, uid, string(RelType), str(TieDirectory),
+			"structural marker re-derived from its path triple"})
+		r.liveDir[uid] = true
+	}
+	return ops, nil
 }
 
 // pathRestoreOps plans what makes a directory reachable by path again — the two

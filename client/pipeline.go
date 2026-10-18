@@ -44,6 +44,10 @@ const (
 	// disagree (#119): Value1 is the path it claims, Value2 where a parent
 	// actually lists it. It is missing from the branch its own path names.
 	FindingPathMismatch = "path-mismatch"
+	// FindingMissingTieType is a node that carries a path but has lost its
+	// structural tie-type marker (#122) — a directory outside verify's
+	// universes. Value1 is the path that says what it is.
+	FindingMissingTieType = "missing-tie-type"
 )
 
 // Finding is one problem Verify found: the class, the node it was found on, and
@@ -106,6 +110,9 @@ func (rep *VerifyReport) Findings() []Finding {
 	for _, m := range rep.PathMismatch {
 		out = append(out, Finding{FindingPathMismatch, string(m.UID), m.Path, m.ParentPath})
 	}
+	for _, g := range rep.MissingTieType {
+		out = append(out, Finding{FindingMissingTieType, string(g.UID), g.Path, ""})
+	}
 	return out
 }
 
@@ -153,6 +160,10 @@ func ReportFromFindings(findings []Finding) *VerifyReport {
 		case FindingPathMismatch:
 			rep.PathMismatch = append(rep.PathMismatch, PathMismatch{
 				UID: DirUID(f.Subject), Path: f.Value1, ParentPath: f.Value2,
+			})
+		case FindingMissingTieType:
+			rep.MissingTieType = append(rep.MissingTieType, MarkerGap{
+				UID: DirUID(f.Subject), Path: f.Value1,
 			})
 		}
 	}
