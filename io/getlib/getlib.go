@@ -3,6 +3,7 @@ package getlib
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -59,7 +60,16 @@ type tieFunc func(relPath string) (*sink, error)
 // under, so a cancelled request, a dropped connection, a short write or a
 // tampering server leaves nothing at the final path.
 func DownloadFile(client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
-	return execForEach(client, url, sourceHash, stageInto(destination), "", progress, 0)
+	return DownloadFileContext(context.Background(), client, url, sourceHash, destination, progress)
+}
+
+// DownloadFileContext is DownloadFile carrying the caller's context, so a
+// transfer the caller has lost interest in stops instead of running to the end
+// of the blob (#114). Nothing is left at the destination either way: the
+// staged file is removed when the transfer fails, and a cancelled context is a
+// failure.
+func DownloadFileContext(ctx context.Context, client *http.Client, url string, sourceHash string, destination string, progress io.Writer) (err error) {
+	return execForEach(ctx, client, url, sourceHash, stageInto(destination), "", progress, 0)
 }
 
 // tmpPrefix names the staged files a download leaves in the destination
@@ -132,15 +142,15 @@ func syncDir(dir string) {
 // The content address is validated before it reaches the URL, so a crafted
 // value cannot escape the intended endpoint. Status handling is fhclient's:
 // a 404 is ErrNotFound, anything else non-200 is an error carrying the status.
-func fetch(client *http.Client, url, sourceHash string) (io.ReadCloser, int64, error) {
-	return fhclient.New(url, client).GetContent(sourceHash)
+func fetch(ctx context.Context, client *http.Client, url, sourceHash string) (io.ReadCloser, int64, error) {
+	return fhclient.New(url, client).GetContentContext(ctx, sourceHash)
 }
 
 // readBlob fully reads a blob body, verifying it hashes to sourceHash. It is
 // used for directory manifests and small reads where buffering is acceptable;
 // large file downloads stream instead (see downloadVerified).
-func readBlob(client *http.Client, url, sourceHash string) ([]byte, error) {
-	body, _, err := fetch(client, url, sourceHash)
+func readBlob(ctx context.Context, client *http.Client, url, sourceHash string) ([]byte, error) {
+	body, _, err := fetch(ctx, client, url, sourceHash)
 	if err != nil {
 		return nil, err
 	}
@@ -165,16 +175,22 @@ func readBlob(client *http.Client, url, sourceHash string) ([]byte, error) {
 // bar before the transfer. For a single file it costs one HTTP request; for a
 // directory it fetches each manifest (which are small) but no file bodies.
 func TotalSize(client *http.Client, url string, sourceHash string) (int64, error) {
-	return totalSize(client, url, sourceHash, 0)
+	return TotalSizeContext(context.Background(), client, url, sourceHash)
 }
 
-func totalSize(client *http.Client, url string, sourceHash string, depth int) (int64, error) {
+// TotalSizeContext is TotalSize carrying the caller's context (#114). It walks
+// the same directory manifests, so cancelling is useful on a deep tree.
+func TotalSizeContext(ctx context.Context, client *http.Client, url string, sourceHash string) (int64, error) {
+	return totalSize(ctx, client, url, sourceHash, 0)
+}
+
+func totalSize(ctx context.Context, client *http.Client, url string, sourceHash string, depth int) (int64, error) {
 	var size int64
 	if depth > maxDepth {
 		return 0, fmt.Errorf("getlib: directory nesting exceeds %d levels (possible malicious manifest)", maxDepth)
 	}
 
-	body, size, err := fetch(client, url, sourceHash)
+	body, size, err := fetch(ctx, client, url, sourceHash)
 	if err != nil {
 		return 0, err
 	}
@@ -212,7 +228,7 @@ func totalSize(client *http.Client, url string, sourceHash string, depth int) (i
 			continue
 		}
 		if metadata.IsDirHead(entry.Head) {
-			sub, err := totalSize(client, url, entry.Hash, depth+1)
+			sub, err := totalSize(ctx, client, url, entry.Hash, depth+1)
 			if err != nil {
 				return 0, err
 			}
@@ -260,6 +276,11 @@ func InitCache(customLocation string) Cache {
 }
 
 func (c *Cache) ReadFile(client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
+	return c.ReadFileContext(context.Background(), client, url, sourceHash)
+}
+
+// ReadFileContext is Cache.ReadFile carrying the caller's context (#114).
+func (c *Cache) ReadFileContext(ctx context.Context, client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
 	if !metadata.IsHexHash(sourceHash) {
 		return nil, fmt.Errorf("getlib: invalid content hash %q", sourceHash)
 	}
@@ -277,7 +298,7 @@ func (c *Cache) ReadFile(client *http.Client, url string, sourceHash string) (fi
 
 	// Cache miss: download and verify the whole blob before persisting, so a
 	// truncated or tampered transfer never leaves a corrupt cache entry.
-	data, err := readBlob(client, url, sourceHash)
+	data, err := readBlob(ctx, client, url, sourceHash)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +336,12 @@ func writeFileAtomic(dir, dest string, data []byte) error {
 }
 
 func IsDir(client *http.Client, url string, sourceHash string) (isDir bool, err error) {
-	body, _, err := fetch(client, url, sourceHash)
+	return IsDirContext(context.Background(), client, url, sourceHash)
+}
+
+// IsDirContext is IsDir carrying the caller's context (#114).
+func IsDirContext(ctx context.Context, client *http.Client, url string, sourceHash string) (isDir bool, err error) {
+	body, _, err := fetch(ctx, client, url, sourceHash)
 	if err != nil {
 		return false, err
 	}
@@ -331,7 +357,12 @@ func IsDir(client *http.Client, url string, sourceHash string) (isDir bool, err 
 // ReadFile returns the verified contents of sourceHash, erroring if it is a
 // directory. The whole blob is buffered; use DownloadFile for large files.
 func ReadFile(client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
-	b, err := ReadBytes(client, url, sourceHash)
+	return ReadFileContext(context.Background(), client, url, sourceHash)
+}
+
+// ReadFileContext is ReadFile carrying the caller's context (#114).
+func ReadFileContext(ctx context.Context, client *http.Client, url string, sourceHash string) (file io.Reader, err error) {
+	b, err := ReadBytesContext(ctx, client, url, sourceHash)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +372,12 @@ func ReadFile(client *http.Client, url string, sourceHash string) (file io.Reade
 // ReadBytes returns the verified contents of sourceHash as a seekable reader,
 // erroring if it is a directory.
 func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Reader, err error) {
-	data, err := readBlob(client, url, sourceHash)
+	return ReadBytesContext(context.Background(), client, url, sourceHash)
+}
+
+// ReadBytesContext is ReadBytes carrying the caller's context (#114).
+func ReadBytesContext(ctx context.Context, client *http.Client, url string, sourceHash string) (b *bytes.Reader, err error) {
+	data, err := readBlob(ctx, client, url, sourceHash)
 	if err != nil {
 		return nil, err
 	}
@@ -355,12 +391,12 @@ func ReadBytes(client *http.Client, url string, sourceHash string) (b *bytes.Rea
 // file with its content and path relative to relPath. File bodies are verified
 // against their content address before fn sees them; a mismatch, truncation, or
 // over-deep tree aborts with an error.
-func execForEach(client *http.Client, url string, sourceHash string, fn tieFunc, relPath string, progress io.Writer, depth int) error {
+func execForEach(ctx context.Context, client *http.Client, url string, sourceHash string, fn tieFunc, relPath string, progress io.Writer, depth int) error {
 	if depth > maxDepth {
 		return fmt.Errorf("getlib: directory nesting exceeds %d levels (possible malicious manifest)", maxDepth)
 	}
 
-	body, _, err := fetch(client, url, sourceHash)
+	body, _, err := fetch(ctx, client, url, sourceHash)
 	if err != nil {
 		return err
 	}
@@ -407,7 +443,7 @@ func execForEach(client *http.Client, url string, sourceHash string, fn tieFunc,
 	}
 
 	// Directory manifest: buffer (small) and verify the whole blob.
-	manifest, err := readBlob(client, url, sourceHash)
+	manifest, err := readBlob(ctx, client, url, sourceHash)
 	if err != nil {
 		return err
 	}
@@ -417,7 +453,7 @@ func execForEach(client *http.Client, url string, sourceHash string, fn tieFunc,
 		if !ok {
 			continue
 		}
-		if err := execForEach(client, url, entry.Hash, fn, filepath.Join(relPath, entry.Filename), progress, depth+1); err != nil {
+		if err := execForEach(ctx, client, url, entry.Hash, fn, filepath.Join(relPath, entry.Filename), progress, depth+1); err != nil {
 			return err
 		}
 	}

@@ -12,6 +12,7 @@
 package fhclient
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -61,11 +62,17 @@ func (c *Client) blobURL(hash string) (string, error) {
 // 403 or a 5xx must never be reported as "the blob is gone", because callers
 // use this to decide what to re-upload or reaping-wise what to keep.
 func (c *Client) Stat(hash string) (exists bool, size int64, err error) {
+	return c.StatContext(context.Background(), hash)
+}
+
+// StatContext is Stat carrying the caller's context: cancelling ctx abandons the
+// request rather than waiting for the filehost to answer (#114).
+func (c *Client) StatContext(ctx context.Context, hash string) (exists bool, size int64, err error) {
 	url, err := c.blobURL(hash)
 	if err != nil {
 		return false, 0, err
 	}
-	req, err := http.NewRequest(http.MethodHead, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return false, 0, err
 	}
@@ -94,11 +101,23 @@ func (c *Client) Get(hash string) (io.ReadCloser, error) {
 	return body, err
 }
 
+// GetContext is Get carrying the caller's context: cancelling ctx abandons the
+// transfer, including one already in flight (#114).
+func (c *Client) GetContext(ctx context.Context, hash string) (io.ReadCloser, error) {
+	body, _, err := c.GetContentContext(ctx, hash)
+	return body, err
+}
+
 // GetContent returns the blob's body plus the size the server reported
 // (-1 when it did not say). Callers that size a progress bar or sniff a
 // manifest prefix from the length use it instead of buffering.
 func (c *Client) GetContent(hash string) (body io.ReadCloser, size int64, err error) {
-	resp, err := c.get(hash, nil)
+	return c.GetContentContext(context.Background(), hash)
+}
+
+// GetContentContext is GetContent carrying the caller's context (#114).
+func (c *Client) GetContentContext(ctx context.Context, hash string) (body io.ReadCloser, size int64, err error) {
+	resp, err := c.get(ctx, hash, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -112,11 +131,16 @@ var ErrNotFound = fmt.Errorf("blob not found")
 // server honored the Range request (206); when it answered 200 instead, data
 // holds the whole blob and the caller should treat the prefix as a full read.
 func (c *Client) GetRange(hash string, n int) (data []byte, partial bool, err error) {
+	return c.GetRangeContext(context.Background(), hash, n)
+}
+
+// GetRangeContext is GetRange carrying the caller's context (#114).
+func (c *Client) GetRangeContext(ctx context.Context, hash string, n int) (data []byte, partial bool, err error) {
 	url, err := c.blobURL(hash)
 	if err != nil {
 		return nil, false, err
 	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -141,12 +165,12 @@ func (c *Client) GetRange(hash string, n int) (data []byte, partial bool, err er
 }
 
 // get is the shared GET path for non-ranged requests.
-func (c *Client) get(hash string, extra map[string]string) (*http.Response, error) {
+func (c *Client) get(ctx context.Context, hash string, extra map[string]string) (*http.Response, error) {
 	url, err := c.blobURL(hash)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -215,13 +239,19 @@ func (c *Client) Headers(opts PutOptions) http.Header {
 // for a bad store or retention, 5xx), never a hash, so it is surfaced as-is
 // instead of becoming a misleading checksum mismatch.
 func (c *Client) Put(hash string, body io.Reader, size int64, opts PutOptions) (string, error) {
+	return c.PutContext(context.Background(), hash, body, size, opts)
+}
+
+// PutContext is Put carrying the caller's context: cancelling ctx abandons the
+// upload, including one whose body is already streaming (#114).
+func (c *Client) PutContext(ctx context.Context, hash string, body io.Reader, size int64, opts PutOptions) (string, error) {
 	if !metadata.IsHexHash(hash) {
 		return "", fmt.Errorf("fhclient: %q is not a content address", hash)
 	}
 	if opts.Progress != nil {
 		body = io.TeeReader(body, progressSink{opts.Progress})
 	}
-	req, err := http.NewRequest(http.MethodPut, c.URL+"/upload/"+hash, body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.URL+"/upload/"+hash, body)
 	if err != nil {
 		return "", err
 	}
