@@ -1,0 +1,44 @@
+#!/sbin/openrc-run
+
+description="tie SMB server (tag-derived filesystem over SMB2/3)"
+
+command="/usr/local/bin/tie-smb"
+command_args="-config /etc/tie/tie-smb.toml"
+command_user="tie:tie"
+
+supervisor="supervise-daemon"
+directory="/var/lib/tie"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+output_log="/var/log/tie/${RC_SVCNAME}.log"
+error_log="/var/log/tie/${RC_SVCNAME}.log"
+
+respawn_delay=5
+respawn_max=0
+
+depend() {
+	after net firewall tie-triplestore tie-filehost
+}
+
+start_pre() {
+	checkpath --directory --owner tie:tie --mode 0755 /var/lib/tie
+	checkpath --directory --owner tie:tie --mode 0755 /var/log/tie
+
+	# The default ListenOn is :445, a privileged port, and this service runs as
+	# tie. The systemd unit gets around that with
+	# AmbientCapabilities=CAP_NET_BIND_SERVICE; OpenRC has no equivalent knob, so
+	# the capability goes on the binary once:
+	#     setcap 'cap_net_bind_service=+ep' /usr/local/bin/tie-smb
+	# (the ebuild installs to /usr/bin — adjust the path). Without it, either run
+	# the SMB server on a high port and mount with that port explicitly, or
+	# export it through a relay. Warn rather than fail: a high ListenOn is a
+	# perfectly good setup, and we cannot read the config's ListenOn here without
+	# duplicating the parser.
+	if command -v getcap >/dev/null 2>&1 && [ -x "$command" ]; then
+		if ! getcap "$command" | grep -q '^.*cap_net_bind_service'; then
+			ewarn "${RC_SVCNAME}: running as ${command_user}; binding a privileged port (445) needs"
+			ewarn "    setcap 'cap_net_bind_service=+ep' ${command}"
+			ewarn "or set ListenOn to a high port in /etc/tie/tie-smb.toml."
+		fi
+	fi
+}
