@@ -1,7 +1,7 @@
 # Installing tie on Gentoo
 
-These ebuilds install `tie`, `tie-triplestore`, and `tie-filehost` as a normal
-Gentoo package: binaries in `/usr/bin`, config in `/etc/tie/`, data in
+These ebuilds install `tie`, `tie-triplestore`, `tie-filehost`, and `tie-smb` as
+a normal Gentoo package: binaries in `/usr/bin`, config in `/etc/tie/`, data in
 `/var/lib/tie/`, plus OpenRC and systemd service files and a dedicated `tie`
 service user/group.
 
@@ -9,7 +9,7 @@ Two ebuilds are provided:
 
 | Ebuild             | Builds from                  | Go deps                                  |
 |--------------------|------------------------------|------------------------------------------|
-| `tie-0.4.0.ebuild` | the `v0.4.0` release tarball | offline, from a pre-built deps tarball   |
+| `tie-0.7.1.ebuild` | the `v0.7.1` release tarball | offline, from a pre-built deps tarball   |
 | `tie-9999.ebuild`  | git `master` (live)          | fetched from the network at build time   |
 
 The release ebuild builds fully offline inside Portage's network sandbox — the
@@ -48,7 +48,7 @@ sudo cp -r contrib/gentoo/acct-user  /var/db/repos/localtie/
 sudo cp -r contrib/gentoo/acct-group /var/db/repos/localtie/
 ```
 
-## 2a. Release build (`tie-0.4.0`)
+## 2a. Release build (`tie-0.7.1`)
 
 The release ebuild needs its dependency tarball available before it can build.
 For a release you published, that artifact is hosted at the `SRC_URI` and
@@ -57,15 +57,15 @@ the tarball and drop it in your distfiles dir:
 
 ```sh
 # from a checkout of the tie repo:
-contrib/gentoo/scripts/make-deps-tarball.sh v0.4.0
-sudo cp tie-0.4.0-deps.tar.xz /var/cache/distfiles/
+contrib/gentoo/scripts/make-deps-tarball.sh v0.7.1
+sudo cp tie-0.7.1-deps.tar.xz /var/cache/distfiles/
 ```
 
 Then generate the Manifest and emerge:
 
 ```sh
 cd /var/db/repos/localtie/net-misc/tie
-sudo ebuild tie-0.4.0.ebuild manifest
+sudo ebuild tie-0.7.1.ebuild manifest
 sudo emerge -av net-misc/tie
 ```
 
@@ -141,17 +141,17 @@ packages offline inside a network sandbox. Whenever you tag a release:
 
 ```sh
 # 1. Build the deps tarball for the tag.
-contrib/gentoo/scripts/make-deps-tarball.sh v0.4.0
+contrib/gentoo/scripts/make-deps-tarball.sh v0.7.1
 
-# 2. Attach tie-0.4.0-deps.tar.xz to the GitHub release as an asset, so the
+# 2. Attach tie-0.7.1-deps.tar.xz to the GitHub release as an asset, so the
 #    ebuild's second SRC_URI can fetch it. Upload with the gh CLI:
-gh release upload v0.4.0 tie-0.4.0-deps.tar.xz
+gh release upload v0.7.1 tie-0.7.1-deps.tar.xz
 #    After upload the ebuild's URL resolves:
-#      https://github.com/uidbz/tie/releases/download/v0.4.0/tie-0.4.0-deps.tar.xz
+#      https://github.com/uidbz/tie/releases/download/v0.7.1/tie-0.7.1-deps.tar.xz
 
 # 3. Copy the ebuild for the new version and regenerate the Manifest.
 cd contrib/gentoo/net-misc/tie
-cp tie-0.4.0.ebuild tie-<newver>.ebuild   # SRC_URI derives the tag from ${PV}
+cp tie-0.7.1.ebuild tie-<newver>.ebuild   # SRC_URI derives the tag from ${PV}
 ebuild tie-<newver>.ebuild manifest
 ```
 
