@@ -63,6 +63,26 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | `io/tiefs`    | The transport-agnostic live tree both mounts serve: tag queries, path navigation, staged writes, tag/type meta files, blob cache. |
 | `io/smbfs`    | The `io/tiefs` tree as a go-filesystems `Filesystem` for `tie-smb` (path model, name escaping, staged writes). See [docs/smb.md](docs/smb.md). |
 
+### Timeouts and cancellation
+
+Two bounds apply to a request, and an embedder can set both:
+
+- **Triplestore requests** carry a deadline (60 s by default). `TieClient.SetTimeout(d)`
+  sets it; a negative `d` means no timeout.
+- **Every call has a `…Context` variant** — `GetContext`, `QueryContext`,
+  `ReadTieDirContext`, `AddContext`, `SetContext`, `DeleteContext`, `BatchContext`,
+  `DownloadContext`, `UploadContext` (and `UploadOptions.Context`) — which abandons
+  work the caller no longer wants instead of running it to completion and throwing
+  the answer away. Cancelling is not a rollback: what the server already applied
+  stays applied.
+- **Filehost requests** are bounded by a response-header deadline (30 s by default,
+  `client.FileHostResponseHeaderTimeout`), so a host that accepts the connection and
+  then never answers — a half-dead `tie-filehost`, a captive portal, an NFS-backed
+  store on a sleeping server — surfaces as an error rather than a parked goroutine.
+  The timer is abandoned once headers arrive, so a 4 KB thumbnail and a 4 GB blob are
+  both unaffected. The filehost layer carries the caller's context the same way
+  (`fhclient.StatContext`, `GetContext`, `PutContext`; `getlib.DownloadFileContext`).
+
 ## The data model
 
 Everything in `tiedb` is an **association** — a triple of `key`, `value1`,

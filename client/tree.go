@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -71,11 +72,30 @@ func (tie *TieClient) CreateTieRootDir() error {
 	return nil
 }
 
+// treeError keeps the message the tree API has always produced ("error:'…'")
+// while keeping the original error in the chain, so errors.Is still recognizes
+// it. Callers that cancel a ReadTieDir need that: "I stopped this listing" and
+// "the triplestore failed" must not look the same.
+type treeError struct{ err error }
+
+func (e *treeError) Error() string { return "error:'" + e.err.Error() + "'" }
+
+func (e *treeError) Unwrap() error { return e.err }
+
 func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
+	return ReadTieDirContext(context.Background(), tie, uid)
+}
+
+// ReadTieDirContext is ReadTieDir carrying the caller's context (#114). This is
+// the call a file browser makes for every directory it paints, so it is where
+// cancellation matters most: the GUI switching collection or closing a window
+// should stop the listing rather than wait for a stalled triplestore and throw
+// the answer away.
+func ReadTieDirContext(ctx context.Context, tie *TieClient, uid DirUID) (Directory, error) {
 	var dir Directory
-	self, err := tie.Get(string(uid))
+	self, err := tie.GetContext(ctx, string(uid))
 	if err != nil {
-		return dir, errors.New("error:'" + err.Error() + "'")
+		return dir, &treeError{err}
 	}
 	dir.Uid = uid
 	dir.Paths = RowValues(self, RelPath)
@@ -85,12 +105,12 @@ func ReadTieDir(tie *TieClient, uid DirUID) (Directory, error) {
 		dir.ParentUIDs = append(dir.ParentUIDs, DirUID(x))
 	}
 
-	rows, _, err := tie.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Expand: true})
+	rows, _, err := tie.QueryContext(ctx, QuerySpec{Terms: []string{string(uid)}, Reverse: true, Expand: true})
 	if errors.Is(err, ErrNotFound) {
 		return dir, nil // directory has no children
 	}
 	if err != nil {
-		return dir, errors.New("error:'" + err.Error() + "'")
+		return dir, &treeError{err}
 	}
 	for _, row := range rows {
 		types := row.Attributes[string(RelType)]

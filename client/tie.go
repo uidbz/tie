@@ -2,6 +2,7 @@ package client
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/io/fhclient"
@@ -337,6 +339,18 @@ var httpClientCache sync.Map
 // credentials. A plain, credential-free secure host reuses http.DefaultClient;
 // anything needing a custom TLS config or Basic Auth gets a shared client per
 // profile, so its connections are pooled across calls.
+// FileHostResponseHeaderTimeout bounds the wait for response headers from a
+// filehost. Set it before the first filehost request: transports are cached per
+// connection profile and are not rebuilt afterwards. Zero uses the default, a
+// negative value disables the bound (a caller that wants to hang with the
+// stalled host may say so; nothing in tie does).
+var FileHostResponseHeaderTimeout = defaultFileHostResponseHeaderTimeout
+
+// defaultFileHostResponseHeaderTimeout is generous for a healthy filehost, which
+// answers in milliseconds, and short enough that a stalled one surfaces as an
+// error inside one video-frame interval rather than a wedged goroutine.
+const defaultFileHostResponseHeaderTimeout = 30 * time.Second
+
 // idleConnsPerHost is how many keep-alive connections one filehost profile
 // holds on to. The stdlib default (2) is too small for the concurrent paths tie
 // runs — the blob check keeps 16 HEADs in flight — and every worker past the
@@ -349,9 +363,20 @@ func HTTPClientFor(host FileHost) *http.Client {
 		return cached.(*http.Client)
 	}
 	// Cloned from DefaultTransport so the environment's proxy settings still
-	// apply; only the idle-connection budget and the TLS flag change.
+	// apply; only the idle-connection budget, the response deadline and the TLS
+	// flag change.
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.MaxIdleConnsPerHost = idleConnsPerHost
+	// The deadline that bounds "the connection was accepted and nothing
+	// answered". DefaultTransport bounds dialing and the TLS handshake, but
+	// nothing after that, so a half-dead filehost — or an NFS-backed store on a
+	// sleeping server — parked verify, the mount and every GUI worker forever
+	// (#114). ResponseHeaderTimeout is the right shape because the timer is
+	// abandoned once the headers arrive: a 4 KB thumbnail and a 4 GB blob are
+	// both fine, only the wait for an answer is bounded.
+	if d := FileHostResponseHeaderTimeout; d > 0 {
+		base.ResponseHeaderTimeout = d
+	}
 	if host.Insecure {
 		base.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
@@ -500,10 +525,17 @@ func (tc *TieClient) CollectionInfo() api.CollectionInfo {
 // parameter — so a request and a handler that disagree about the reply shape is
 // a compile error rather than a wrong-shaped decode (§7.5).
 func call[Req ws.RequestID, Rep any](tc *TieClient, request Req) (*Rep, error) {
+	return callCtx[Req, Rep](context.Background(), tc, request)
+}
+
+// callCtx is call with a caller context, so a request the caller no longer wants
+// is abandoned rather than run to completion and discarded (#114). The
+// webservice layer already honored contexts; the façade simply never passed one.
+func callCtx[Req ws.RequestID, Rep any](ctx context.Context, tc *TieClient, request Req) (*Rep, error) {
 	if tc.runErr != nil {
 		return nil, tc.runErr
 	}
-	return ws.Call[Req, Rep](tc.client, request)
+	return ws.CallContext[Req, Rep](ctx, tc.client, request)
 }
 
 // replyError turns an unsuccessful reply into an error: ErrNotFound for the
@@ -520,9 +552,14 @@ func replyError(status ws.ReplyStatus) error {
 
 // Add a triple to the collection
 func (tc *TieClient) Add(key, value1, value2 string) (AddReply, error) {
+	return tc.AddContext(context.Background(), key, value1, value2)
+}
+
+// AddContext is Add carrying the caller's context (#114).
+func (tc *TieClient) AddContext(ctx context.Context, key, value1, value2 string) (AddReply, error) {
 	request := tc.CollectionInfo().NewAddRequest(key, value1, value2)
 
-	reply, err := call[*api.AddRequest, api.AddReply](tc, request)
+	reply, err := callCtx[*api.AddRequest, api.AddReply](ctx, tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -563,6 +600,12 @@ func (tc *TieClient) Associated(key string) (AssociatedReply, error) {
 // paginated per spec), the total match count before pagination, and an error.
 // Returns ErrNotFound (with nil rows) when nothing matches.
 func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
+	return tc.QueryContext(context.Background(), spec)
+}
+
+// QueryContext is Query carrying the caller's context (#114). A listing the UI
+// has moved on from stops at once instead of pulling the rest of the page.
+func (tc *TieClient) QueryContext(ctx context.Context, spec QuerySpec) ([]Row, int, error) {
 	request := tc.CollectionInfo().NewQueryRequest()
 	request.Terms = spec.Terms
 	request.Exclude = spec.Exclude
@@ -587,7 +630,7 @@ func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 		Descending:         spec.Descending,
 	}
 
-	reply, err := call[*api.QueryRequest, api.QueryReply](tc, request)
+	reply, err := callCtx[*api.QueryRequest, api.QueryReply](ctx, tc, request)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -601,7 +644,12 @@ func (tc *TieClient) Query(spec QuerySpec) ([]Row, int, error) {
 // the key has no associated values. It is Expand for one key; use Query to
 // search for keys by their associations.
 func (tc *TieClient) Get(key string) (Row, error) {
-	rows, err := tc.Expand([]string{key})
+	return tc.GetContext(context.Background(), key)
+}
+
+// GetContext is Get carrying the caller's context (#114).
+func (tc *TieClient) GetContext(ctx context.Context, key string) (Row, error) {
+	rows, err := tc.ExpandContext(ctx, []string{key})
 	if err != nil {
 		return Row{}, err
 	}
@@ -614,9 +662,14 @@ func (tc *TieClient) Get(key string) (Row, error) {
 // Expand fetches the forward attributes of many keys in one round trip, one Row
 // per key that exists (missing keys are omitted). Order follows keys.
 func (tc *TieClient) Expand(keys []string) ([]Row, error) {
+	return tc.ExpandContext(context.Background(), keys)
+}
+
+// ExpandContext is Expand carrying the caller's context (#114).
+func (tc *TieClient) ExpandContext(ctx context.Context, keys []string) ([]Row, error) {
 	request := tc.CollectionInfo().NewExpandRequest(keys, "")
 
-	reply, err := call[*api.ExpandRequest, api.ExpandReply](tc, request)
+	reply, err := callCtx[*api.ExpandRequest, api.ExpandReply](ctx, tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -629,9 +682,14 @@ func (tc *TieClient) Expand(keys []string) ([]Row, error) {
 // Set makes (key, relation) hold exactly values, replacing any existing values
 // for that relation in one server-side op. An empty values slice clears it.
 func (tc *TieClient) Set(key, relation string, values []string) error {
+	return tc.SetContext(context.Background(), key, relation, values)
+}
+
+// SetContext is Set carrying the caller's context (#114).
+func (tc *TieClient) SetContext(ctx context.Context, key, relation string, values []string) error {
 	request := tc.CollectionInfo().NewSetRequest(key, relation, values)
 
-	reply, err := call[*api.SetRequest, api.SetReply](tc, request)
+	reply, err := callCtx[*api.SetRequest, api.SetReply](ctx, tc, request)
 	if err != nil {
 		return err
 	}
@@ -640,9 +698,14 @@ func (tc *TieClient) Set(key, relation string, values []string) error {
 
 // Delete a triple from the collection
 func (tc *TieClient) Delete(key, value1, value2 string) (DeleteReply, error) {
+	return tc.DeleteContext(context.Background(), key, value1, value2)
+}
+
+// DeleteContext is Delete carrying the caller's context (#114).
+func (tc *TieClient) DeleteContext(ctx context.Context, key, value1, value2 string) (DeleteReply, error) {
 	request := tc.CollectionInfo().NewDeleteRequest(key, value1, value2)
 
-	reply, err := call[*api.DeleteRequest, api.DeleteReply](tc, request)
+	reply, err := callCtx[*api.DeleteRequest, api.DeleteReply](ctx, tc, request)
 	if err != nil {
 		return nil, err
 	}
@@ -664,9 +727,16 @@ func (tc *TieClient) Update(update api.Update) (UpdateReply, error) {
 // callers can inspect per-request sub-replies; err is non-nil on transport
 // failure or if the batch as a whole reports failure.
 func (tc *TieClient) Batch(batch *api.Batch) (BatchReply, error) {
+	return tc.BatchContext(context.Background(), batch)
+}
+
+// BatchContext is Batch carrying the caller's context (#114). Cancelling
+// mid-batch does not undo what the server already applied; the journal a repair
+// writes is what makes an interrupted run resumable.
+func (tc *TieClient) BatchContext(ctx context.Context, batch *api.Batch) (BatchReply, error) {
 	request := api.NewBatchRequest(batch)
 
-	reply, err := call[*api.BatchRequest, api.BatchReply](tc, request)
+	reply, err := callCtx[*api.BatchRequest, api.BatchReply](ctx, tc, request)
 	if err != nil {
 		return nil, err
 	}

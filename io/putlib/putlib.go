@@ -3,6 +3,7 @@ package putlib
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net/http"
 	"os"
@@ -37,6 +38,12 @@ type PutConfig struct {
 	// physical store on a multi-store filehost receives the blob. Empty targets
 	// the filehost's default store.
 	Store string
+	// Context bounds the whole run: cancelling it abandons the request in
+	// flight and stops the walk before the next item, so an import of a big tree
+	// does not keep reading and hashing files nobody wants any more (#114).
+	// What was already uploaded stays uploaded — an upload is not transactional,
+	// and the caller's journal is what makes a retried run correct.
+	Context context.Context
 }
 
 type Status struct {
@@ -46,6 +53,9 @@ type Status struct {
 	// fh is the filehost client for this upload run: one client, so a whole
 	// tree import shares its connections.
 	fh *fhclient.Client
+	// ctx is the caller's context for the run (never nil), so the walk can stop
+	// between items and every request can be abandoned (#114).
+	ctx context.Context
 	// stack holds the real paths of the directories on the current recursion
 	// path, so a symlink that points back up the tree is reported instead of
 	// followed forever.
@@ -76,6 +86,15 @@ func (pc *PutConfig) AddressOf(input io.Reader) (string, error) { // function to
 }
 
 // UploadFile uploads the file at path under the content address hash.
+// context returns the run's context, so a PutConfig built without one behaves
+// like context.Background().
+func (pc *PutConfig) context() context.Context {
+	if pc.Context == nil {
+		return context.Background()
+	}
+	return pc.Context
+}
+
 func (pc *PutConfig) UploadFile(fh *fhclient.Client, hash, path string) StatusItem {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
@@ -105,7 +124,7 @@ func (pc *PutConfig) UploadMultipart(fh *fhclient.Client, hash string, f io.Read
 		contentType = t.MIME.Value
 	}
 
-	answer, err := fh.Put(hash, bufferedFileReader, int64(length), fhclient.PutOptions{
+	answer, err := fh.PutContext(pc.context(), hash, bufferedFileReader, int64(length), fhclient.PutOptions{
 		MediaType:  contentType,
 		Retention:  pc.Retention,
 		OwnerToken: pc.OwnerToken,
@@ -142,7 +161,7 @@ func (pc *PutConfig) UploadMultipart(fh *fhclient.Client, hash string, f io.Read
 // other answer — 404, a 403 from a read-restricted token, a transport error —
 // means "upload it", so this can only ever save work.
 func (status *Status) alreadyStored(hash string, size int64) bool {
-	ok, got, err := status.fh.Stat(hash)
+	ok, got, err := status.fh.StatContext(status.ctx, hash)
 	return err == nil && ok && got == size
 }
 
@@ -217,6 +236,7 @@ func Upload(url string, file string, config PutConfig) *Status {
 	if status.ErrorMsg != "" {
 		return status
 	}
+	status.ctx = config.context()
 	status.fh = fhclient.New(strings.TrimSuffix(url, "upload/"), config.Client)
 	status.fh.Store = config.Store
 
@@ -226,6 +246,13 @@ func Upload(url string, file string, config PutConfig) *Status {
 }
 
 func (status *Status) upload(file string, config PutConfig) {
+	// A cancelled run stops at the next item rather than walking the rest of the
+	// tree to upload nothing (#114).
+	if err := status.ctx.Err(); err != nil {
+		status.ErrorMsg += "upload cancelled: " + err.Error()
+		return
+	}
+
 	// Never leave the previous item's hash behind: the caller reads LastItem to
 	// build a manifest entry, and a stale one would point a child at the wrong
 	// blob.

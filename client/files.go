@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -60,12 +61,21 @@ type UploadOptions struct {
 	// Progress, when non-nil, receives each chunk of uploaded bytes so callers
 	// can render a progress bar. The total is the file (or manifest) size.
 	Progress io.Writer
+	// Context bounds the run: cancelling it abandons the request in flight and
+	// stops the walk before the next file (#114). Blobs already stored stay
+	// stored — an upload is not transactional.
+	Context context.Context
 }
 
 // Upload stores file (or directory) on the named filehost and returns the
 // resulting hashes. Pass an empty hostName to use the default filehost.
 func (tc *TieClient) Upload(hostName, file string) (*UploadResult, error) {
 	return tc.UploadWithOptions(hostName, file, UploadOptions{})
+}
+
+// UploadContext is Upload carrying the caller's context (#114).
+func (tc *TieClient) UploadContext(ctx context.Context, hostName, file string) (*UploadResult, error) {
+	return tc.UploadWithOptions(hostName, file, UploadOptions{Context: ctx})
 }
 
 // UploadWithOptions behaves like Upload but applies opts, letting callers set
@@ -105,6 +115,7 @@ func UploadToWithOptions(host FileHost, file string, opts UploadOptions) (*Uploa
 		Store:      host.Store,
 		Retention:  opts.Retention,
 		OwnerToken: opts.OwnerToken,
+		Context:    opts.Context,
 	})
 	result := &UploadResult{ErrorMsg: status.ErrorMsg}
 	for _, item := range status.UploadedItems {
@@ -122,11 +133,18 @@ func UploadToWithOptions(host FileHost, file string, opts UploadOptions) (*Uploa
 // Download fetches sourceHash from the named filehost into dest. Pass an empty
 // hostName to use the default filehost.
 func (tc *TieClient) Download(hostName, sourceHash, dest string) error {
+	return tc.DownloadContext(context.Background(), hostName, sourceHash, dest)
+}
+
+// DownloadContext is Download carrying the caller's context (#114). Cancelling
+// stops the transfer, and nothing is left at dest: a cancelled download is a
+// failed one, and a failed download removes what it staged.
+func (tc *TieClient) DownloadContext(ctx context.Context, hostName, sourceHash, dest string) error {
 	host, err := tc.ResolveHost(hostName)
 	if err != nil {
 		return err
 	}
-	return DownloadFrom(host, sourceHash, dest)
+	return DownloadFromContext(ctx, host, sourceHash, dest)
 }
 
 // DownloadFrom fetches sourceHash from an explicit filehost into dest,
@@ -135,16 +153,33 @@ func DownloadFrom(host FileHost, sourceHash, dest string) error {
 	return DownloadFromWithProgress(host, sourceHash, dest, nil)
 }
 
+// DownloadFromContext is DownloadFrom carrying the caller's context (#114).
+func DownloadFromContext(ctx context.Context, host FileHost, sourceHash, dest string) error {
+	return DownloadFromWithProgressContext(ctx, host, sourceHash, dest, nil)
+}
+
 // DownloadFromWithProgress behaves like DownloadFrom but, when progress is
 // non-nil, writes each chunk of downloaded file bytes to it so callers can
 // render a progress bar.
 func DownloadFromWithProgress(host FileHost, sourceHash, dest string, progress io.Writer) error {
-	return getlib.DownloadFile(HTTPClientFor(host), host.URL, sourceHash, dest, progress)
+	return DownloadFromWithProgressContext(context.Background(), host, sourceHash, dest, progress)
+}
+
+// DownloadFromWithProgressContext is DownloadFromWithProgress carrying the
+// caller's context (#114).
+func DownloadFromWithProgressContext(ctx context.Context, host FileHost, sourceHash, dest string, progress io.Writer) error {
+	return getlib.DownloadFileContext(ctx, HTTPClientFor(host), host.URL, sourceHash, dest, progress)
 }
 
 // DownloadSize returns the total number of bytes a download of sourceHash would
 // transfer, recursing into directories. Callers use it to size a progress bar
 // before starting the transfer.
 func DownloadSize(host FileHost, sourceHash string) (int64, error) {
-	return getlib.TotalSize(HTTPClientFor(host), host.URL, sourceHash)
+	return DownloadSizeContext(context.Background(), host, sourceHash)
+}
+
+// DownloadSizeContext is DownloadSize carrying the caller's context (#114). It
+// walks directory manifests, so a deep tree is worth cancelling too.
+func DownloadSizeContext(ctx context.Context, host FileHost, sourceHash string) (int64, error) {
+	return getlib.TotalSizeContext(ctx, HTTPClientFor(host), host.URL, sourceHash)
 }

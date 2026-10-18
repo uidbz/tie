@@ -36,9 +36,32 @@ to follow semantic versioning.
   name; a child under a live directory is left alone. It plans by default,
   journals what it applies, and `--drop-stale` removes the recovery-directory
   edges the recorded one replaces.
+- **The client can be bounded and cancelled.** `TieClient.SetTimeout(d)` reaches the
+  triplestore deadline that was already there, and every façade call gains a
+  `…Context` variant — `GetContext`, `ExpandContext`, `QueryContext`, `AddContext`,
+  `SetContext`, `DeleteContext`, `BatchContext`, `ReadTieDirContext`,
+  `DownloadContext` / `DownloadFromContext` / `DownloadSizeContext`, `UploadContext`
+  and `UploadOptions.Context`. The filehost layer carries it too:
+  `fhclient.StatContext`/`GetContext`/`GetContentContext`/`GetRangeContext`/`PutContext`,
+  `getlib.ReadFileContext`/`ReadBytesContext`/`DownloadFileContext`/`TotalSizeContext`/`IsDirContext`
+  and `getlib.Cache.ReadFileContext`, and `putlib.PutConfig.Context` stops a directory
+  walk between items. The existing methods keep their signatures and behaviour.
 
 ### Fixed
 
+- **A filehost that accepts the connection and never answers no longer parks the
+  caller forever.** The shared transports `client.HTTPClientFor` builds carried the
+  inherited dial and TLS-handshake timeouts and nothing after them, so a request to
+  a half-dead filehost — or an NFS-backed store on a sleeping server — never
+  returned, and with it any verify pass, blob stat, mount read or GUI thumbnail
+  worker. Those transports now set a response-header deadline (30 s, overridable
+  through `client.FileHostResponseHeaderTimeout`), which bounds the wait for an
+  answer without touching a slow transfer of real bytes.
+- **A tree read reports what failed.** `ReadTieDir` wrapped every error as
+  `error:'…'` and dropped the cause, so a caller could not tell a cancelled
+  listing from a triplestore failure or a missing node. The message is unchanged
+  and the cause is now wrapped, so `errors.Is` reaches `context.Canceled` and
+  `ErrNotFound`.
 - **A directory whose structural marker is gone is still seen as a directory.**
   `Verify` seeded its tree universe from the reverse `tie-type: directory` query,
   so a node carrying a `path` but no `tie-type` was in neither universe: it
