@@ -38,6 +38,11 @@ RDEPEND="
 "
 DEPEND="${RDEPEND}"
 
+# go.mod's go directive is a build requirement, not a suggestion: with the
+# network sandbox on, an older system Go cannot fetch a newer toolchain and the
+# build fails inside Portage. Keep this in step with go.mod.
+BDEPEND=">=dev-lang/go-1.27.2"
+
 DOCS=( README.md CHANGELOG.md docs/ )
 
 src_compile() {

@@ -32,7 +32,15 @@ VER="${TAG#v}"
 OUT="$(pwd)/tie-${VER}-deps.tar.xz"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# The EXIT trap must never change the script's own status: since Go 1.21 the
+# required toolchain is downloaded into GOMODCACHE as a read-only module
+# (golang.org/toolchain@...), which makes a plain rm -rf fail even after the
+# tarball was written successfully. -modcacherw does not cover it.
+cleanup() {
+	chmod -R u+w "$WORK" 2>/dev/null || true
+	rm -rf "$WORK" 2>/dev/null || true
+}
+trap cleanup EXIT
 
 echo "==> cloning tie at ${TAG}"
 git clone --quiet --depth 1 --branch "$TAG" https://github.com/uidbz/tie "$WORK/src"
@@ -48,7 +56,20 @@ echo "==> packing ${OUT}"
 # Pack the cache directory itself (go-mod/) so it unpacks to ${WORKDIR}/go-mod,
 # which go-module.eclass points GOMODCACHE at. XZ_OPT matches the eclass's
 # recommendation: parallel compression (-T0) at max level (-9).
-XZ_OPT='-T0 -9' tar -acf "$OUT" -C "$WORK" go-mod
+#
+# The golang.org/toolchain@... entry is left out on purpose: since Go 1.21 a
+# GOTOOLCHAIN=auto run downloads the required Go distribution into GOMODCACHE as
+# a module, and packing it would put a whole toolchain into an artifact whose job
+# is to carry tie's dependencies. Portage builds against the system Go, so the
+# version requirement belongs in the ebuild instead — BDEPEND=">=dev-lang/go-…"
+# in net-misc/tie, matching go.mod's go directive. Both the unpacked module
+# directory and the download-cache zip (plus its sumdb lookup line) are excluded.
+EXCLUDES=(
+	--exclude='go-mod/golang.org/toolchain*'
+	--exclude='go-mod/cache/download/golang.org/toolchain*'
+	--exclude='go-mod/cache/download/sumdb/sum.golang.org/lookup/golang.org/toolchain*'
+)
+XZ_OPT='-T0 -9' tar -acf "$OUT" "${EXCLUDES[@]}" -C "$WORK" go-mod
 
 echo
 echo "Wrote: $OUT"
