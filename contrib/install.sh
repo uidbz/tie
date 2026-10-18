@@ -128,6 +128,7 @@ openrc)
 	log "installing OpenRC service scripts"
 	install -m 0755 "$SCRIPT_DIR/openrc/tie-triplestore" /etc/init.d/tie-triplestore
 	install -m 0755 "$SCRIPT_DIR/openrc/tie-filehost" /etc/init.d/tie-filehost
+	install -m 0755 "$SCRIPT_DIR/openrc/tie-smb" /etc/init.d/tie-smb
 	log "adding services to the default runlevel"
 	rc-update add tie-triplestore default
 	rc-update add tie-filehost default
@@ -136,6 +137,14 @@ openrc)
 	Done. Edit config in $CONFDIR (especially [[Users]] in tie-triplestore.toml), then:
 	    rc-service tie-triplestore start
 	    rc-service tie-filehost start
+
+	tie-smb (SMB server on port 445) is installed but not in any runlevel: point
+	its TieConfig at your tie client config (default $CONFDIR/config.toml), set
+	[[Users]], then opt in with:
+	    rc-update add tie-smb default && rc-service tie-smb start
+	It runs as $TIE_USER, so binding 445 needs
+	    setcap 'cap_net_bind_service=+ep' $BINDIR/tie-smb
+	(or set ListenOn to a high port).
 	EOF
 	;;
 *)

@@ -74,11 +74,11 @@ only the proxy reaches the service.
 
 ## Logging
 
-Both services log to stderr, and under an init system that is all you need:
+All three services log to stderr, and under an init system that is all you need:
 
 - **systemd** captures stderr into the journal — `journalctl -u tie-triplestore`
-  (or `-u tie-filehost`). Because stderr is not a terminal, the output is plain
-  `time=… level=INFO msg=…` text (no color escapes).
+  (or `-u tie-filehost`, `-u tie-smb`). Because stderr is not a terminal, the
+  output is plain `time=… level=INFO msg=…` text (no color escapes).
 - **OpenRC** sends stderr to `/var/log/tie/${RC_SVCNAME}.log` (see the service
   scripts), again as plain text.
 
@@ -92,10 +92,28 @@ service still starts and falls back to stderr-only, but no file appears. Point
 it under `/var/lib/tie` if you use it. (OpenRC runs unsandboxed, so any
 `tie`-writable path works there.)
 
+### A service that will not stay up
+
+Both service files respawn their daemon on failure (systemd
+`Restart=on-failure`, OpenRC `supervise-daemon` with `respawn_max=0`), so a
+config or environment problem looks like a service that keeps starting and never
+serves: the log fills with `tie-filehost starting` every few seconds, and the
+port stays closed. The reason is always the first `level=ERROR` line after a
+`starting` line:
+
+```sh
+grep 'level=ERROR' /var/log/tie/tie-filehost.log | tail -3     # OpenRC
+journalctl -u tie-filehost -n 40 | grep level=ERROR            # systemd
+```
+
+The servers log `listening` only once the socket is actually open, so that line
+means the port is bound; anything that stops before it never reached the network.
+
 ## Files
 
-- `systemd/tie-triplestore.service`, `systemd/tie-filehost.service`
-- `openrc/tie-triplestore`, `openrc/tie-filehost`
+- `systemd/tie-triplestore.service`, `systemd/tie-filehost.service`,
+  `systemd/tie-smb.service`
+- `openrc/tie-triplestore`, `openrc/tie-filehost`, `openrc/tie-smb`
 - `install.sh` — the installer
 - `gentoo/` — Gentoo ebuilds (`net-misc/tie`, `acct-user/tie`,
   `acct-group/tie`) and install instructions

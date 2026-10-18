@@ -35,28 +35,32 @@ src_compile() {
 	ver="$(git -C "${S}" describe --tags --always --dirty 2>/dev/null || echo 9999)"
 	local ldflags="-X github.com/uidbz/tie/version.Version=${ver}"
 	local cmd
-	for cmd in tie tie-triplestore tie-filehost; do
+	for cmd in tie tie-triplestore tie-filehost tie-smb; do
 		ego build -ldflags "${ldflags}" -o "${cmd}" "./cmd/${cmd}"
 	done
 }
 
 src_install() {
-	dobin tie tie-triplestore tie-filehost
+	dobin tie tie-triplestore tie-filehost tie-smb
 
 	insinto /etc/tie
 	newins cmd/tie-triplestore/tie-triplestore.toml.example tie-triplestore.toml
 	newins cmd/tie-filehost/tie-filehost.toml.example tie-filehost.toml
+	newins cmd/tie-smb/tie-smb.toml.example tie-smb.toml
 
 	# The shared service files target /usr/local/bin (used by install.sh);
 	# dobin installs to /usr/bin, so retarget them for the packaged layout.
 	sed -i 's|/usr/local/bin/|/usr/bin/|g' \
-		contrib/openrc/tie-triplestore contrib/openrc/tie-filehost \
-		contrib/systemd/tie-triplestore.service contrib/systemd/tie-filehost.service || die
+		contrib/openrc/tie-triplestore contrib/openrc/tie-filehost contrib/openrc/tie-smb \
+		contrib/systemd/tie-triplestore.service contrib/systemd/tie-filehost.service \
+		contrib/systemd/tie-smb.service || die
 
 	newinitd contrib/openrc/tie-triplestore tie-triplestore
 	newinitd contrib/openrc/tie-filehost tie-filehost
+	newinitd contrib/openrc/tie-smb tie-smb
 	systemd_dounit contrib/systemd/tie-triplestore.service
 	systemd_dounit contrib/systemd/tie-filehost.service
+	systemd_dounit contrib/systemd/tie-smb.service
 
 	keepdir /var/lib/tie/db /var/lib/tie/data
 	fowners -R tie:tie /var/lib/tie
@@ -72,6 +76,13 @@ pkg_postinst() {
 	elog "Before starting, edit the config, especially the [[Users]] account:"
 	elog "    /etc/tie/tie-triplestore.toml"
 	elog "    /etc/tie/tie-filehost.toml"
+	elog
+	elog "tie-smb (the SMB file server) is installed but enabled by nothing: it"
+	elog "reads the tie client config named by its TieConfig key, and needs its"
+	elog "own [[Users]]. Its default port 445 is privileged - the systemd unit"
+	elog "grants CAP_NET_BIND_SERVICE; under OpenRC set it on the binary with"
+	elog "    setcap 'cap_net_bind_service=+ep' /usr/bin/tie-smb"
+	elog "or point ListenOn at a high port and mount with that port explicitly."
 	elog
 	elog "The default HTTP ports bind 0.0.0.0, so every host on your LAN can"
 	elog "reach them unencrypted. Bind ListenOn to 127.0.0.1, or set"
