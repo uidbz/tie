@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- **The filehost read cache no longer holds one file descriptor per cached
+  blob.** Indexing `CachePath` at start-up opened every cached file and kept the
+  handle open, so a cache of any size exhausted the process descriptor budget
+  before the listening socket could be created: with 3 000 cached blobs and
+  `ulimit -n 512` the server died with `socket: too many open files`, and a
+  supervisor that respawns (`Restart=on-failure`, OpenRC `respawn_max=0`)
+  restarted it every few seconds forever — the log said it was starting, and
+  every connection was refused. Descriptors now belong to the handle that is
+  reading and close with it: 3 000 adopted entries cost 7 descriptors, and
+  eviction is still safe mid-read because an open fd survives the unlink.
+
 ## [v0.7.0] - 2026-10-17
 
 ### Added

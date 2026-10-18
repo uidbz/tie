@@ -55,20 +55,20 @@ type Cache struct {
 }
 
 // entry is one cached object. ready closes once produce finishes (or fails);
-// until then other getters block on it. file is the open read handle that
-// makes ReadAt work without reopening, and it stays open while refs > 0 even
-// after eviction unlinks the name.
+// until then other getters block on it. The entry itself holds no file
+// descriptor: an open fd belongs to the Handle that is reading, and lives only
+// as long as that read does. A cache that keeps one fd per entry dies at
+// startup — adopting a large cache directory exhausts the process descriptor
+// budget before the listener is even opened — so the entry keeps only what it
+// takes to find the bytes again.
 type entry struct {
 	ready chan struct{}
 	path  string
 	size  int64
 	err   error
 
-	refs    int
-	evicted bool
-	elem    *list.Element
-
-	file *os.File
+	refs int
+	elem *list.Element
 }
 
 // New prepares a cache. With Options.Adopt the caller indexes whatever is
@@ -110,11 +110,7 @@ func (c *Cache) Adopt(key, path string, size int64) {
 	if c.closed || c.entries[key] != nil {
 		return
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return
-	}
-	e := &entry{ready: make(chan struct{}), path: path, size: size, file: f}
+	e := &entry{ready: make(chan struct{}), path: path, size: size}
 	close(e.ready)
 	c.entries[key] = e
 	e.elem = c.order.PushBack(key)
@@ -136,14 +132,22 @@ func (c *Cache) Get(key string, produce func(io.Writer) error) (*Handle, error) 
 		c.mu.Unlock()
 		return nil, e.err
 	}
-	// Take the reference under the lock: an eviction starting after this
-	// point sees refs > 0 and cannot close the fd under the caller.
+	// Take the reference under the lock: an eviction starting after this point
+	// sees refs > 0 and will not drop the entry's accounting while a reader is
+	// still using it. The descriptor belongs to the handle and is opened
+	// outside the lock, so a slow disk never serialises the request path.
 	e.refs++
 	if e.elem != nil {
 		c.order.MoveToBack(e.elem)
 	}
+	path := e.path
 	c.mu.Unlock()
-	return &Handle{c: c, e: e}, nil
+	f, err := os.Open(path)
+	if err != nil {
+		c.release(e)
+		return nil, fmt.Errorf("diskcache: opening %q: %w", path, err)
+	}
+	return &Handle{c: c, e: e, f: f}, nil
 }
 
 // Fill starts producing key in the background and returns immediately. It is
@@ -185,8 +189,16 @@ func (c *Cache) Peek(key string) (*Handle, bool) {
 	if e.elem != nil {
 		c.order.MoveToBack(e.elem)
 	}
+	path := e.path
 	c.mu.Unlock()
-	return &Handle{c: c, e: e}, true
+	f, err := os.Open(path)
+	if err != nil {
+		// The name is gone (evicted, or removed out of band). The caller
+		// treats this as a miss and serves from the source.
+		c.release(e)
+		return nil, false
+	}
+	return &Handle{c: c, e: e, f: f}, true
 }
 
 // start returns the entry for key, creating it and running produce if this
@@ -209,7 +221,7 @@ func (c *Cache) start(key string, produce func(io.Writer) error) *entry {
 	c.mu.Unlock()
 
 	// This goroutine owns the work.
-	e.path, e.size, e.file, e.err = c.produceInto(key, produce)
+	e.path, e.size, e.err = c.produceInto(key, produce)
 	if e.err != nil {
 		c.mu.Lock()
 		if c.entries[key] == e {
@@ -232,18 +244,19 @@ func (c *Cache) start(key string, produce func(io.Writer) error) *entry {
 
 // produceInto opens the destination file for key, runs produce into it, and
 // returns the path and byte count. Memory use is bounded by the copy buffer,
-// not the object size.
-func (c *Cache) produceInto(key string, produce func(io.Writer) error) (string, int64, *os.File, error) {
+// not the object size. The file is closed here: readers open their own
+// descriptor when they take a handle.
+func (c *Cache) produceInto(key string, produce func(io.Writer) error) (string, int64, error) {
 	path, err := c.layout(c.dir, key)
 	if err != nil {
-		return "", 0, nil, err
+		return "", 0, err
 	}
 	if err := mkdirFor(path); err != nil {
-		return "", 0, nil, err
+		return "", 0, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return "", 0, nil, fmt.Errorf("diskcache: creating %q: %w", path, err)
+		return "", 0, fmt.Errorf("diskcache: creating %q: %w", path, err)
 	}
 	n, perr := func() (int64, error) {
 		defer f.Close()
@@ -251,15 +264,9 @@ func (c *Cache) produceInto(key string, produce func(io.Writer) error) (string, 
 	}()
 	if perr != nil {
 		os.Remove(path)
-		return "", 0, nil, perr
+		return "", 0, perr
 	}
-	// Keep the file (a restart may reuse it) and keep an open read handle so
-	// ReadAt never has to reopen.
-	rf, err := os.Open(path)
-	if err != nil {
-		return "", 0, nil, fmt.Errorf("diskcache: reopening %q: %w", path, err)
-	}
-	return path, n, rf, nil
+	return path, n, nil
 }
 
 // writeThrough runs produce against w, returning the byte count. produce may
@@ -277,8 +284,10 @@ func writeThrough(w io.Writer, produce func(io.Writer) error) (int64, error) {
 }
 
 // evictLocked drops least-recently-used entries until curSize fits the budget.
-// An evicted entry leaves the map and the list, unlinks its file, and closes
-// its fd only when no handle is still reading through it. Callers hold mu.
+// An evicted entry leaves the map and the list and unlinks its file. A handle
+// still reading through it keeps its own descriptor, so the bytes stay readable
+// until that read finishes — unlinking the name is all eviction needs to do.
+// Callers hold mu.
 func (c *Cache) evictLocked(keep string) {
 	for c.curSize > c.maxSize {
 		el := c.order.Front()
@@ -300,43 +309,26 @@ func (c *Cache) evictLocked(keep string) {
 		}
 		delete(c.entries, key)
 		c.curSize -= e.size
-		e.evicted = true
-		if e.refs <= 0 {
-			e.closeFile()
-		}
 		os.Remove(e.path)
 	}
 }
 
-// release drops one handle's reference; the fd closes when the last handle
-// goes and the entry has already left the cache.
+// release drops one handle's reference. Nothing is held on the entry itself,
+// so releasing only ends the pin that kept it out of eviction's accounting.
 func (c *Cache) release(e *entry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e.refs > 0 {
 		e.refs--
 	}
-	if e.refs == 0 && e.evicted {
-		e.closeFile()
-	}
 }
 
-func (e *entry) closeFile() {
-	if e.file != nil {
-		e.file.Close()
-		e.file = nil
-	}
-}
-
-// Close closes every open handle and leaves the files on disk (the cache
-// directory is the caller's to remove).
+// Close ends the cache: later getters fail, and the files stay on disk (the
+// cache directory is the caller's to remove).
 func (c *Cache) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
-	for _, e := range c.entries {
-		e.closeFile()
-	}
 	c.entries = make(map[string]*entry)
 	c.order = list.New()
 	c.curSize = 0
@@ -359,10 +351,14 @@ func (c *Cache) Stats() (bytes int64, entries int) {
 	return c.curSize, len(c.entries)
 }
 
-// Handle is a refcounted random-access view of one cached object.
+// Handle is a refcounted random-access view of one cached object. It owns its
+// own descriptor, opened when the handle was taken and closed by Close, so the
+// number of open files tracks the number of reads in flight rather than the
+// number of cached objects.
 type Handle struct {
 	c *Cache
 	e *entry
+	f *os.File
 }
 
 // Size returns the object's length in bytes.
@@ -374,7 +370,8 @@ func (h *Handle) Size() int64 { return h.e.size }
 func (h *Handle) Path() string { return h.e.path }
 
 // ReadAt reads len(p) bytes at off, following io.ReaderAt semantics. It works
-// through the entry's own fd, so an eviction during the read is harmless.
+// through the handle's own fd, so an eviction during the read is harmless:
+// unlinking the name does not close a descriptor.
 func (h *Handle) ReadAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, fmt.Errorf("diskcache: negative read offset %d", off)
@@ -382,13 +379,10 @@ func (h *Handle) ReadAt(p []byte, off int64) (int, error) {
 	if off >= h.e.size {
 		return 0, io.EOF
 	}
-	h.c.mu.Lock()
-	f := h.e.file
-	h.c.mu.Unlock()
-	if f == nil {
+	if h.f == nil {
 		return 0, errors.New("diskcache: handle released")
 	}
-	return f.ReadAt(p, off)
+	return h.f.ReadAt(p, off)
 }
 
 // Section returns a seekable view of the whole object, for http.ServeContent
@@ -397,15 +391,20 @@ func (h *Handle) Section() *io.SectionReader {
 	return io.NewSectionReader(h, 0, h.e.size)
 }
 
-// Close releases this handle's reference. Using the handle afterwards is a
-// programming error.
+// Close releases this handle's reference and its descriptor. Using the handle
+// afterwards is a programming error.
 func (h *Handle) Close() error {
 	if h == nil || h.c == nil {
 		return nil
 	}
+	var err error
+	if h.f != nil {
+		err = h.f.Close()
+		h.f = nil
+	}
 	h.c.release(h.e)
 	h.c = nil
-	return nil
+	return err
 }
 
 // mkdirFor creates the parent directory of path.

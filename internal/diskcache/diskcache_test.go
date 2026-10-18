@@ -2,6 +2,7 @@ package diskcache
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -284,4 +285,65 @@ func BenchmarkGetHot(b *testing.B) {
 		}
 		hh.Close()
 	}
+}
+
+// TestAdoptDoesNotHoldDescriptors is the start-up guard. Indexing a cache
+// directory must not cost one descriptor per entry: a filehost with a read
+// cache of any size then exhausts the process fd budget before it can open a
+// listening socket, and the service dies in a respawn loop without ever
+// serving a request. Adopting is a stat, not an open.
+func TestAdoptDoesNotHoldDescriptors(t *testing.T) {
+	dir := t.TempDir()
+	const n = 400
+	var paths []string
+	for i := range n {
+		key := fmt.Sprintf("%064x", i)
+		p := dir + "/" + key[:2] + "/" + key[2:4] + "/" + key
+		if err := os.MkdirAll(dir+"/"+key[:2]+"/"+key[2:4], 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, key+"|"+p)
+	}
+
+	before := openFDs(t)
+	c, err := New(Options{Dir: dir, MaxBytes: 1 << 30})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for _, e := range paths {
+		key, p, _ := strings.Cut(e, "|")
+		info, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Adopt(key, p, info.Size())
+	}
+	if after := openFDs(t); after-before > 16 {
+		t.Errorf("adopting %d entries left %d descriptors open; a cache must hold none", n, after-before)
+	}
+
+	// The entries are still usable: the handle opens what adopt did not.
+	h, ok := c.Peek(paths[0][:strings.Index(paths[0], "|")])
+	if !ok {
+		t.Fatal("an adopted entry is not readable")
+	}
+	defer h.Close()
+	if got := readAll(t, h); got != "x" {
+		t.Errorf("adopted content = %q", got)
+	}
+}
+
+// openFDs counts the descriptors this process holds, for the tests that pin
+// resource use rather than behaviour.
+func openFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("no /proc/self/fd: %v", err)
+	}
+	return len(entries)
 }
