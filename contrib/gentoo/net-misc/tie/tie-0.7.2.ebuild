@@ -14,7 +14,7 @@ HOMEPAGE="https://github.com/uidbz/tie"
 #      runs fully offline inside Portage's network sandbox (the ::gentoo way).
 #
 # Regenerate the deps tarball for a new release with:
-#     contrib/gentoo/scripts/make-deps-tarball.sh v0.7.1
+#     contrib/gentoo/scripts/make-deps-tarball.sh v0.7.2
 # then attach it to the GitHub release so the second SRC_URI line resolves. See
 # contrib/gentoo/README.md.
 SRC_URI="

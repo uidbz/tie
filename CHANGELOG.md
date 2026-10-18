@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
-## [Unreleased]
+## [v0.7.2] - 2026-10-18
 
 ### Fixed
 
@@ -1004,6 +1004,7 @@ reworked CLI. All three binaries now report a build version (`tie --version`,
 - The `certmagic` dependency (filehost), the `gods` v1 dependency, and dead
   code across client/getlib.
 
+[v0.7.2]: https://github.com/uidbz/tie/releases/tag/v0.7.2
 [v0.7.1]: https://github.com/uidbz/tie/releases/tag/v0.7.1
 [v0.7.0]: https://github.com/uidbz/tie/releases/tag/v0.7.0
 [v0.4.3]: https://github.com/uidbz/tie/releases/tag/v0.4.3
