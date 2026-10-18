@@ -66,7 +66,18 @@ func (srv *server) reapOnce(now int64, dryRun bool) (deleted, kept int) {
 	// its children. This is a stat per blob and an open only for the handful
 	// newer than the index file — the cheap form of the scan this used to do
 	// every pass.
+	//
+	// A store whose index was never completed gets the full scan here instead.
+	// That is the one place it belongs: off the request path, and strictly
+	// before the mark phase, because an index that has not seen the whole store
+	// cannot say which blobs are live directory manifests, and sweeping on the
+	// strength of such an index deletes the children of directories it never
+	// looked at.
 	for _, st := range srv.stores {
+		if !st.dirs.ready {
+			st.dirs.bootstrap(st.path)
+			continue
+		}
 		st.dirs.repair(st.path)
 	}
 

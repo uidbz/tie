@@ -25,6 +25,17 @@ to follow semantic versioning.
   line claiming a server existed. It now opens the socket first and logs the
   address the socket actually got.
 
+- **The blob-store dir index is built by the reaper, not at start-up.** Building
+  it opens every blob in the store; on a large cold store that was minutes with
+  the listener still closed, and a respawning supervisor restarted the scan
+  before it could finish. Start-up now only reads the index.
+- **An incomplete dir index is never trusted to mark.** The index file can
+  appear without ever having seen the store (the first directory-blob upload
+  creates it with one line), and the cheap repair path only looks at blobs newer
+  than that file — so every directory predating it was invisible and the blobs
+  under it were swept. The index now carries a completion marker, and a scan
+  interrupted by a crash is redone rather than trusted.
+
 ## [v0.7.0] - 2026-10-17
 
 ### Added

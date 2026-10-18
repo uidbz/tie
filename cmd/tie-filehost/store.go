@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -115,13 +116,15 @@ func (s *server) initStores(cfg FilehostConfig) error {
 		if err != nil {
 			return fmt.Errorf("blob store %q: loading dir index: %w", sp.Name, err)
 		}
-		if !present {
-			// Store predates the dir index: pay the full scan once here rather
-			// than on every reaper pass.
-			di.bootstrap(path)
-		} else {
-			// Pick up any manifest whose index line was lost to a crash.
-			di.repair(path)
+		if !di.ready {
+			// The store has no completed dir index — it predates the file, or
+			// a scan was interrupted. Do not pay for the scan here: it opens
+			// every blob in the store, and start-up is the one place that must
+			// not block, because until the listener is open the filehost
+			// answers nothing. The reaper builds it before its first mark
+			// phase, and refuses to sweep until it exists.
+			slog.Info("dir index incomplete; the reaper will build it before its first pass",
+				"store", sp.Name, "path", path, "partial", present)
 		}
 		st := &blobStore{name: sp.Name, path: path, defaultRetention: d, retention: ri, dirs: di}
 		s.stores = append(s.stores, st)
