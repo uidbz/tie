@@ -347,3 +347,39 @@ func openFDs(t *testing.T) int {
 	}
 	return len(entries)
 }
+
+// BenchmarkHandleRead measures the hot path the filehost read cache uses on
+// every cached byte: take a handle, read through it, release it. The descriptor
+// belongs to the handle, so this is also the cost of the open and close.
+func BenchmarkHandleRead(b *testing.B) {
+	dir, err := os.MkdirTemp("", "diskcache-bench")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	c, err := New(Options{Dir: dir, MaxBytes: 1 << 30})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer c.Close()
+	data := strings.Repeat("x", 64*1024)
+	h, err := c.Get("k", produce(data))
+	if err != nil {
+		b.Fatal(err)
+	}
+	h.Close()
+
+	buf := make([]byte, 4096)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		h, ok := c.Peek("k")
+		if !ok {
+			b.Fatal("not cached")
+		}
+		if _, err := h.ReadAt(buf, 0); err != nil {
+			b.Fatal(err)
+		}
+		h.Close()
+	}
+}
