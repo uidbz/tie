@@ -24,9 +24,12 @@ triples:
   directory's contents. It carries `tie-type: directory` and `media-type:
   inode/directory` but **no `path`** — it is structurally a *file* (it has no
   children of its own and needs a parent like any other content), linked from
-  its live directory node via a `tiedir-hash` edge. `verify` classifies on the
-  presence of `path`, so tiedir blobs are checked as files and never mistaken
-  for orphaned directories.
+  its live directory node via a `tiedir-hash` edge. `verify` classifies on that
+  relation — a dir-typed node *referenced* by someone's `tiedir-hash` edge is a
+  snapshot, checked as content; any other dir-typed node is a tree node, even
+  one whose `path` has been destroyed (#118). Classifying on the presence of
+  `path` instead mistook such a broken node for a snapshot, reported its DirUID
+  as a missing blob, and let a fixing repair delete it.
 
 A node with **no `parent` edge** is unreachable from the root — that is an
 **orphan**, and it is the central thing `verify` finds and can repair.
@@ -47,6 +50,8 @@ collection (both the `directory` and `file` universes, unpaginated) and reports:
 | **Dangling parent references** | an edge `(child, parent, P)` where `P` no longer exists as a directory | no (reported only) |
 | **Parent cycles** | a directory that is its own ancestor | no (reported only) |
 | **Duplicate path claims** | more than one DirUID holding the same `path` | no (reported only) |
+| **Path-less directories** (`pathless-dir`) | a dir-typed node with no `path` triple: a real folder that lost its path, invisible to every path-based view though its name, parent edge and manifest link survive | yes, by `--fix` / `repair plan`, which adds back `<parent path>/<name>` |
+| **Path/parent disagreement** (`path-mismatch`) | a directory whose `path` claims a location none of its parents is at, so the branch its own path names does not list it | yes, by `--fix` / `repair plan --drop-stale`, which adopts the path (creating the chain it names) and can drop the contradicting edges |
 | **Missing metadata** | a file lacking `filename`/`filesize`/`media-type` or a concrete tie-type — the triples `appendTagOps` always writes; a sign of an interrupted import | no (reported only) |
 | **Missing blobs** (`--check-blobs`) | a file whose content hash is absent from the filehost (never uploaded, or reaped) | no (reported only) |
 
@@ -87,8 +92,9 @@ tie verify --check-blobs
 tie verify --index
 tie verify --index --deep
 
-# Repair the index in memory, re-home every orphan under tie:/restored/<today>/,
-# then re-verify.
+# Repair the index in memory, put every orphan back where its own path says it
+# belongs (files, and anything with no path to go by, under
+# tie:/restored/<today>/), then re-verify.
 tie verify --repair
 
 # Restore into a specific directory instead.
@@ -101,11 +107,18 @@ tie verify | tie repair plan > plan.tsv
 less plan.tsv
 tie repair apply < plan.tsv
 
-# Destructive fixes (dangling refs, ghosts, file metadata, leftovers): plan,
+# Destructive fixes (dangling refs, path-less and mis-homed directories,
+# ghosts, file metadata, leftovers): plan,
 # then apply with a TSV journal of every mutation. Take a dump first.
 tie dump > backup.tsv
 tie verify --fix --dry-run
 tie verify --fix --journal fix-2026-09.tsv
+
+# Undo the flat pile a past re-home left: rebuild containment from every
+# directory's tiedir manifest. Plan first, then apply; --drop-stale also
+# removes the recovery-directory edges the recorded one replaces.
+tie repair relink > relink.tsv
+tie repair relink --apply --drop-stale --journal relink-2026-09.tsv
 ```
 
 Output goes to **stderr** (stdout stays clean for scripting), one section per
@@ -215,7 +228,9 @@ or recover:
 | Problem | Fix |
 |---------|-----|
 | **Dangling parent ref** `child -> P` | drop the edge; re-parent `child` to P's nearest live ancestor (walking P's own parent chain), else under `--dest` |
-| **Ghost node** — dir-typed, no `path`, no file metadata, no remaining children, no `tiedir-hash` referrer, and no blob of that hash on the filehost | delete all its triples. Children are re-parented first (same rule as above), so chains of invisible ghosts resolve bottom-up over a few rounds |
+| **Path-less directory** (`pathless-dir`) | add back `<live parent path>/<recorded name>`. A dir-typed node that links a manifest or names itself is never deleted, and never blob-checked: its key is a DirUID, not content |
+| **Path/parent disagreement** (`path-mismatch`) | adopt the path: resolve the directory it names — creating missing levels — and parent the node there. With `--drop-stale`, the parent edges contradicting the adopted path are deleted too |
+| **Ghost node** — dir-typed, no `path`, no name, no manifest link, no file metadata, no remaining children, no `tiedir-hash` referrer, and no blob of that hash on the filehost | delete all its triples. Children are re-parented first (same rule as above), so chains of invisible ghosts resolve bottom-up over a few rounds |
 | **File missing `filesize` / `media-type` / concrete tie-type** | re-derive from the blob: size via `HEAD`, type by sniffing the first 512 bytes |
 | **File missing `filename` but carrying `name`** | reconstruct `name` + extension for the sniffed media type |
 | **File with neither `filename` nor `name`, or whose blob is absent from the filehost** | unrecoverable leftover: delete all its triples |

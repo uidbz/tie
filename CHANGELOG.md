@@ -4,6 +4,62 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **`tie verify` now sees a directory that is present but unreachable.** Two new
+  finding kinds: `pathless-dir` (a dir-typed node carrying a name, a parent edge
+  and a manifest link but no `path` triple, so no path-based view can list it)
+  and `path-mismatch` (a directory whose `path` claims a location none of its
+  parents is at, so the branch its own path names does not list it). Each row
+  carries what a repair needs — the recorded name and the path to restore, or the
+  claimed path and where a parent actually lists the node. The findings wire
+  format is unchanged; only new `kind` values appear.
+- **`tie repair plan` can put those directories back.** A node that lost its path
+  gets `<live parent path>/<recorded name>` added; a node whose path and parent
+  disagree adopts the path it claims, creating any missing intermediate directory
+  as part of the same plan. Both are additions, so a node can be reached from
+  both places until the old edges are reviewed; `--drop-stale` also deletes the
+  parent edges that contradict an adopted path.
+- **`tie repair relink` rebuilds what a re-home flattened.** Every directory
+  links the immutable `tiedir` manifest it was imported from, and that manifest
+  records each entry's content hash and name — so containment is recoverable.
+  Relink re-asserts the recorded `(child, parent, directory)` edge for every
+  child whose only parents today are recovery directories, resolving a
+  subdirectory entry through the manifest it is the snapshot of rather than by
+  name; a child under a live directory is left alone. It plans by default,
+  journals what it applies, and `--drop-stale` removes the recovery-directory
+  edges the recorded one replaces.
+
+### Fixed
+
+- **A re-home no longer leaves a directory whose path contradicts its new
+  parent.** `tie verify --repair` re-homed every orphan — files and directories
+  alike — flat under one `tie:/restored/<date>/`, while the directory kept the
+  `path` triple of the branch it came from. The node was reachable again but in
+  the wrong place, and the branch its own path named no longer listed it. A
+  directory that still carries a path now goes back under the directory that
+  path names (its levels created if missing); only what has no path to go by —
+  files, and directories whose path is gone too — lands in the recovery
+  directory.
+
+- **A directory that lost its `path` triple is no longer mistaken for content.**
+  `Verify` split the dir-typed universe on the presence of a `path` triple, so a
+  live tree node whose path had been destroyed was filed as a tiedir snapshot
+  blob: `--check-blobs` HEADed its DirUID on the filehost and reported a **false
+  `missing-blob`** for a folder whose content was intact, while the real defect —
+  that folder is invisible in tie-view, tie-fm and the mount — went unreported and
+  `tie repair plan` answered "planned 0 operations". Worse, its children's edges
+  then looked dangling, which seeded the node as a ghost candidate: `repair apply
+  --fix` cut its children loose to the nearest live ancestor and, for a node with
+  no name or size triple left, deleted every triple it still had — including the
+  link to its manifest. The universe is now partitioned on the structural test
+  repair already used (referenced by someone's `tiedir-hash` edge ⇒ content
+  snapshot; otherwise a tree node), such a node is never blob-checked, and the
+  ghost loop refuses to delete any dir-typed node that still carries a manifest
+  link, a name or a parent edge.
+
 ## [v0.7.2] - 2026-10-18
 
 ### Fixed

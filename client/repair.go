@@ -1,27 +1,31 @@
 package client
 
 // repair.go fixes the corruption classes Verify reports but RepairOrphans
-// never touches: dangling parent references, ghost directories (nodes with
-// tie-type directory but no path — half-written imports), and files with
-// incomplete metadata. It is the destructive half of `tie verify` (`--fix`),
-// separate from the additive `--repair` (index repair + orphan re-homing), and
-// is plan-first: RepairTree returns the operations it would apply unless
-// RepairOptions.Apply is set, and journals every applied operation as TSV so a
-// mistake can be reversed via `tie restore` — with the pre-repair `tie dump`
-// as the full backstop.
+// never touches: dangling parent references, path-less and mis-homed directories
+// (#118, #119), unreachable leftovers, and files with incomplete metadata. It is
+// the destructive half of `tie verify` (`--fix`), separate from the additive
+// `--repair` (index repair + orphan re-homing), and is plan-first: RepairTree
+// returns the operations it would apply unless RepairOptions.Apply is set, and
+// journals every applied operation as TSV so a mistake can be reversed via
+// `tie restore` — with the pre-repair `tie dump` as the full backstop.
 //
 // Repair policy (additive-first; deletes only for unreachable leftovers):
 //
 //   - Dangling parent ref (child -> P, P not a live dir): re-parent the child
 //     to P's nearest live ancestor (walking P's parent chain); if none exists,
 //     re-parent under Dest (the same restored/<date> dir RepairOrphans uses).
-//   - Ghost node (no path, no file metadata, no tiedir-hash referrer, no
-//     remaining children, no blob on the filehost): delete all its triples.
+//   - Directory that lost its path, or whose path and parent edge disagree:
+//     restore the triples that make it reachable by path (pathRestoreOps).
+//   - Ghost node (no path, no file metadata, no name, no manifest link, no
+//     parent edge, no tiedir-hash referrer, no remaining children, no blob on
+//     the filehost): delete all its triples.
 //     Ghosts seed from the parents of dangling refs and from dir-typed
 //     metadata gaps; children of a ghost get re-parented in the same
 //     fixed-point loop, so chains of invisible (tie-type-less) ghost nodes
 //     resolve bottom-up. A node referenced by a "tiedir-hash" edge is a
-//     directory's content snapshot, not a ghost, and is never deleted.
+//     directory's content snapshot, not a ghost, and is never deleted — and
+//     neither is a dir-typed node that still carries a name or a manifest link,
+//     which is a folder that lost its path (#118); pathRestoreOps restores those.
 //   - File missing filename/filesize/media-type/tie-type: re-derive from the
 //     blob (size via HEAD, media-type/tie-type by sniffing the leading bytes).
 //     A missing filename is reconstructed as name+extension when a name
@@ -50,6 +54,11 @@ type RepairOptions struct {
 	Dest string
 	// Apply performs the mutations. When false RepairTree only plans.
 	Apply bool
+	// DropStale lets the path restore delete the parent edges that contradict a
+	// directory's adopted path — the edges an earlier re-home left pointing at a
+	// recovery directory. Additive by default: the old edges stay, so a node can
+	// be reached from both places until the operator removes them.
+	DropStale bool
 	// Journal receives one TSV line (time, op, key, relation, value, note) per
 	// applied operation. Ignored unless Apply is set. May be nil.
 	Journal io.Writer
@@ -90,6 +99,7 @@ type repairSession struct {
 	done      map[string]bool   // ghosts resolved (deleted, or found to be real)
 	protected map[string]bool   // referenced by a tiedir-hash edge: never deleted
 	ancestor  map[string]string // nearestLiveAncestor cache
+	created   map[string]string // virtual path -> DirUID minted during this run
 	handled   map[string]bool   // child\x00parent edges already re-parented
 	destUID   string
 
@@ -115,6 +125,7 @@ func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*Repair
 		tie: tie, opts: opts, res: &RepairResult{},
 		liveDir: map[string]bool{}, ghosts: map[string]bool{}, done: map[string]bool{},
 		protected: map[string]bool{}, ancestor: map[string]string{}, handled: map[string]bool{},
+		created: map[string]string{},
 	}
 	if opts.Apply && opts.Journal != nil {
 		r.journal = opts.Journal
@@ -127,11 +138,32 @@ func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*Repair
 		return r.res, fmt.Errorf("loading directory universe: %w", err)
 	}
 
+	// Put back the triples that make a directory reachable by path (#118, #119),
+	// first: every restore is an addition, and a node that gets its path back is
+	// a live directory the rest of this function must not treat as leftover.
+	pathOps, err := r.pathRestoreOps(rep)
+	if err != nil {
+		return r.res, fmt.Errorf("planning path restores: %w", err)
+	}
+	if err := r.run("restore paths", pathOps); err != nil {
+		return r.res, err
+	}
+
 	// Seed ghost candidates: the target of every dangling ref, plus every
-	// dir-typed node verify flagged as a metadata gap (no path => not a tree
-	// dir; a leftover of a half-written import).
+	// dir-typed node verify flagged as a metadata gap. A dir-typed node without
+	// a path is not a ghost by itself — see pathRestoreOps above and the
+	// isRealFolder guard in the loop below.
 	for _, ref := range rep.DanglingParentRefs {
 		r.ghosts[ref.Parent] = true
+	}
+	// A path-less directory whose name is gone as well cannot be restored by
+	// path — nothing records what it was called — so it is treated as the
+	// leftover it most likely is: its children are re-homed by the same loop.
+	// One that still names itself, or links a manifest, is protected below.
+	for _, d := range rep.PathlessDirs {
+		if d.Name == "" {
+			r.ghosts[string(d.UID)] = true
+		}
 	}
 	var files []MetadataGap
 	for _, gap := range rep.MissingMetadata {
@@ -173,6 +205,16 @@ func (tie *TieClient) RepairTree(rep *VerifyReport, opts RepairOptions) (*Repair
 			row, err := tie.Get(g)
 			if err != nil {
 				r.done[g] = true // already gone
+				continue
+			}
+			// A dir-typed node that still carries the marks of a real folder — a
+			// manifest link or a recorded name — is a directory that lost its
+			// path, not a leftover of a half-written import. Leave it and its
+			// children alone: pathRestoreOps above gives it a path when a name is
+			// known, and deleting either way is silent, because the node is
+			// unreachable before and after (#118).
+			if isRealFolder(row) {
+				r.done[g] = true
 				continue
 			}
 			moved := false
@@ -256,6 +298,159 @@ func (r *repairSession) progress(format string, args ...any) {
 	}
 }
 
+// pathRestoreOps plans what makes a directory reachable by path again — the two
+// states in which a folder exists in the triple store but no browser can show
+// it. Both restores are additions; the only deletions are the stale parent edges
+// an operator explicitly asks to drop (RepairOptions.DropStale).
+func (r *repairSession) pathRestoreOps(rep *VerifyReport) ([]RepairOp, error) {
+	if rep == nil {
+		return nil, nil
+	}
+	var ops []RepairOp
+
+	// A dir-typed node with no path triple: its recorded name plus the directory
+	// that lists it say where it belongs. Giving it that path is what makes it
+	// visible again, and it also keeps the ghost logic off it.
+	for _, d := range rep.PathlessDirs {
+		uid := string(d.UID)
+		if r.liveDir[uid] {
+			continue // it has a path again since verify ran
+		}
+		p := d.Path
+		if p == "" {
+			p = r.derivePath(uid)
+		}
+		if p == "" {
+			r.progress("pathless dir %s: no name or live parent to derive a path from", short(uid))
+			continue
+		}
+		ops = append(ops, RepairOp{api.BatchAdd, uid, string(RelPath), p, "restore the path a directory lost"})
+		r.liveDir[uid] = true
+	}
+
+	// A path that claims a location none of the node's parents is at: adopt the
+	// path. Resolve — creating any missing intermediate levels — the directory
+	// the path names, and parent the node there.
+	for _, m := range rep.PathMismatch {
+		uid := string(m.UID)
+		row, err := r.tie.Get(uid)
+		if err != nil {
+			continue // gone since verify
+		}
+		if !RowHas(row, RelPath, m.Path) {
+			continue // the claim changed since verify
+		}
+		target := FileURIScheme + virtualDir(m.Path)
+		parentUID, err := r.resolveDirChain(target, &ops)
+		if err != nil {
+			return nil, err
+		}
+		if parentUID == "" || parentUID == uid || RowHas(row, RelParent, parentUID) {
+			continue
+		}
+		ops = append(ops, RepairOp{api.BatchAdd, uid, string(RelParent), parentUID, "adopt the path this directory claims"})
+		if !r.opts.DropStale {
+			continue
+		}
+		for _, p := range RowValues(row, RelParent) {
+			if p == parentUID || p == uid {
+				continue
+			}
+			pps, err := r.dirPaths(p)
+			if err != nil {
+				continue
+			}
+			consistent := false
+			for _, pp := range pps {
+				if pathUnder(m.Path, pp) {
+					consistent = true
+				}
+			}
+			if !consistent {
+				ops = append(ops, RepairOp{api.BatchDelete, uid, string(RelParent), p,
+					"drop the parent edge that contradicts the adopted path"})
+			}
+		}
+	}
+	return ops, nil
+}
+
+// derivePath returns <live parent path>/<name> for a node that has lost its
+// path, using its recorded filename/name triple, or "" when neither a name nor
+// a path-carrying parent is known.
+func (r *repairSession) derivePath(uid string) string {
+	row, err := r.tie.Get(uid)
+	if err != nil {
+		return ""
+	}
+	name := firstOf(RowFirst(row, RelFilename), RowFirst(row, RelName))
+	if name == "" {
+		return ""
+	}
+	var cands []string
+	for _, p := range RowValues(row, RelParent) {
+		pps, err := r.dirPaths(p)
+		if err != nil {
+			continue
+		}
+		for _, pp := range pps {
+			cands = append(cands, joinVirtualPath(pp, name))
+		}
+	}
+	if len(cands) == 0 {
+		return ""
+	}
+	sort.Strings(cands)
+	return cands[0]
+}
+
+// dirPaths returns the virtual paths a DirUID carries.
+func (r *repairSession) dirPaths(uid string) ([]string, error) {
+	row, err := r.tie.Get(uid)
+	if err != nil {
+		return nil, err
+	}
+	return RowValues(row, RelPath), nil
+}
+
+// resolveDirChain returns the UID of the virtual directory p, planning the
+// triples of every intermediate level that does not exist yet. A level is minted
+// at most once per run (r.created), so restoring several directories that share
+// a chain creates one node, and the plan a human reviews carries the same UIDs
+// the apply step writes.
+func (r *repairSession) resolveDirChain(p string, ops *[]RepairOp) (string, error) {
+	root, _, err := r.tie.tieRootDir()
+	if err != nil {
+		return "", err
+	}
+	cur := string(root)
+	for _, lvl := range tieDirAncestors(p) {
+		if uid, ok := r.created[lvl]; ok {
+			cur = uid
+			continue
+		}
+		uid, err := r.tie.DirUIDFromPath(lvl)
+		if err != nil {
+			return "", err
+		}
+		if uid != "" {
+			cur = string(uid)
+			r.created[lvl] = cur
+			continue
+		}
+		newUID := string(r.tie.newDirUID())
+		note := "intermediate directory for an adopted path"
+		*ops = append(*ops,
+			RepairOp{api.BatchAdd, newUID, string(RelPath), lvl, note},
+			RepairOp{api.BatchAdd, newUID, string(RelType), str(TieDirectory), note},
+			RepairOp{api.BatchAdd, newUID, string(RelParent), cur, note})
+		r.created[lvl] = newUID
+		r.liveDir[newUID] = true
+		cur = newUID
+	}
+	return cur, nil
+}
+
 // reparentOps drops child's edge to the dead parent and adds one to the
 // nearest live ancestor (or the DEST placeholder).
 func (r *repairSession) reparentOps(child, parent string) []RepairOp {
@@ -293,6 +488,17 @@ func fileLike(row Row) bool {
 		len(RowValues(row, RelFilesize)) > 0 ||
 		len(RowValues(row, RelMediaType)) > 0 ||
 		RowHas(row, RelType, str(TieFile))
+}
+
+// isRealFolder reports a row that carries the marks of a directory rather than
+// of a half-written import: a link to its immutable manifest, or a recorded
+// name. Such a node is a folder that lost its path, and the repair that fits is
+// to give the path back (pathRestoreOps), never to delete the node or cut its
+// children loose (#118).
+func isRealFolder(row Row) bool {
+	return RowHas(row, RelType, str(TieDirectory)) &&
+		(len(RowValues(row, RelTiedirHash)) > 0 ||
+			firstOf(RowFirst(row, RelFilename), RowFirst(row, RelName)) != "")
 }
 
 // childrenOf returns the keys of every node with a parent edge to uid.
@@ -344,10 +550,7 @@ func (r *repairSession) nearestLiveAncestor(uid, guard string) string {
 // tiedir-hash edge — such a node is a directory's content snapshot, not a
 // ghost.
 func (r *repairSession) noTiedirRefs(uid string) bool {
-	rows, _, err := r.tie.Query(QuerySpec{
-		Terms: []string{uid}, Filter: string(RelTiedirHash), Reverse: true, Limit: -1,
-	})
-	if err == nil && len(rows) > 0 {
+	if r.tie.referencedByTiedir(uid) {
 		r.protected[uid] = true
 		return false
 	}

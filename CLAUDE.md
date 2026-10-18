@@ -363,6 +363,25 @@ through it via `dBWriteQueue`/`dBReadQueue`; producers never touch the fd.
   part of registering, and `api/register_test.go` fails if the request is not in
   the protocol list.
 
+## Filing issues, PRs and release notes (privacy)
+
+The tracker is public and read outside this project. Anything written to GitHub —
+issue titles and bodies, PR descriptions, comments, release notes, commit
+messages — is written in **generalized form**, never with data from anyone's real
+store:
+
+- No real paths (`/mnt/…`, `/data/…`, `/home/…`), no hostnames or addresses from
+  a LAN, no collection, namespace, directory or file names. Use placeholders:
+  `tie:/a/b/c`, `/path/to/cache`, `<filehost>:1162`.
+- Describe the *shape* of the state, not its content: "a collection where
+  directories with a `path` triple sit under a parent that is nowhere near that
+  path", not the 81 folders that do it here.
+- Counts and identifiers from a live store are out unless they are essential,
+  and then they are rounded (`thousands of entries`, `~1 kB manifest`).
+- Screenshots, log excerpts and dumps attached to an issue must be scrubbed of
+  names first; a synthetic reproduction is always preferable to an anonymized
+  real one.
+
 ## Media model (client/media.go, playlist.go, history.go)
 
 Shared media vocabulary + the **collection contract**: members point at
