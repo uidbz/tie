@@ -66,10 +66,17 @@ type QuerySpec struct {
 	// existence the tag algebra cannot express with Exclude, resolved
 	// server-side so only the qualifying rows cross the wire.
 	MissingRelation string
-	Filter          string
-	Reverse         bool
-	Expand          bool
-	Offset          int
+	// HasRelation is MissingRelation's mirror: only matches carrying at least one
+	// triple under this relation, whatever the value. With no Terms it is the
+	// seed on its own, which is how a caller asks "which subjects hold this
+	// relation" — the question both query directions otherwise cannot answer,
+	// because both key on a value (#124). A subject holding several values under
+	// it appears once, so ask for Expand to see them all.
+	HasRelation string
+	Filter      string
+	Reverse     bool
+	Expand      bool
+	Offset      int
 	// Limit caps the number of TRIPLES returned (not rows). 0 or negative
 	// means unlimited.
 	Limit  int
@@ -611,6 +618,7 @@ func (tc *TieClient) QueryContext(ctx context.Context, spec QuerySpec) ([]Row, i
 	request.Exclude = spec.Exclude
 	request.Scope = spec.Scope
 	request.MissingRelation = spec.MissingRelation
+	request.HasRelation = spec.HasRelation
 	request.Filter = spec.Filter
 	request.Reverse = spec.Reverse
 	request.Expand = spec.Expand

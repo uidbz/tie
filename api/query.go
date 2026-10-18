@@ -16,7 +16,11 @@ const (
 // value under a different relation than the terms (e.g. a tie-type).
 // MissingRelation keeps only matches that carry no triple under the named
 // relation — the "has no tag" case Exclude cannot express (Exclude removes a
-// specific value, not the presence of a relation). Filter filters-in on the
+// specific value, not the presence of a relation). HasRelation is its mirror:
+// only matches carrying at least one triple under the named relation, whatever
+// the value. Without Terms it is the seed on its own, which is how a caller
+// asks "which subjects hold this relation" (#124); a subject holding several
+// values under it appears once, so ask for Expand to see them all. Filter filters-in on the
 // relation (value1). Reverse selects matches by reverse association (the
 // tag-query case). When Expand is set, each match's own forward attributes are
 // attached to its Row instead of the matched triples.
@@ -28,6 +32,7 @@ type QueryRequest struct {
 	Exclude         []string          `json:"exclude"`
 	Scope           string            `json:"scope"`
 	MissingRelation string            `json:"missingRelation"`
+	HasRelation     string            `json:"hasRelation"`
 	Filter          string            `json:"filter"`
 	Reverse         bool              `json:"reverse"`
 	Expand          bool              `json:"expand"`
@@ -63,6 +68,7 @@ func queryHandler(env *ws.Environment, request *QueryRequest) (*QueryReply, erro
 		Exclude:         request.Exclude,
 		Scope:           request.Scope,
 		MissingRelation: request.MissingRelation,
+		HasRelation:     request.HasRelation,
 		Reverse:         request.Reverse,
 		Filter:          request.Filter,
 		Sort:            request.Sort,

@@ -414,6 +414,36 @@ func (r *repairSession) pathRestoreOps(rep *VerifyReport) ([]RepairOp, error) {
 			}
 		}
 	}
+
+	// A marker gap normally means the node is still in the tree and only its
+	// tie-type triple went. When its parent edge went with it, verify could not
+	// report it as an orphan either — the node was in neither universe — so
+	// re-home it here from the path it still carries (#124). Skipping this would
+	// leave the marker restored but the node unreachable until a second pass
+	// happened to notice the orphan.
+	for _, g := range rep.MissingTieType {
+		uid := string(g.UID)
+		row, err := r.tie.Get(uid)
+		if err != nil {
+			continue // gone since verify
+		}
+		if len(RowValues(row, RelParent)) > 0 {
+			continue // still in the tree: only the marker was missing
+		}
+		p := RowFirst(row, RelPath)
+		if p == "" || p == rootPathValue {
+			continue
+		}
+		parentUID, err := r.resolveDirChain(FileURIScheme+virtualDir(p), &ops)
+		if err != nil {
+			return nil, err
+		}
+		if parentUID == "" || parentUID == uid || RowHas(row, RelParent, parentUID) {
+			continue
+		}
+		ops = append(ops, RepairOp{api.BatchAdd, uid, string(RelParent), parentUID,
+			"re-home a directory whose marker and parent edge were both gone"})
+	}
 	return ops, nil
 }
 

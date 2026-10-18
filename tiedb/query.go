@@ -66,6 +66,7 @@ type TagQuery struct {
 	Exclude         []string    // NOT any of these
 	Scope           string      // restrict to associates of this value, ignoring relation
 	MissingRelation string      // keep only matches with NO triple under this relation
+	HasRelation     string      // keep only matches carrying at least one triple under this relation
 	Reverse         bool        // seed via reverse associations (tag query) vs forward
 	Filter          string      // filter-in on value1 (relation)
 	Sort            SortOptions // pagination (Offset/Limit/SortBy)
@@ -82,25 +83,31 @@ type TagQuery struct {
 // cannot match anything. empty=true means the seed existed but the algebra
 // matched nothing (an unmet AND term, or a scope no subject carries).
 func (ic *Collection) resolveQuery(q TagQuery) (set *AssociationSet, found, empty bool) {
-	if len(q.Include) == 0 {
+	if len(q.Include) == 0 && q.HasRelation == "" {
 		return nil, false, false
 	}
 
-	if q.Reverse {
-		set, found = ic.GetReverseAssociations(q.Include[0])
-	} else {
-		set, found = ic.GetAssociations(q.Include[0])
-	}
-	if !found {
-		return nil, false, false
-	}
-
-	for _, tag := range q.Include[1:] {
-		other, ok := ic.GetReverseAssociations(tag)
-		if !ok {
-			return nil, true, true // an unmet AND term yields no matches
+	seeded := false
+	if len(q.Include) > 0 {
+		if q.Reverse {
+			set, found = ic.GetReverseAssociations(q.Include[0])
+		} else {
+			set, found = ic.GetAssociations(q.Include[0])
 		}
-		set = set.intersect(other)
+		if !found {
+			return nil, false, false
+		}
+		seeded = true
+	}
+
+	if len(q.Include) > 1 {
+		for _, tag := range q.Include[1:] {
+			other, ok := ic.GetReverseAssociations(tag)
+			if !ok {
+				return nil, true, true // an unmet AND term yields no matches
+			}
+			set = set.intersect(other)
+		}
 	}
 
 	for _, tag := range q.Exclude {
@@ -117,11 +124,77 @@ func (ic *Collection) resolveQuery(q TagQuery) (set *AssociationSet, found, empt
 		set = set.intersectByAssociate(scope)
 	}
 
+	// The presence half of the same pair MissingRelation expresses: "which
+	// subjects hold this relation, whatever the value". Neither query direction
+	// can answer it from a term, because both key on a value (#124). Without
+	// Include it *is* the seed; with one it narrows the seed, matching on
+	// subject identity the way Scope does.
+	if q.HasRelation != "" {
+		held := ic.subjectsWithRelation(q.HasRelation)
+		if seeded {
+			set = set.intersectByAssociate(held)
+		} else {
+			set = held
+		}
+	}
+
 	if q.MissingRelation != "" {
 		set = ic.filterMissingRelation(set, q.MissingRelation)
 	}
 
 	return set, true, false
+}
+
+// subjectsWithRelation returns one entry per subject carrying at least one
+// forward triple under relation — the association list of the relation itself,
+// which is what makes "which subjects hold relation R" answerable at all (#124).
+//
+// The walk is the same full pass a dump makes (ForEachTriple), so this is a scan
+// rather than an index hit: there is no value to key on, which is exactly the
+// question the value-keyed indexes cannot answer. It is still the cheaper place
+// to answer it — the alternative is shipping every triple to the caller.
+//
+// Entries are put in the shape a query seed needs (AssociateTo is the subject,
+// Relation is the relation), so they intersect correctly with a term-seeded
+// reverse set, and a subject holding several values under the relation appears
+// once: use Expand (or Get) to see all of them.
+func (ic *Collection) subjectsWithRelation(relation string) *AssociationSet {
+	out := newAssociationSet()
+	relID, _, found := ic.getEntryFromString(relation)
+	if !found {
+		return out // a relation that was never interned is carried by nothing
+	}
+
+	emit := func(tree *lockedTree[uint64, *AssociationSet]) {
+		tree.ForEach(func(subjectID uint64, set *AssociationSet) {
+			set.ForEach(func(ua UniqueAssociation, pos int64) {
+				if ua.Relation != relID {
+					return
+				}
+				// The tree's outer key is the subject's entry id, and entry ids
+				// are unique per string, so this re-expresses the forward entry
+				// in the reverse shape without resolving the record.
+				out.Put(UniqueAssociation{AssociateTo: subjectID, Relation: relID}, pos)
+			})
+		})
+	}
+
+	// Same locking discipline as ForEachTriple: no collection lock is held across
+	// the callback, because resolving a position re-enters the shard locks.
+	ic.secureLevel.RLock()
+	levelCount := ic.levelCount
+	ic.secureLevel.RUnlock()
+	for level := 0; level < levelCount; level++ {
+		lvl, ok := ic.levelAt(level)
+		if !ok {
+			continue
+		}
+		emit(lvl.associations)
+	}
+	if ic.hashAssociations != nil {
+		emit(ic.hashAssociations)
+	}
+	return out
 }
 
 // QueryTags resolves the include/exclude set algebra internally and returns the
