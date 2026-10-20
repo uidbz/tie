@@ -18,6 +18,7 @@ import (
 	"github.com/uidbz/tie/auth"
 	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tiedb"
+	"github.com/uidbz/tie/version"
 )
 
 type Webservice struct {
@@ -110,6 +111,25 @@ func NewWebservice(config WebserviceConfig) *Webservice {
 	}
 
 	return ws
+}
+
+// HandleVersion registers GET /-/version: the running build as JSON, at the
+// same access level as the Version RPC request. The RPC answer is only
+// reachable by a client that speaks the envelope and authenticates, so before
+// this an operator could identify a live filehost with curl and not a live
+// triplestore — the question that matters when checking whether the fix that
+// just landed is the one this box is running.
+func (ws *Webservice) HandleVersion(serverName string) {
+	h := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := version.WriteJSON(w, serverName); err != nil {
+			slog.Error("version endpoint: writing build info", "err", err)
+		}
+	}
+	if ws.Config.Auth != nil {
+		h = ws.Config.Auth.Require(auth.AccessRead, h)
+	}
+	ws.mux.HandleFunc("GET /-/version", h)
 }
 
 // ListenAndServe serves the API until the process is asked to stop. It returns

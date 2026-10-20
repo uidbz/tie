@@ -32,3 +32,5 @@ See the root `README.md` and `contrib/` for running as system services
 * For CLI use: [tie](https://github.com/uidbz/tie)
 * For GUI use: [tie-gui](https://github.com/uidbz/tie-gui)
 * For Golang pkg use: [tie-client](https://github.com/uidbz/tie-client)
+* Which build is running: `curl -s http://<host>:1161/-/version` (the same JSON
+  shape the filehost answers; `tie info` prints both together)

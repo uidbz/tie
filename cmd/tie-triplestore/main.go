@@ -155,6 +155,9 @@ Configuration (server settings and user accounts) is read from a TOML file.
 
 	routes := func(mux *http.ServeMux) {
 		mux.HandleFunc("POST /{request}", ws.RequestHandler)
+		// Identify the running build without speaking the protocol:
+		// curl -s http://<host>:1161/-/version
+		ws.HandleVersion("tie-triplestore")
 	}
 
 	if err := ws.ListenAndServe(routes); err != nil {

@@ -6,6 +6,17 @@ to follow semantic versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /-/version` on the triplestore**, answering the same JSON the filehost
+  does — `{"server":"tie-triplestore","build":{version, commit, date, dirty,
+  goVersion}}` — at the access level of a read request. The RPC `Version`
+  request was only reachable by a client that speaks the envelope and
+  authenticates, so an operator with curl could identify a live filehost and not
+  a live triplestore. `version.WriteJSON` is now the one writer both servers
+  use, and `client.TripleStoreVersion(url)` is the client twin of
+  `client.FileHostVersion`.
+
 ### Fixed
 
 - **A binary installed by `contrib/install.sh` reports the version it was built

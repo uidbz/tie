@@ -2,6 +2,8 @@
 package version
 
 import (
+	"encoding/json"
+	"io"
 	"runtime"
 	"runtime/debug"
 	"strings"
@@ -16,6 +18,18 @@ import (
 // instead: the module version for a `go install pkg@version` build, else the
 // VCS commit Go records for any build from a git checkout.
 var Version = "dev"
+
+// WriteJSON writes the answer both servers give on GET /-/version: a "server"
+// name and a "build" object (version, commit, date, dirty, goVersion).
+//
+// One writer for both, because the point of the endpoint is that a caller can
+// ask either server what it runs without knowing which one it reached.
+func WriteJSON(w io.Writer, server string) error {
+	return json.NewEncoder(w).Encode(struct {
+		Server string `json:"server"`
+		Build  Info   `json:"build"`
+	}{Server: server, Build: Get()})
+}
 
 // Info describes the running build.
 type Info struct {

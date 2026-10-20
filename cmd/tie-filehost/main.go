@@ -287,10 +287,9 @@ func sniffHead(head []byte) string {
 // triplestore's Version reply, so `tie version` can print both alike.
 func (s *server) versionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"server": "tie-filehost",
-		"build":  version.Get(),
-	})
+	if err := version.WriteJSON(w, "tie-filehost"); err != nil {
+		slog.Error("version endpoint: writing build info", "err", err)
+	}
 }
 
 // statHandler reports whether a blob exists in the store, without transferring
