@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+- **A binary installed by `contrib/install.sh` reports the version it was built
+  from.** The installer built with `-buildvcs=false` and no `-ldflags`, which
+  strips both the injected version and the VCS build info the `version` package
+  falls back to — so `tie --version` and `GET /-/version` on a production
+  filehost answered `dev`, and a running service could not be identified. It now
+  injects `git describe` from the checkout (or `sudo VERSION=v0.7.3
+  ./contrib/install.sh` from a tarball), the way the Makefile and the ebuilds do.
+
 ## [v0.7.3] - 2026-10-18
 
 ### Added

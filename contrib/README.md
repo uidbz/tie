@@ -17,6 +17,11 @@ sudo make install-server  # from the repo root
 sudo ./contrib/install.sh
 ```
 
+The installer embeds the build version the way the Makefile and the ebuilds do
+— `git describe` from the checkout, or pass it explicitly when installing from
+a tarball: `sudo VERSION=v0.7.3 ./contrib/install.sh`. Check what a host is
+running with `tie --version` or `curl -s http://<filehost>:1162/-/version`.
+
 (`make install` on its own installs just the `tie` client, rootless, into your
 `GOBIN` — use `install-server` for the triplestore and filehost.)
 
