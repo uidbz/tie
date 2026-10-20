@@ -43,11 +43,20 @@ fi
 log "init system: ${INIT:-none}"
 
 # --- Build --------------------------------------------------------------
-log "building binaries (static)"
-( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie" ./cmd/tie )
-( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-triplestore" ./cmd/tie-triplestore )
-( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-filehost" ./cmd/tie-filehost )
-( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -o "$SCRIPT_DIR/tie-smb" ./cmd/tie-smb )
+# The version the binaries report is injected the way the Makefile and the
+# ebuilds inject it. This script builds with -buildvcs=false (no VCS stamping,
+# so a build from a tarball works), which also strips the build info the
+# version package would otherwise fall back to — so without ldflags every
+# installed binary answers "dev", and `GET /-/version` on a production
+# filehost says nothing about what is actually deployed. Override with
+# `sudo VERSION=v0.7.3 ./contrib/install.sh` when installing from a tarball.
+VERSION="${VERSION:-$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)}"
+LDFLAGS="-X github.com/uidbz/tie/version.Version=$VERSION"
+
+log "building binaries (static, version $VERSION)"
+for bin in tie tie-triplestore tie-filehost tie-smb; do
+	( cd "$REPO_ROOT" && CGO_ENABLED=0 go build -buildvcs=false -ldflags "$LDFLAGS" -o "$SCRIPT_DIR/$bin" "./cmd/$bin" )
+done
 
 # --- User ---------------------------------------------------------------
 if ! id "$TIE_USER" >/dev/null 2>&1; then
