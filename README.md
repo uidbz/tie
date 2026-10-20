@@ -412,6 +412,20 @@ For TLS, either set `CertFile`/`KeyFile` in each config to serve HTTPS directly,
 or put a reverse proxy (nginx / Caddy) in front, keep `Insecure = true`, and
 bind `ListenOn` to localhost so only the proxy reaches the service.
 
+Both servers answer **`GET /-/version`** with the build they were compiled from,
+at the access level of a read request:
+
+```
+$ curl -s http://localhost:1161/-/version
+{"server":"tie-triplestore","build":{"version":"v0.7.3","commit":"…","date":"…","goVersion":"go1.27.2"}}
+```
+
+so you can tell what a box is actually running without a protocol client. The
+version is injected at build time (`make build`, `make install`, the ebuilds and
+`contrib/install.sh` all do it); a binary built with a plain `go build -buildvcs=false`
+reports `dev`. `client.FileHostVersion` and `client.TripleStoreVersion` read the
+same shape.
+
 ### Access control
 
 Both servers authenticate with HTTP Basic Auth and share a two-tier role model:
