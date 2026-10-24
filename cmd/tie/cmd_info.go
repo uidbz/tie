@@ -329,6 +329,12 @@ func confRows(cfg client.Config, collectionFlag string) [][]string {
 	}
 	if resolved.TripleStoreFile != "" {
 		rows = append(rows, []string{"db-file", resolved.TripleStoreFile})
+		rows = append(rows, []string{"read-only", strconv.FormatBool(cfg.ReadOnly)})
+		reverse := "all"
+		if len(cfg.ReverseRelations) > 0 {
+			reverse = strings.Join(cfg.ReverseRelations, ",")
+		}
+		rows = append(rows, []string{"reverse-relations", reverse})
 	}
 
 	names := make([]string, 0, len(cfg.FileHosts))

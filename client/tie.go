@@ -269,6 +269,16 @@ type Config struct {
 	// <name>_prev history collection and other sibling collections work exactly
 	// as they do over a server. -f/--file sets this in the CLI.
 	TripleStoreFile string
+	// ReadOnly, with TripleStoreFile, opens the database for reading only: no
+	// writer, no lock, and write requests are refused. It can run beside a live
+	// writer (a server or a mount); reads are a snapshot from load time.
+	ReadOnly bool
+	// ReverseRelations, with TripleStoreFile, restricts the relations indexed
+	// in reverse. Empty indexes every relation, which is correct regardless of
+	// the server's configuration but costs memory; set it to the server's
+	// configured subset for a very large database. It does not affect an HTTP
+	// client (the server owns its index).
+	ReverseRelations []string
 	// WebserviceInsecure enables TLS InsecureSkipVerify for the triplestore
 	// connection (accept self-signed certificates).
 	WebserviceInsecure bool
@@ -537,7 +547,7 @@ func (tc *TieClient) In(name string) *TieClient {
 			sub.transport = tc.local.transport
 			return &sub
 		}
-		lb, err := openLocalBackend(active.TripleStoreFile)
+		lb, err := openLocalBackend(active.TripleStoreFile, tc.Config.ReverseRelations, tc.Config.ReadOnly)
 		if err != nil {
 			sub.runErr = err
 			return &sub
@@ -583,7 +593,7 @@ func NewTieClientFor(config Config, collection string) (client *TieClient) {
 				return client
 			}
 		}
-		lb, err := openLocalBackend(active.TripleStoreFile)
+		lb, err := openLocalBackend(active.TripleStoreFile, config.ReverseRelations, config.ReadOnly)
 		if err != nil {
 			client.runErr = err
 			return client

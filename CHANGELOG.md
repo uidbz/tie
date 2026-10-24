@@ -26,6 +26,16 @@ to follow semantic versioning.
   open (or two servers) can no longer write one `.tie` file concurrently;
   `DisableLocking` is the escape hatch for filesystems where flock is
   unreliable.
+- **`tie --read-only`** (with `--file`) opens a database snapshot with no writer
+  and no lock, so a `get`/`tag`/`verify` can run while a mount or triplestore
+  holds the file. Write requests are refused. `client.Config.ReadOnly` and
+  tie-smb's `ReadOnly` expose the same mode.
+- **`tie --reverse-relations a,b,…`** (with `--file`) narrows the relations
+  indexed in reverse, the memory knob for a very large direct database. Empty
+  still means every relation (the safe default).
+- **tie-smb `TripleStoreFile` / `ReadOnly`**: the SMB server can serve a local
+  `.tie` file directly; `ReadOnly` opens a snapshot and downgrades every user to
+  read-only.
 
 ### Changed
 

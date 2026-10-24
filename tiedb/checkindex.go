@@ -148,6 +148,11 @@ func (ic *Collection) assocTrees(pick func(entryLevel) *lockedTree[uint64, *Asso
 func (ic *Collection) CheckIndex(opts IndexCheckOptions) IndexReport {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	if ic.readOnly {
+		// The index can still be checked (and is useful for a diagnostics read),
+		// but a repair would mutate a snapshot that cannot be persisted.
+		opts.Repair = false
+	}
 
 	limit := opts.SampleLimit
 	if limit <= 0 {

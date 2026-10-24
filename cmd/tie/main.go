@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/uidbz/tie/client"
@@ -22,21 +23,24 @@ func main() {
 	// command used to leave a config file behind in the user config dir. A
 	// missing config is reported by the Before hook, and `tie conf create` is
 	// the only thing that writes one.
-	configName, collection, dbFile, configExplicit := parseGlobalFlags(os.Args)
+	flags := parseGlobalFlags(os.Args)
 	a := &app{}
 
-	config, loadErr := client.LoadConfig(configName)
+	config, loadErr := client.LoadConfig(flags.configName)
 	if loadErr == nil {
 		a.configLoaded = true
 	}
-	if dbFile != "" {
-		config, loadErr = configureDBFile(config, loadErr, dbFile, collection, configExplicit)
+	switch {
+	case flags.dbFile != "":
+		config, loadErr = configureDBFile(config, loadErr, flags)
+	case flags.readOnly || flags.reverseRelations != "":
+		loadErr = errors.New("--read-only and --reverse-relations require -f/--file")
 	}
 	if loadErr != nil {
 		a.configErr = loadErr
 	} else {
 		a.config = config
-		a.tie = client.NewTieClientFor(config, collection)
+		a.tie = client.NewTieClientFor(config, flags.collection)
 	}
 
 	root := newRootCommand(a)
@@ -68,13 +72,28 @@ func (e dbFileError) Unwrap() error { return e.err }
 // explicitly requested config that is broken is not. Filehosts, ImportDest and
 // PrevVersions survive, so an offline triplestore still uploads/imports through
 // the configured filehost.
-func configureDBFile(config client.Config, loadErr error, dbFile, collection string, explicit bool) (client.Config, error) {
-	fileCfg, err := client.ConfigForFile(dbFile)
+func configureDBFile(config client.Config, loadErr error, flags globalFlags) (client.Config, error) {
+	fileCfg, err := client.ConfigForFile(flags.dbFile)
 	if err != nil {
-		return config, dbFileError{fmt.Errorf("cannot open %s: %w", dbFile, err)}
+		return config, dbFileError{fmt.Errorf("cannot open %s: %w", flags.dbFile, err)}
 	}
+	rels, err := parseRelations(flags.reverseRelations)
+	if err != nil {
+		return config, err
+	}
+	fileCfg.ReadOnly = flags.readOnly
+	if loadErr == nil {
+		// The config's direct-mode choices survive an -f override unless the
+		// flags say otherwise.
+		fileCfg.ReadOnly = fileCfg.ReadOnly || config.ReadOnly
+		if len(rels) == 0 {
+			rels = config.ReverseRelations
+		}
+	}
+	fileCfg.ReverseRelations = rels
+
 	if loadErr != nil {
-		if explicit || !os.IsNotExist(loadErr) {
+		if flags.configExplicit || !os.IsNotExist(loadErr) {
 			return config, loadErr
 		}
 		return fileCfg, nil
@@ -82,13 +101,34 @@ func configureDBFile(config client.Config, loadErr error, dbFile, collection str
 
 	config.TripleStoreFile = fileCfg.TripleStoreFile
 	config.TripleStoreURL = ""
-	if collection == "" {
+	config.ReadOnly = fileCfg.ReadOnly
+	config.ReverseRelations = fileCfg.ReverseRelations
+	if flags.collection == "" {
 		// -f names the database to open; the config's DefaultCollection must not
 		// redirect the invocation to a different (possibly absent) sibling.
 		config.Collection = fileCfg.Collection
 		config.DefaultCollection = fileCfg.Collection
 	}
 	return config, nil
+}
+
+// parseRelations turns the comma-separated direct-mode reverse-index list into
+// names. Empty means "index every relation" (the correct default for an unknown
+// server configuration); an explicitly empty list is a usage error.
+func parseRelations(list string) ([]string, error) {
+	if strings.TrimSpace(list) == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, name := range strings.Split(list, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("--reverse-relations needs at least one relation name")
+	}
+	return out, nil
 }
 
 // errorPrefix names the command that failed, so `tie tag files nope` says
@@ -105,7 +145,7 @@ func errorPrefix(root *cli.Command, args []string) string {
 // a value, so the scan for the command path can step over them.
 var globalFlagWithValues = map[string]bool{
 	"-C": true, "--config": true, "-c": true, "--collection": true, "--format": true,
-	"-f": true, "--file": true,
+	"-f": true, "--file": true, "--reverse-relations": true,
 }
 
 // commandPath walks the command tree along the argument list to name the command
@@ -157,6 +197,8 @@ func newRootCommand(a *app) *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted). Precedence: -C, then $TIE_CONFIG, then ./config.toml, then the user and system config dirs.", Value: "config.toml"},
 			&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Open a local .tie database file directly, without a triplestore server (filehost operations still use the config)"},
+			&cli.BoolFlag{Name: "read-only", Usage: "With --file: open the database read-only (no lock, safe beside a running mount; write requests are refused)"},
+			&cli.StringFlag{Name: "reverse-relations", Usage: "With --file: comma-separated relations to index in reverse (default: every relation; set to the server's subset for a large database)"},
 			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection; with --file, a sibling <name>.tie in the same directory)"},
 			&cli.BoolFlag{Name: "quiet", Aliases: []string{"q"}, Usage: "Report errors only; silence library warnings and progress"},
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "Also report what the library does per file"},
@@ -204,61 +246,85 @@ func exitCodeFor(err error) int {
 	return 1
 }
 
-// parseGlobalFlags extracts the global -C/--config, -c/--collection and
-// -f/--file values from the raw argument list before cli parses them (the
-// command tree is built from config first). It scans only the leading run of
-// global flags, which precede the subcommand, and stops at the first non-global
-// token — so a local --collection or -f on a subcommand (verify/import/get's
-// filter) is left untouched. configName matches the cli default when the flag
-// is absent; configExplicit reports whether -C or $TIE_CONFIG named a file, so
-// -f can tolerate a missing default config but still report a broken explicit
-// one.
+// globalFlags is the leading run of flags that must be known before the
+// command tree is built: they select the config and the store.
+type globalFlags struct {
+	configName       string
+	collection       string
+	dbFile           string
+	reverseRelations string
+	readOnly         bool
+	configExplicit   bool
+}
+
+// parseGlobalFlags extracts the global -C/--config, -c/--collection,
+// -f/--file, --read-only and --reverse-relations values from the raw argument
+// list before cli parses them (the command tree is built from config first). It
+// scans only the leading run of global flags, which precede the subcommand, and
+// stops at the first non-global token — so a local --collection or -f on a
+// subcommand (verify/import/get's filter) is left untouched. configName matches
+// the cli default when the flag is absent; configExplicit reports whether -C or
+// $TIE_CONFIG named a file, so -f can tolerate a missing default config but
+// still report a broken explicit one.
 //
 // $TIE_CONFIG is the conventional override for a tool whose config is otherwise
 // found by searching (§6.6). -C still wins, so a wrapper script can set the env
 // once and a one-off invocation can override it.
-func parseGlobalFlags(args []string) (configName, collection, dbFile string, configExplicit bool) {
-	configName = "config.toml"
+func parseGlobalFlags(args []string) globalFlags {
+	flags := globalFlags{configName: "config.toml"}
 	if env := os.Getenv("TIE_CONFIG"); env != "" {
-		configName = env
-		configExplicit = true
+		flags.configName = env
+		flags.configExplicit = true
 	}
 	for i := 1; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "-C" || a == "--config":
 			if i+1 < len(args) {
-				configName = args[i+1]
-				configExplicit = true
+				flags.configName = args[i+1]
+				flags.configExplicit = true
 				i++
 			}
 		case strings.HasPrefix(a, "-C="):
-			configName = strings.TrimPrefix(a, "-C=")
-			configExplicit = true
+			flags.configName = strings.TrimPrefix(a, "-C=")
+			flags.configExplicit = true
 		case strings.HasPrefix(a, "--config="):
-			configName = strings.TrimPrefix(a, "--config=")
-			configExplicit = true
+			flags.configName = strings.TrimPrefix(a, "--config=")
+			flags.configExplicit = true
 		case a == "-f" || a == "--file":
 			if i+1 < len(args) {
-				dbFile = args[i+1]
+				flags.dbFile = args[i+1]
 				i++
 			}
 		case strings.HasPrefix(a, "-f="):
-			dbFile = strings.TrimPrefix(a, "-f=")
+			flags.dbFile = strings.TrimPrefix(a, "-f=")
 		case strings.HasPrefix(a, "--file="):
-			dbFile = strings.TrimPrefix(a, "--file=")
+			flags.dbFile = strings.TrimPrefix(a, "--file=")
+		case a == "--read-only":
+			flags.readOnly = true
+		case strings.HasPrefix(a, "--read-only="):
+			if v, err := strconv.ParseBool(strings.TrimPrefix(a, "--read-only=")); err == nil {
+				flags.readOnly = v
+			}
+		case a == "--reverse-relations":
+			if i+1 < len(args) {
+				flags.reverseRelations = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--reverse-relations="):
+			flags.reverseRelations = strings.TrimPrefix(a, "--reverse-relations=")
 		case a == "-c" || a == "--collection":
 			if i+1 < len(args) {
-				collection = args[i+1]
+				flags.collection = args[i+1]
 				i++
 			}
 		case strings.HasPrefix(a, "-c="):
-			collection = strings.TrimPrefix(a, "-c=")
+			flags.collection = strings.TrimPrefix(a, "-c=")
 		case strings.HasPrefix(a, "--collection="):
-			collection = strings.TrimPrefix(a, "--collection=")
+			flags.collection = strings.TrimPrefix(a, "--collection=")
 		default:
-			return // first non-global token = subcommand; stop scanning
+			return flags // first non-global token = subcommand; stop scanning
 		}
 	}
-	return
+	return flags
 }

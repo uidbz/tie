@@ -66,7 +66,7 @@ func (ic *Collection) reverseAssociationsTree(level int) (*lockedTree[uint64, *A
 // synchronously and readSlot drains the queue, so reads are already
 // read-your-writes. Sync only bounds what a crash can lose.
 func (ic *Collection) Sync() {
-	if !ic.writeToDisk || ic.closed.Load() {
+	if !ic.writeToDisk || ic.readOnly || ic.closed.Load() {
 		return
 	}
 	ch := make(chan struct{})
@@ -104,6 +104,14 @@ func (ic *Collection) setIOErr(err error) {
 
 func (ic *Collection) closeDB() {
 	ic.closed.Store(true)
+	if ic.readOnly {
+		// No writer goroutine, no lock; just the private read fd.
+		if f := ic.getFile(); f != nil {
+			_ = f.Close()
+			ic.setFile(nil)
+		}
+		return
+	}
 	if ic.dBCloseWriter == nil {
 		// The collection failed before its writer goroutine started; there is
 		// nothing to drain, but the lock (if one was taken) must still go.

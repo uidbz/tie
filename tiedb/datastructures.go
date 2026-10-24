@@ -130,6 +130,11 @@ type Collection struct {
 	freespaceMutex sync.Mutex
 
 	writeToDisk bool
+	// readOnly opens the record file without a writer goroutine: reads are
+	// served from a private read-only fd, writes return ErrReadOnly, and no
+	// advisory lock is taken (so a reader can run beside a live writer). See
+	// TieTree.SetReadOnly.
+	readOnly bool
 	// lock is the exclusive advisory lock on the record file, held for the
 	// collection's lifetime when TieTree locking is enabled (see
 	// TieTree.SetLocking). Release it through releaseLock, never by hand.

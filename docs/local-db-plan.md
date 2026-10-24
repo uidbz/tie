@@ -16,9 +16,17 @@ Non-goals for this change:
 
 - opening the filehost blob store directly;
 - changing the `.tie` on-disk format;
-- reimplementing query/write semantics outside `api`;
-- concurrent readers while a writer holds the database (a shared-lock
-  read-only mode is a follow-up).
+- reimplementing query/write semantics outside `api`.
+
+Follow-ups implemented after the first release of this plan:
+
+- `--read-only` (no writer, no lock, snapshot reads) so a query can run beside
+  a live mount/triplestore;
+- `--reverse-relations` to narrow the reverse index for a very large file;
+- `TripleStoreFile` / `ReadOnly` on the `tie-smb` config surface.
+
+tie-gui's setting is blocked on that repo's v0.6.0 → v0.7+ client migration; the
+`client` API is ready.
 
 ## Why the chosen design
 
@@ -264,6 +272,7 @@ Every milestone is independently reviewable and must pass
 | Concurrent writers corrupt a file | `flock`, honored by server + local |
 | Lost writes on exit | `Close` in main, periodic sync |
 | Flag/namespace confusion | global flag only, `.tie` required, namespace ignored, sibling `-c` documented |
-| Large DB memory with full reverse index | document; `--reverse-relations` follow-up |
+| Large DB memory with full reverse index | `--reverse-relations` knob; default all for correctness |
+| Reader sees a writer's in-flight state | `--read-only` stops at the last whole frame and is explicitly a load-time snapshot |
 | NFS/Windows flock | `unix` build tag + no-op fallback; `DisableLocking` |
 | `dump --file` behavior change | document; keep the flag |

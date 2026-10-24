@@ -33,6 +33,9 @@ func (ic *Collection) Add(key string, value1 string, value2 string) error {
 // relation momentarily empty, and two concurrent Sets cannot interleave into
 // the union of both value sets.
 func (ic *Collection) addLocked(key string, value1 string, value2 string) error {
+	if ic.readOnly {
+		return ErrReadOnly
+	}
 	if err := ic.Err(); err != nil {
 		return err
 	}
@@ -126,6 +129,9 @@ func (ic *Collection) Delete(key string, value1 string, value2 string) (string, 
 
 // deleteLocked is Delete's body; the caller must hold changeMutex.
 func (ic *Collection) deleteLocked(key string, value1 string, value2 string) (string, bool) {
+	if ic.readOnly {
+		return ErrReadOnly.Error(), false
+	}
 	k, _, fk := ic.getEntryFromString(key)
 	v1, _, f1 := ic.getEntryFromString(value1)
 	v2, l2, f2 := ic.getEntryFromString(value2)
@@ -359,6 +365,9 @@ func (ic *Collection) resolveEntry(ua UniqueAssociation, pos int64) (Triple, boo
 // the write is dropped and logged instead of parking a goroutine — and its
 // MaxConcurrentRequests slot — on a queue nobody drains.
 func (ic *Collection) queueWrite(m FileMod) bool {
+	if ic.readOnly {
+		return false
+	}
 	select {
 	case ic.dBWriteQueue <- m:
 		return true
@@ -375,6 +384,14 @@ func (ic *Collection) queueWrite(m FileMod) bool {
 func (ic *Collection) readTripleAt(pos int64) (Triple, bool) {
 	if ic.closed.Load() {
 		return Triple{}, false
+	}
+	if ic.readOnly {
+		// No writer owns the fd in read-only mode; read the snapshot directly.
+		db := ic.getFile()
+		if db == nil {
+			return Triple{}, false
+		}
+		return ic.readSlot(db, pos)
 	}
 	reply := make(chan Triple, 1)
 	select {

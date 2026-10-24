@@ -243,6 +243,19 @@ direct mode alike), so two writers cannot meet; `WebserviceConfig.DisableLocking
 and the triplestore's `DisableLocking` are the escape hatch for filesystems
 without reliable flock. `tie dump --file` shares the lock and the blob policy;
 `dump --file` needs no config, matching `-f`.
+**`--read-only`** opens the file with no writer goroutine and no lock
+(`TieTree.SetReadOnly`), so it can load while a writer/mount holds it; write
+requests are refused by `Dispatch` and by engine guards (`ErrReadOnly`), and the
+reader sees a load-time snapshot (the read-only loader stops at the last whole
+record and never truncates). **`--reverse-relations a,b,…`** passes
+`Config.ReverseRelations` to the local backend; empty means every relation
+(correct for an unknown server config), while a subset trades reverse-query
+coverage for load memory. A write/tree workload needs the relations it queries
+(the server default `tag,path,parent,tie-type,version-of,member-of` is the safe
+subset); use a narrower set only for a large read-only open. Neither flag
+affects an HTTP client. `tie-smb` exposes
+the same fields (`TripleStoreFile`, `ReadOnly`), and `ReadOnly` downgrades every
+SMB user to read-only.
 
 **Forward/reverse index consistency (tiedb).** The forward index is
 authoritative (the `.tie` file holds forward records only); the reverse index

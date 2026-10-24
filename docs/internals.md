@@ -374,10 +374,18 @@ TieClient ── transport (Doer) ──┬─ webservice.Client (HTTP)
 - Local construction goes through `webservice.NewWebservice`, which installs the
   hash blob policy (`HexHashBlobPolicy`) the loader requires, and enables
   collection locking.
-- Reverse relations are left **unset** in local mode, i.e. every relation is
-  indexed. The reverse index is derived on load and is not stored in the file,
-  so mirroring a server's configured subset would silently lose results when
-  that subset is unknown. The cost is memory/load time, not correctness.
+- Reverse relations default to **unset**, i.e. every relation is indexed. The
+  reverse index is derived on load and is not stored in the file, so mirroring an
+  unknown server subset would silently lose results. The cost is memory/load
+  time, not correctness. `Config.ReverseRelations` (CLI
+  `--reverse-relations`) narrows the set for a very large file; a relation left
+  out cannot be queried in reverse.
+- `tiedb.TieTree.SetReadOnly(true)` (CLI `--read-only`, tie-smb `ReadOnly`)
+  opens collections with no writer goroutine and no lock: a private read-only fd,
+  `db_size` trimmed to whole frames, no truncation. This lets a reader load
+  while a mount or server holds the exclusive lock. Reads are a load-time
+  snapshot; writes return `tiedb.ErrReadOnly` and `Dispatch` refuses write
+  requests with 403. The reader does not see records appended after it loaded.
 - `tiedb.TieTree.SetLocking(true)` takes an exclusive `flock` on each loaded
   `.tie` file. The server enables it by default and direct mode always does, so
   a running triplestore and a `tie -f` command exclude each other; a second

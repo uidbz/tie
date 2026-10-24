@@ -73,13 +73,57 @@ affected packages pass; `go vet` and `staticcheck` are clean.
 - [x] help text (root flag)
 - [x] `docs/local-db-plan.md`
 
+## Follow-ups
+
+### Read-only / shared-lock reading
+
+- [x] `TieTree.SetReadOnly` / `Collection.readOnly`: private read-only fd, no
+      writer goroutine, no advisory lock, no truncation.
+- [x] Loader stops at the last whole frame (`loadPass` limit, `initReadSize`), so
+      a live writer's partial trailing record is ignored.
+- [x] `ErrReadOnly` guards `Add`/`Delete`/`MkDir`/`DropCollection`; `CheckIndex`
+      refuses repair on a snapshot.
+- [x] `WebserviceConfig.ReadOnly`: no lock, write requests answered 403 (both
+      `RequestHandler` and `Dispatch`/`DispatchStream`).
+- [x] `Config.ReadOnly` + CLI `--read-only` (requires `-f`).
+- [x] Tests: engine read/write coexistence, missing file creates nothing,
+      client read beside a writer, CLI read-only, writer still works.
+- [x] Manual: `tie -f … mount --db` running, then
+      `tie -f … --read-only get k1` succeeds.
+
+### Reverse-relations knob
+
+- [x] `Config.ReverseRelations` / `WebserviceConfig.ReverseRelations` plumbing.
+- [x] CLI `--reverse-relations a,b,…` (requires `-f`), comma/whitespace parsing.
+- [x] `conf show` reports `read-only` and `reverse-relations`.
+- [x] Tests: a subset omits the reverse index for an excluded relation; the full
+      set restores it.
+
+### tie-smb
+
+- [x] `TripleStoreFile` and `ReadOnly` in `SMBConfig`.
+- [x] `applyDirectConfig` applies them over the loaded tie config.
+- [x] `ReadOnly` downgrades every SMB user to read-only and closes the client on
+      shutdown.
+- [x] Startup logging uses `tie.Target()`.
+- [x] Docs + example config + unit test.
+
+### tie-gui — blocked (dependency migration, not a tie change)
+
+The GUI repo is pinned to `github.com/uidbz/tie v0.6.0` and does **not** compile
+against the current client façade (the v0.7 collection-scope/API changes:
+`WriteFileWithProgress` signature, `Tie*` constants, `UploadMultipart`, …). A
+`TripleStoreFile` setting there needs that migration first; the `client` API is
+ready (`ConfigForFile`, `ReadOnly`, `ReverseRelations`). See the note in
+`docs/local-db-plan.md`.
+
 ## Verification log
 
 | Check | Result |
 |---|---|
 | `go build ./...` | clean |
 | `go test ./...` | all packages pass |
-| `go test -race ./tiedb ./client ./cmd/tie ./webservice` | pass |
+| `go test -race ./tiedb ./client ./cmd/tie ./cmd/tie-smb ./webservice` | pass |
 | `go vet ./...` | clean |
 | `go tool staticcheck ./...` | clean |
 | manual `tie -f … conf show` / `version` / `dump` / `get` | works, no network, no log noise |
@@ -87,12 +131,10 @@ affected packages pass; `go vet` and `staticcheck` are clean.
 | manual `tie -f … add` then a new process `get` | write flushed and visible after Close |
 | manual `tie dump --file` after closing the client | reads the flushed write |
 | manual offline (no config, `HOME` empty) | works; version does not probe a server |
+| manual `tie -f … mount --db` + `tie -f … --read-only get` | reader coexists with the mount |
 | `make build` | all four commands build with ldflags |
 
-## Known follow-ups (out of scope)
+## Remaining optional follow-up
 
-- `--read-only` / shared locks (query while a mount runs).
-- `--reverse-relations` for very large direct databases (memory knob).
-- Wire `TripleStoreFile` into the `tie-smb` config surface and tie-gui settings
-  (the `client` API already supports it).
 - Optional typed in-process dispatch without JSON, if profiling shows it matters.
+

@@ -49,6 +49,13 @@ type SMBConfig struct {
 	// Collection selects the entry in the tie config's [Collections]; empty
 	// uses the config's default.
 	Collection string
+	// TripleStoreFile, when non-empty, overrides the tie config's
+	// TripleStoreFile: the .tie file is opened in-process instead of using the
+	// triplestore URL. Relative paths follow the process working directory.
+	TripleStoreFile string
+	// ReadOnly opens the database read-only. Every SMB user is then read-only,
+	// because write requests would be refused by the database.
+	ReadOnly bool
 	// Host names the filehost (from the tie config's FileHosts) that serves
 	// blob reads and receives uploads. Empty selects the collection's first.
 	Host string
@@ -75,6 +82,18 @@ func defaultConfig() SMBConfig {
 		ShareName:   "tie",
 		TieConfig:   "config.toml",
 		CacheSizeGB: 1,
+	}
+}
+
+// applyDirectConfig folds tie-smb's direct-database overrides into the loaded
+// tie client config. They win over the tie config's own TripleStoreFile, so a
+// service unit can point at its database without editing the shared file.
+func applyDirectConfig(tieCfg *client.Config, cfg SMBConfig) {
+	if cfg.TripleStoreFile != "" {
+		tieCfg.TripleStoreFile = cfg.TripleStoreFile
+	}
+	if cfg.ReadOnly {
+		tieCfg.ReadOnly = true
 	}
 }
 
@@ -106,15 +125,28 @@ file. The share mirrors the "tie mount --db" layout: query, files, tags.
 		slog.Error("reading tie config", "file", cfg.TieConfig, "err", err)
 		os.Exit(1)
 	}
+	applyDirectConfig(&tieCfg, cfg)
+	if cfg.ReadOnly && tieCfg.TripleStoreFile == "" {
+		slog.Error("ReadOnly requires TripleStoreFile (in this config or the tie config)")
+		os.Exit(1)
+	}
 	tie := client.NewTieClientFor(tieCfg, cfg.Collection)
+	if err := tie.Err(); err != nil {
+		slog.Error("opening database", "file", tieCfg.TripleStoreFile, "err", err)
+		os.Exit(1)
+	}
+	defer tie.Close()
 	if _, err := tie.ServerVersion(); err != nil {
-		slog.Error("triplestore not reachable", "url", tieCfg.TripleStoreURL, "err", err)
+		slog.Error("triplestore not reachable", "target", tie.Target(), "err", err)
 		os.Exit(1)
 	}
 	host, err := tie.ResolveHost(cfg.Host)
 	if err != nil {
 		slog.Error("resolving filehost", "host", cfg.Host, "err", err)
 		os.Exit(1)
+	}
+	if cfg.ReadOnly {
+		slog.Warn("database opened read-only; every SMB user is read-only")
 	}
 
 	tree := tiefs.NewTree(tie, host, cfg.CacheSizeGB, cfg.Verify)
@@ -129,6 +161,11 @@ file. The share mirrors the "tie mount --db" layout: query, files, tags.
 		if errRole != nil {
 			slog.Error("invalid user role in config", "user", u.Username, "err", errRole)
 			os.Exit(1)
+		}
+		if cfg.ReadOnly && role == auth.RoleWrite {
+			// The database refuses writes; do not hand out a write-capable
+			// session that would only fail later.
+			role = auth.RoleRead
 		}
 		srv.AddUser(u.Username, u.Password)
 		if role == auth.RoleWrite {
@@ -162,7 +199,7 @@ file. The share mirrors the "tie mount --db" layout: query, files, tags.
 		}
 	}()
 	slog.Info("listening", "addr", cfg.ListenOn, "share", cfg.ShareName,
-		"triplestore", tieCfg.TripleStoreURL, "filehost", host.URL,
+		"triplestore", tie.Target(), "filehost", host.URL,
 		"writeUsers", len(writeUsers))
 
 	slog.Info("shutting down", "signal", daemon.WaitForSignal())

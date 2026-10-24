@@ -1,6 +1,7 @@
 package tiedb
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -47,6 +48,12 @@ type TieTree struct {
 	// engine's unit tests and embedders that manage their own lifecycle are not
 	// surprised; webservice.NewWebservice enables it by default.
 	locking bool
+
+	// readOnly opens collections for reading only: no writer goroutine, no
+	// advisory lock, and every write returns ErrReadOnly. It is for a reader
+	// that must coexist with a live writer (a direct `tie --read-only` beside a
+	// running mount).
+	readOnly bool
 }
 
 // SetBlobPolicy sets a whole-value blob policy applied to newly created
@@ -112,6 +119,16 @@ func (db *TieTree) SetLoadMemoryLimit(bytes int64) { db.loadMemoryLimit = bytes 
 // collections loaded afterwards. It exists so a server and a direct
 // `tie -f` invocation cannot write the same file concurrently.
 func (db *TieTree) SetLocking(on bool) { db.locking = on }
+
+// SetReadOnly opens every collection that this tree loads for reading only.
+// Call before a collection is loaded. A read-only collection has no writer
+// goroutine and takes no advisory lock, so it can be opened while another
+// process holds the file; reads are a load-time snapshot and writes return
+// ErrReadOnly.
+func (db *TieTree) SetReadOnly(on bool) { db.readOnly = on }
+
+// ErrReadOnly is returned by a write to a collection opened read-only.
+var ErrReadOnly = errors.New("collection is open read-only")
 
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 	col, _ := db.TryGetCollection(key)
@@ -195,6 +212,9 @@ func (db *TieTree) Close() {
 // additive Add/Restore path — the whole collection is overwritten, not merged.
 // A no-op in memory-only mode returns nil after dropping the in-memory entry.
 func (db *TieTree) DropCollection(key CollectionKey) error {
+	if db.readOnly {
+		return ErrReadOnly
+	}
 	db.colMutex.Lock()
 	defer db.colMutex.Unlock()
 
@@ -246,6 +266,7 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic := &Collection{}
 
 	ic.writeToDisk = db.writeToDisk
+	ic.readOnly = db.readOnly
 	ic.dBPath = path
 	ic.dBName = dbname
 	ic.dBFullPath = path + "/" + dbname + ".tie"
@@ -258,6 +279,36 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.loadMemoryLimit = db.loadMemoryLimit
 
 	if db.writeToDisk {
+		ic.cache = newTripleCache(defaultTripleCacheSize)
+		if db.readOnly {
+			// A read-only collection has no writer goroutine, takes no lock and
+			// must not truncate, create or otherwise touch the file: it is
+			// meant to run beside a live writer (e.g. a mount). Reads are a
+			// snapshot of what was on disk when the collection loaded.
+			slog.Info("initializing collection read-only", "path", ic.dBFullPath)
+			if err := ic.loadDB(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
+				err = fmt.Errorf("loading DB %s: %w", ic.dBFullPath, err)
+				ic.setIOErr(err)
+				slog.Error("loading DB", "path", ic.dBFullPath, "err", err)
+				return ic, err
+			}
+			if err := ic.initReadSize(); err != nil {
+				err = fmt.Errorf("sizing DB %s: %w", ic.dBFullPath, err)
+				ic.setIOErr(err)
+				slog.Error("sizing DB", "path", ic.dBFullPath, "err", err)
+				return ic, err
+			}
+			f, ferr := os.Open(ic.dBFullPath)
+			if ferr == nil {
+				ic.setFile(f)
+			} else if !os.IsNotExist(ferr) {
+				err := fmt.Errorf("opening DB %s read-only: %w", ic.dBFullPath, ferr)
+				ic.setIOErr(err)
+				slog.Error("opening DB read-only", "path", ic.dBFullPath, "err", err)
+				return ic, err
+			}
+			return ic, nil
+		}
 		slog.Info("initializing collection", "path", ic.dBFullPath)
 		if err := os.MkdirAll(path, 0777); err != nil {
 			err = fmt.Errorf("creating DB directory %s: %w", path, err)
@@ -265,7 +316,6 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 			slog.Error("creating DB directory", "path", path, "err", err)
 			return ic, err
 		}
-		ic.cache = newTripleCache(defaultTripleCacheSize)
 		if clearExistingDB {
 			if err := os.Remove(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
 				err = fmt.Errorf("clearing DB %s: %w", ic.dBFullPath, err)

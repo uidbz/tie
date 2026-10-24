@@ -130,6 +130,14 @@ func (t *Collection) loadDB(filename string) error {
 	dbname := "(" + fi.Name() + ") "
 	slog.Info("DB size", "db", fi.Name(), "kib", fi.Size()/1024)
 
+	// A read-only load is a snapshot: stop at the last whole record, because a
+	// live writer may be mid-append and the tail is not a record yet. A
+	// read-write load reads to EOF (its own initDBSize trims the tail later).
+	var limit int64 = -1
+	if t.readOnly {
+		limit = fi.Size() - fi.Size()%ENTRY_SIZE
+	}
+
 	db, err := os.Open(filename)
 	if err != nil {
 		return err
@@ -154,13 +162,13 @@ func (t *Collection) loadDB(filename string) error {
 	// Two passes over the file: entries first, then associations. Associations
 	// resolve their relation string against the entries trie (shouldBuildReverse),
 	// so every entry must exist before any association is inserted.
-	if err := t.loadPass(db, t.loadEntries); err != nil {
+	if err := t.loadPass(db, limit, t.loadEntries); err != nil {
 		return err
 	}
 	if _, err := db.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if err := t.loadPass(db, t.loadAssociations); err != nil {
+	if err := t.loadPass(db, limit, t.loadAssociations); err != nil {
 		return err
 	}
 
@@ -168,9 +176,11 @@ func (t *Collection) loadDB(filename string) error {
 	return nil
 }
 
-// loadPass streams every record of the open db file through worker, which
-// consumes a channel of RawDataEntry and decides which record types to handle.
-func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.WaitGroup)) error {
+// loadPass streams records of the open db file through worker, which consumes a
+// channel of RawDataEntry and decides which record types to handle. limit < 0
+// reads to EOF; a non-negative limit stops at that byte offset (used by
+// read-only loads so a live writer's partial trailing frame is ignored).
+func (t *Collection) loadPass(db *os.File, limit int64, worker func(chan RawDataEntry, *sync.WaitGroup)) error {
 	rawDataToLoad := make(chan RawDataEntry, 8192)
 
 	workers := 8
@@ -185,7 +195,17 @@ func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.
 	buf := make([]byte, ENTRY_SIZE*1024*1024)
 	var entry int64
 	for {
-		v, err := db.Read(buf)
+		readBuf := buf
+		if limit >= 0 {
+			remaining := limit - entry*ENTRY_SIZE
+			if remaining <= 0 {
+				break
+			}
+			if remaining < int64(len(buf)) {
+				readBuf = buf[:remaining]
+			}
+		}
+		v, err := db.Read(readBuf)
 		if err != nil && !errors.Is(err, io.EOF) {
 			panic("Error reading database: " + err.Error())
 		}
@@ -193,7 +213,10 @@ func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.
 			break
 		}
 
-		for i := 0; i < v; i = i + ENTRY_SIZE {
+		// Decode only whole frames. A short read at the tail (a writer
+		// mid-append) must not become a record built from stale buffer bytes.
+		whole := (v / ENTRY_SIZE) * ENTRY_SIZE
+		for i := 0; i < whole; i = i + ENTRY_SIZE {
 			r := RawDataEntry{
 				Position: entry * ENTRY_SIZE,
 			}
@@ -201,9 +224,28 @@ func (t *Collection) loadPass(db *os.File, worker func(chan RawDataEntry, *sync.
 			rawDataToLoad <- r
 			entry++
 		}
+		if whole != v {
+			break
+		}
 	}
 	close(rawDataToLoad)
 	workersFinished.Wait()
+	return nil
+}
+
+// initReadSize records the file's whole-record size for a read-only collection.
+// Unlike initDBSize it never truncates: the file belongs to the writer, and a
+// partial trailing frame is simply outside the snapshot.
+func (ic *Collection) initReadSize() error {
+	fi, err := os.Stat(ic.dBFullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			ic.db_size = 0
+			return nil
+		}
+		return err
+	}
+	ic.db_size = fi.Size() - fi.Size()%ENTRY_SIZE
 	return nil
 }
 

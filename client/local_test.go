@@ -18,7 +18,7 @@ import (
 // namespace directory).
 func TestLocalTransportRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	tr := newLocalTransport(dir)
+	tr := newLocalTransport(dir, nil, false)
 	defer tr.Close()
 
 	info := api.CollectionInfo{Namespace: "ignored", CollectionId: "Main"}
@@ -76,7 +76,7 @@ func TestLocalTransportRoundTrip(t *testing.T) {
 // (an invalid collection name) must surface as the real status error, not as a
 // JSON decode failure in the consumer.
 func TestLocalTransportStreamErrorBeforeBody(t *testing.T) {
-	tr := newLocalTransport(t.TempDir())
+	tr := newLocalTransport(t.TempDir(), nil, false)
 	defer tr.Close()
 
 	info := api.CollectionInfo{Namespace: "ignored", CollectionId: "../escape"}
@@ -114,7 +114,7 @@ func TestLocalTransportStreamErrorBeforeBody(t *testing.T) {
 // TestLocalTransportUnknownRequest: an unregistered id reports 404, matching
 // the HTTP handler rather than answering 200 with an empty body.
 func TestLocalTransportUnknownRequest(t *testing.T) {
-	tr := newLocalTransport(t.TempDir())
+	tr := newLocalTransport(t.TempDir(), nil, false)
 	defer tr.Close()
 
 	_, err := tr.Do(context.Background(), "Nope", []byte("{}"))
@@ -126,7 +126,7 @@ func TestLocalTransportUnknownRequest(t *testing.T) {
 
 // TestLocalTransportContext: a cancelled context is honored before any work.
 func TestLocalTransportContext(t *testing.T) {
-	tr := newLocalTransport(t.TempDir())
+	tr := newLocalTransport(t.TempDir(), nil, false)
 	defer tr.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())

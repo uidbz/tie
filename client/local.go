@@ -21,6 +21,7 @@ import (
 // per-collection locks the engine takes while a collection is loaded.
 type localBackend struct {
 	dir       string
+	readOnly  bool
 	transport *localTransport
 	closeOnce sync.Once
 }
@@ -28,13 +29,14 @@ type localBackend struct {
 // openLocalBackend validates the collection file's directory and starts the
 // in-process service. The file itself may be absent: a sibling collection
 // (e.g. -c Other or the <name>_prev history collection) is created on its first
-// write, exactly as it is on a server.
-func openLocalBackend(file string) (*localBackend, error) {
+// write, exactly as it is on a server. reverse is the direct-mode reverse-index
+// subset (empty = all); readOnly opens without a writer or lock.
+func openLocalBackend(file string, reverse []string, readOnly bool) (*localBackend, error) {
 	dir, err := localCollectionDir(file)
 	if err != nil {
 		return nil, err
 	}
-	return &localBackend{dir: dir, transport: newLocalTransport(dir)}, nil
+	return &localBackend{dir: dir, readOnly: readOnly, transport: newLocalTransport(dir, reverse, readOnly)}, nil
 }
 
 // Close flushes every loaded collection and releases its lock. Safe to call
@@ -146,8 +148,12 @@ type localTransport struct {
 // newLocalTransport opens the in-process service for dir. Collections resolve
 // to <dir>/<id>.tie, so the primary collection, the <name>_prev history
 // collection and any sibling collection all work.
-func newLocalTransport(dir string) *localTransport {
-	ws := webservice.NewWebservice(webservice.WebserviceConfig{LocalDir: dir})
+func newLocalTransport(dir string, reverse []string, readOnly bool) *localTransport {
+	ws := webservice.NewWebservice(webservice.WebserviceConfig{
+		LocalDir:         dir,
+		ReverseRelations: reverse,
+		ReadOnly:         readOnly,
+	})
 	api.RegisterAll(ws)
 	return &localTransport{ws: ws}
 }

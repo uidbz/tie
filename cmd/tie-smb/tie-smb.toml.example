@@ -32,6 +32,15 @@ TieConfig = "config.toml"
 # config's default collection.
 Collection = ""
 
+# Open a local .tie database directly instead of using the config's
+# TripleStoreURL. The directory is the collection directory (siblings and
+# _prev resolve there). ReadOnly opens a snapshot that can coexist with a
+# running triplestore or mount; every SMB user becomes read-only.
+#   TripleStoreFile = "/var/lib/tie/Collections/Main.tie"
+#   ReadOnly = true
+TripleStoreFile = ""
+ReadOnly = false
+
 # Filehost (name from the tie config's FileHosts) that serves blob reads and
 # receives uploads. Empty selects the collection's first filehost.
 Host = ""

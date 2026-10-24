@@ -242,6 +242,9 @@ tie -f /var/lib/tie/Collections/Images.tie get -r tag holiday
 tie -f /var/lib/tie/Collections/Images.tie tag files holiday
 tie -f /var/lib/tie/Collections/Images.tie dump | gzip > backup.tsv.gz
 tie -f /var/lib/tie/Collections/Images.tie mount --db /mnt/tie
+
+# Query a collection while a mount (or triplestore) has it open:
+tie -f /var/lib/tie/Collections/Images.tie --read-only get -r tag holiday
 ```
 
 - The flag must come before the command (after the command, `-f` still means
@@ -258,9 +261,18 @@ tie -f /var/lib/tie/Collections/Images.tie mount --db /mnt/tie
   at once. A second opener gets a `locked by another process` error. Disable the
   lock on a server with `DisableLocking = true` only on filesystems where
   `flock` is unreliable.
-- Direct mode indexes every reverse relation (correctness over memory): the
-  reverse index is derived at load time and a file does not record the server's
-  configured subset.
+- **`--read-only`** opens no writer and takes no lock, so it can run beside a
+  live mount or triplestore. Write requests are refused. Reads are a snapshot
+  from load time: changes made by the writer after the load are not seen, and a
+  trailing in-progress record is ignored. The mount/SMB server keeps the lock;
+  only readers use `--read-only`.
+- **`--reverse-relations tag,path,parent,…`** restricts what is indexed in
+  reverse, which is the memory knob for a very large file. The default is every
+  relation, which is correct regardless of the server's configuration; set it
+  to the server's configured subset only when you know that subset. A relation
+  left out cannot be queried in reverse (`get -r`, tree children, `member-of`),
+  and writes/tree operations need the relations they rely on — the server
+  default `tag,path,parent,tie-type,version-of,member-of` is the safe subset.
 
 ### Filehosts and config
 

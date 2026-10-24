@@ -276,6 +276,102 @@ func TestLocalClientImportUsesFilehost(t *testing.T) {
 	}
 }
 
+// TestReadOnlyClientBesideWriter is the "query while a mount runs" case: a
+// read-only client takes no lock and no writer, so it can open the same file a
+// write-capable client already holds. Writes through it are refused, and the
+// writer keeps working.
+func TestReadOnlyClientBesideWriter(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "Main.tie")
+	if err := os.WriteFile(file, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ConfigForFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rw := NewTieClientFor(cfg, "")
+	defer rw.Close()
+	if _, err := rw.Add("k", "tag", "v"); err != nil {
+		t.Fatal(err)
+	}
+	rw.Sync() // the reader loads on-disk state, not the writer's queue
+
+	roCfg := cfg
+	roCfg.ReadOnly = true
+	ro := NewTieClientFor(roCfg, "")
+	defer ro.Close()
+	if err := ro.Err(); err != nil {
+		t.Fatalf("read-only construction: %v", err)
+	}
+	row, err := ro.Get("k")
+	if err != nil {
+		t.Fatalf("read-only Get beside a writer: %v", err)
+	}
+	if RowFirst(row, "tag") != "v" {
+		t.Errorf("read-only row = %v", row)
+	}
+
+	if _, err := ro.Add("k2", "tag", "v2"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "write requests are disabled") {
+		t.Fatalf("write through a read-only client: err = %v", err)
+	}
+	if _, err := ro.MkTieDirAll("tie:/nope"); err == nil {
+		t.Fatal("MkDir through a read-only client succeeded")
+	}
+
+	// The writer is unaffected: the reader held no lock.
+	if _, err := rw.Add("k3", "tag", "v3"); err != nil {
+		t.Fatalf("writer after a read-only open: %v", err)
+	}
+}
+
+// TestDirectReverseRelationsSubset: the reverse-relations knob narrows what is
+// indexed at load. A relation excluded from the subset has no reverse index, so
+// a reverse query for it answers not-found; reopening with the full set finds
+// it. It is the memory knob for a large database.
+func TestDirectReverseRelationsSubset(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "Main.tie")
+	if err := os.WriteFile(file, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ConfigForFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := NewTieClientFor(cfg, "")
+	uid, err := base.MkTieDirAll("tie:/reverse-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := base.Add("child", "parent", string(uid)); err != nil {
+		t.Fatal(err)
+	}
+	base.Sync()
+	base.Close()
+
+	subset := cfg
+	subset.ReadOnly = true
+	subset.ReverseRelations = []string{"tag"}
+	narrow := NewTieClientFor(subset, "")
+	defer narrow.Close()
+	_, _, err = narrow.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Filter: "parent", Limit: -1})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("reverse parent with a tag-only index: err = %v, want ErrNotFound", err)
+	}
+
+	full := NewTieClientFor(cfg, "")
+	defer full.Close()
+	rows, _, err := full.Query(QuerySpec{Terms: []string{string(uid)}, Reverse: true, Filter: "parent", Limit: -1})
+	if err != nil {
+		t.Fatalf("reverse parent with the full index: %v", err)
+	}
+	if len(rows) != 1 || rows[0].Key != "child" {
+		t.Fatalf("reverse parent rows = %v", rowKeys(rows))
+	}
+}
+
 // TestLocalClientExcludesASecondOpen: a direct client holds the per-collection
 // lock, so a second client (in this process or another) cannot corrupt it.
 func TestLocalClientExcludesASecondOpen(t *testing.T) {

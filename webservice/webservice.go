@@ -54,6 +54,12 @@ type WebserviceConfig struct {
 	// unreliable (some network mounts).
 	DisableLocking bool
 
+	// ReadOnly opens the database for reading only: no writer goroutine, no
+	// advisory lock, and write requests are refused. It is the direct-mode
+	// reader that can run beside a live writer (e.g. a mount). Reads are a
+	// snapshot of the file at load time.
+	ReadOnly bool
+
 	// Auth resolves each request's role from its Basic Auth credentials and gates
 	// read vs write operations. Access management is done by populating it from
 	// the server's config file; it is read-only at runtime.
@@ -106,7 +112,14 @@ func NewWebservice(config WebserviceConfig) *Webservice {
 	ws.Config = config
 	ws.handlers = map[string]registration{}
 	ws.db = tiedb.NewDB(true)
-	ws.db.SetLocking(!config.DisableLocking)
+	ws.db.SetReadOnly(config.ReadOnly)
+	if config.ReadOnly {
+		// A read-only reader must be able to open beside a live writer, which
+		// holds an exclusive lock; readers therefore take no lock.
+		ws.db.SetLocking(false)
+	} else {
+		ws.db.SetLocking(!config.DisableLocking)
+	}
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	if config.LoadMemoryLimitMB > 0 {
 		ws.db.SetLoadMemoryLimit(int64(config.LoadMemoryLimitMB) * 1024 * 1024)
@@ -368,6 +381,10 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	reg, known := ws.handlers[reqName]
 	if known {
+		if ws.Config.ReadOnly && reg.access == auth.AccessWrite {
+			answerError(w, http.StatusForbidden, "Read-only database:", errors.New("write requests are disabled"))
+			return
+		}
 		// Write requests may create the collection; reads only look it up.
 		writable := reg.access == auth.AccessWrite
 		env := &Environment{username, func(ns, col string) (*tiedb.Collection, error) {
@@ -462,6 +479,10 @@ func (ws *Webservice) Dispatch(reqID string, raw []byte, w io.Writer) int {
 		answerError(lw, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqID))
 		return lw.Status()
 	}
+	if ws.Config.ReadOnly && reg.access == auth.AccessWrite {
+		answerError(lw, http.StatusForbidden, "Read-only database:", errors.New("write requests are disabled"))
+		return lw.Status()
+	}
 	ws.serve(reg, ws.localEnv(reg.access), raw, lw)
 	return lw.Status()
 }
@@ -480,6 +501,13 @@ func (ws *Webservice) DispatchStream(ctx context.Context, reqID string, raw []by
 			Status:  http.StatusNotFound,
 			Request: reqID,
 			Message: fmt.Sprintf("Unknown request: %q", reqID),
+		}
+	}
+	if ws.Config.ReadOnly && reg.access == auth.AccessWrite {
+		return false, &StatusError{
+			Status:  http.StatusForbidden,
+			Request: reqID,
+			Message: "read-only database: write requests are disabled",
 		}
 	}
 	env := ws.localEnv(reg.access)

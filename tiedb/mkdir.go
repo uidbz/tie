@@ -48,6 +48,9 @@ func (ic *Collection) MkDir(spec DirSpec) (uid string, existed bool, err error) 
 	if err := ic.Err(); err != nil {
 		return "", false, err
 	}
+	if ic.readOnly {
+		return "", false, ErrReadOnly
+	}
 
 	if owner, found := ic.uidForValueLocked(spec.Path, spec.PathRelation); found {
 		return owner, true, nil

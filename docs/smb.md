@@ -51,6 +51,8 @@ settings above the `[[Users]]` section.
 | `ShareName` | `"tie"` | The single exported share name. |
 | `TieConfig` | `"config.toml"` | The tie client config — the same file `tie -C` takes (triplestore URL, credentials, namespace, collections, filehosts). A bare name searches the usual config dirs; a path loads that file directly. |
 | `Collection` | `""` | Entry in the tie config's `[Collections]`; empty uses the config's default collection. |
+| `TripleStoreFile` | `""` | Open this `.tie` file in-process instead of using the triplestore URL. Overrides the tie config's `TripleStoreFile`; the collection directory is the file's directory, so sibling collections and `_prev` work as usual. A relative path follows the process working directory. |
+| `ReadOnly` | `false` | Open the database read-only (requires `TripleStoreFile`). Every SMB user is then read-only, because the database refuses writes. Useful to export a snapshot while the triplestore (or a `tie mount`) still owns the file. |
 | `Host` | `""` | Filehost name (from the tie config's `FileHosts`) that serves blob reads and receives uploads. Empty selects the collection's first filehost. |
 | `CacheSizeGB` | `1` | On-disk blob cache budget (gibibytes) for reads served out of the filehost. LRU-evicted; lives under `$TMPDIR`. |
 | `Verify` | `false` | Hash-check downloaded bytes against their content address (turn on when the filehost is untrusted). |
