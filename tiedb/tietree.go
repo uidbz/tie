@@ -40,6 +40,13 @@ type TieTree struct {
 	// loadMemoryLimit is the soft heap ceiling (GOMEMLIMIT semantics) applied
 	// while bulk-loading a collection. 0 leaves the runtime default alone.
 	loadMemoryLimit int64
+
+	// locking, when true, makes every loaded collection take an exclusive
+	// advisory lock on its .tie file. A server and a direct `tie -f` open (or
+	// two servers) then cannot write the same file at once. Opt-in here so the
+	// engine's unit tests and embedders that manage their own lifecycle are not
+	// surprised; webservice.NewWebservice enables it by default.
+	locking bool
 }
 
 // SetBlobPolicy sets a whole-value blob policy applied to newly created
@@ -99,6 +106,12 @@ type pendingLoad struct {
 // with a relaxed GC pacer can otherwise spike the heap on a small machine;
 // the limit bounds that peak instead of leaving it to GOGC alone. 0 disables.
 func (db *TieTree) SetLoadMemoryLimit(bytes int64) { db.loadMemoryLimit = bytes }
+
+// SetLocking makes newly loaded collections take an exclusive advisory lock on
+// their .tie file. Call before a collection is loaded; the setting applies to
+// collections loaded afterwards. It exists so a server and a direct
+// `tie -f` invocation cannot write the same file concurrently.
+func (db *TieTree) SetLocking(on bool) { db.locking = on }
 
 func (db *TieTree) GetCollection(key CollectionKey) *Collection {
 	col, _ := db.TryGetCollection(key)
@@ -201,6 +214,22 @@ func (db *TieTree) DropCollection(key CollectionKey) error {
 	}
 
 	path := key.Database + "/" + key.Collection + ".tie"
+	if db.locking {
+		// A collection that was never loaded is not holding the lock; take it
+		// for the removal so a direct opener cannot start writing what we are
+		// about to delete.
+		if _, statErr := os.Stat(path); statErr == nil {
+			lk, lerr := lockCollectionFile(path)
+			if lerr != nil {
+				return lerr
+			}
+			if lk != nil {
+				defer lk.Close()
+			}
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -245,9 +274,20 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 				return ic, err
 			}
 		}
+		if db.locking {
+			lk, err := lockCollectionFile(ic.dBFullPath)
+			if err != nil {
+				err = fmt.Errorf("locking DB %s: %w", ic.dBFullPath, err)
+				ic.setIOErr(err)
+				slog.Error("locking DB", "path", ic.dBFullPath, "err", err)
+				return ic, err
+			}
+			ic.lock = lk
+		}
 		if err := ic.loadDB(ic.dBFullPath); err != nil && !os.IsNotExist(err) {
 			err = fmt.Errorf("loading DB %s: %w", ic.dBFullPath, err)
 			ic.setIOErr(err)
+			ic.releaseLock()
 			slog.Error("loading DB", "path", ic.dBFullPath, "err", err)
 			return ic, err
 		}

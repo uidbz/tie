@@ -4,6 +4,40 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **`tie -f/--file <path.tie>` opens a database directly, with no triplestore.**
+  The CLI builds the same `webservice` + `api.RegisterAll` registry the server
+  uses and serves requests in-process, so `get`, `add`, `tag`, `stat`,
+  `versions`, `verify`, `dump`, `restore`, `media`, `playlist`, `history` and
+  `mount --db` behave exactly as they do against a server. No config file is
+  required (one that is found still contributes filehosts, `ImportDest`,
+  `PrevVersions` and queries). `-c NAME` selects a sibling `<NAME>.tie` in the
+  same directory, which is also how the `<collection>_prev` history is reached.
+  The content-addressed filehost is **not** opened: uploads, downloads, imports
+  and blob checks still use `[FileHosts.*]`.
+- **`client.Config.TripleStoreFile`**, `client.ConfigForFile`,
+  `TieClient.Close/Target/IsLocal` and the `webservice.Doer` transport seam, so
+  embedders (tie-gui, tie-smb) can open a file in-process too.
+- **Exclusive per-collection file locking** (`flock`) in `tiedb`, enabled by
+  default in the triplestore and always in direct mode. A server and a direct
+  open (or two servers) can no longer write one `.tie` file concurrently;
+  `DisableLocking` is the escape hatch for filesystems where flock is
+  unreliable.
+
+### Changed
+
+- **`tie dump --file` now takes the collection lock** and fails with
+  `locked by another process` while a live triplestore holds the file, instead
+  of silently reading a file a server may still be writing. It still needs no
+  config.
+- `tie version` reports a direct triplestore as `triplestore (local file)` with
+  the file path, and does not probe filehosts when no config was loaded.
+- `tie conf show` gained a `db-file` row and shows `file:<path>` for the
+  triplestore in direct mode.
+
 ## [v0.7.4] - 2026-10-20
 
 ### Added

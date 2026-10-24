@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/uidbz/tie/client"
 	"github.com/urfave/cli/v3"
@@ -18,6 +20,9 @@ import (
 type app struct {
 	config client.Config
 	tie    *client.TieClient
+	// configLoaded records that a config file was actually read, so `tie
+	// version` does not probe the built-in default filehost in an offline run.
+	configLoaded bool
 	// configErr is why no config was loaded: a missing file (which `tie conf
 	// create` fixes) or an unreadable one. The Before hook turns it into the
 	// message and exit code a command fails with.
@@ -42,16 +47,51 @@ func configExempt(name string) bool {
 func (a *app) before(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 	// The hook runs on the root command, so the command about to execute is the
 	// first positional argument, not cmd.Name.
+	if a.tie != nil {
+		if err := a.tie.Err(); err != nil {
+			return ctx, exitError{code: exitOperational, msg: err.Error()}
+		}
+		// The library reports what it notices through a slog logger rather than
+		// writing to stderr itself (§6.1); this is where it reaches the terminal.
+		logger := cliLogger(cmd)
+		a.tie.Logger = logger
+		if a.tie.IsLocal() {
+			// tiedb logs collection loads at Info through the process default;
+			// keep that at warning unless -v asks for the detail.
+			slog.SetDefault(engineLogger(cmd))
+		}
+	}
 	if configExempt(cmd.Args().First()) {
+		return ctx, nil
+	}
+	// `tie dump --file x.tie` is an offline export and needs no config. The
+	// global -f spelling already set a.tie; this is the subcommand flag.
+	if offlineDump(cmd) {
+		if a.tie == nil {
+			slog.SetDefault(engineLogger(cmd))
+		}
 		return ctx, nil
 	}
 	if a.tie == nil {
 		return ctx, exitError{code: exitUsage, msg: a.configMessage()}
 	}
-	// The library reports what it notices through a slog logger rather than
-	// writing to stderr itself (§6.1); this is where it reaches the terminal.
-	a.tie.Logger = cliLogger(cmd)
 	return ctx, nil
+}
+
+// offlineDump reports whether this is `dump --file …`, which reads a .tie file
+// directly and must work with no config at all.
+func offlineDump(cmd *cli.Command) bool {
+	args := cmd.Args().Slice()
+	if len(args) == 0 || args[0] != "dump" {
+		return false
+	}
+	for _, a := range args[1:] {
+		if a == "--file" || a == "-f" ||
+			strings.HasPrefix(a, "--file=") || strings.HasPrefix(a, "-f=") {
+			return true
+		}
+	}
+	return false
 }
 
 // cliLogger is the stderr sink for library messages. No timestamps — a human
@@ -59,13 +99,28 @@ func (a *app) before(ctx context.Context, cmd *cli.Command) (context.Context, er
 // warnings and what an import did to history, which is what the library used to
 // print unconditionally; -q keeps errors, -v adds the per-file chatter.
 func cliLogger(cmd *cli.Command) *slog.Logger {
-	level := slog.LevelInfo
+	return stderrLogger(levelFor(cmd, slog.LevelInfo))
+}
+
+// engineLogger is the sink for tiedb's own package-level slog output in direct
+// mode. Collection loading is chatty at Info; warning is the useful default,
+// with -v restoring the detail and -q keeping only errors.
+func engineLogger(cmd *cli.Command) *slog.Logger {
+	return stderrLogger(levelFor(cmd, slog.LevelWarn))
+}
+
+func levelFor(cmd *cli.Command, def slog.Level) slog.Level {
 	switch {
 	case cmd.Bool("quiet"):
-		level = slog.LevelError
+		return slog.LevelError
 	case cmd.Bool("verbose"):
-		level = slog.LevelDebug
+		return slog.LevelDebug
+	default:
+		return def
 	}
+}
+
+func stderrLogger(level slog.Level) *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
 		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
@@ -81,6 +136,10 @@ func cliLogger(cmd *cli.Command) *slog.Logger {
 // load — which `tie conf create` writes, and which no other command will do on
 // your behalf (§6.6) — or the file that is there cannot be read.
 func (a *app) configMessage() string {
+	var de dbFileError
+	if errors.As(a.configErr, &de) {
+		return de.Error()
+	}
 	if a.configErr == nil {
 		return "config not loaded"
 	}

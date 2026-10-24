@@ -349,6 +349,49 @@ relations. Collections that never set an allowlist keep full reverse generality.
   the cost of an O(n) first query; the opt-in approach was chosen because this
   codebase's reverse queries hit a small, known set of relations.
 
+## Direct (.tie file) mode
+
+`tie -f <path.tie>` (and `client.Config.TripleStoreFile`) opens one collection
+without a triplestore process. The design reuses the server rather than
+reimplementing it:
+
+```
+TieClient ── transport (Doer) ──┬─ webservice.Client (HTTP)
+                                └─ client.localTransport
+                                       └─ webservice.Dispatch / DispatchStream
+                                            └─ api.RegisterAll handlers
+                                                 └─ tiedb
+```
+
+- `webservice.Doer` is the seam: `Call`/`CallContext` and `DumpStream` depend on
+  it instead of `*ws.Client`. The HTTP implementation is the existing client;
+  the local one marshals the same JSON request into `Dispatch`, which runs the
+  registered handler against a local `TieTree`. There is no second query
+  implementation to drift.
+- `WebserviceConfig.LocalDir` makes `collectionKey` map `<id>` to
+  `<LocalDir>/<id>.tie` and ignore the request namespace. Consequently
+  `<collection>_prev` and any sibling collection work automatically.
+- Local construction goes through `webservice.NewWebservice`, which installs the
+  hash blob policy (`HexHashBlobPolicy`) the loader requires, and enables
+  collection locking.
+- Reverse relations are left **unset** in local mode, i.e. every relation is
+  indexed. The reverse index is derived on load and is not stored in the file,
+  so mirroring a server's configured subset would silently lose results when
+  that subset is unknown. The cost is memory/load time, not correctness.
+- `tiedb.TieTree.SetLocking(true)` takes an exclusive `flock` on each loaded
+  `.tie` file. The server enables it by default and direct mode always does, so
+  a running triplestore and a `tie -f` command exclude each other; a second
+  opener gets a `locked by another process` error. `DisableLocking` exists for
+  filesystems where flock is unreliable.
+- Auth is intentionally absent in-process: filesystem permissions on the file
+  are the boundary. Read/write *classification* is still honored, so a read
+  request cannot create a collection.
+- The content-addressed filehost is not part of this: `-f` is triples only.
+  Uploads, downloads, imports and blob checks keep talking to `[FileHosts.*]`.
+- `tie dump --file` is the lightweight export sibling: it takes the same lock and
+  sets the same blob policy, but indexes no reverse relations because a dump
+  only walks forward triples.
+
 ## Why triples, and why not just SQL
 
 Triple stores are not novel — RDF/SPARQL, Datomic and friends have used the

@@ -30,6 +30,14 @@ type Env struct {
 	TripleStoreURL string
 	// FileHostURL is the blob store endpoint (PUT /upload/{hash}, GET/HEAD /{hash}).
 	FileHostURL string
+	// DBDir is the triplestore's database directory. Tests that reopen a file
+	// directly must first call Stop (a running server holds the per-collection
+	// lock).
+	DBDir string
+	// Stop stops both servers and closes the database but leaves DBDir on disk,
+	// so a test can open the same collection directly. It is idempotent; the
+	// cleanup returned by Start calls it too.
+	Stop func()
 }
 
 // Start launches both on a fresh temp database. The returned cleanup stops the
@@ -56,9 +64,20 @@ func Start() (*Env, func(), error) {
 	fh := &fileHost{blobs: map[string][]byte{}}
 	fhSrv := httptest.NewServer(fh.routes())
 
-	return &Env{TripleStoreURL: wsSrv.URL, FileHostURL: fhSrv.URL}, func() {
-		wsSrv.Close()
-		fhSrv.Close()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			wsSrv.Close()
+			fhSrv.Close()
+			// Close the DB before removing it: the writer goroutines must drain
+			// and release their per-collection locks, so a test can reopen the
+			// same directory directly afterwards.
+			ws.Close()
+		})
+	}
+	env := &Env{TripleStoreURL: wsSrv.URL, FileHostURL: fhSrv.URL, DBDir: dbDir, Stop: stop}
+	return env, func() {
+		stop()
 		os.RemoveAll(dbDir)
 	}, nil
 }

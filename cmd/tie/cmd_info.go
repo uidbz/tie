@@ -45,22 +45,30 @@ func cmdVersion(a *app) *cli.Command {
 
 			if a.tie != nil {
 				v, err := a.tie.ServerVersion()
-				probe("triplestore", a.tie.Config.TripleStoreURL, v, err)
-
-				names := make([]string, 0, len(a.tie.Config.FileHosts))
-				for name := range a.tie.Config.FileHosts {
-					names = append(names, name)
+				component := "triplestore"
+				if a.tie.IsLocal() {
+					component = "triplestore (local file)"
 				}
-				sort.Strings(names)
-				seen := map[string]bool{}
-				for _, name := range names {
-					host := a.tie.Config.FileHosts[name]
-					if seen[host.URL] {
-						continue
+				probe(component, a.tie.Target(), v, err)
+
+				// In an offline run with no config there is no filehost to probe;
+				// the built-in default would only report a misleading failure.
+				if a.configLoaded {
+					names := make([]string, 0, len(a.tie.Config.FileHosts))
+					for name := range a.tie.Config.FileHosts {
+						names = append(names, name)
 					}
-					seen[host.URL] = true
-					v, err := client.FileHostVersion(host)
-					probe("filehost:"+name, host.URL, v, err)
+					sort.Strings(names)
+					seen := map[string]bool{}
+					for _, name := range names {
+						host := a.tie.Config.FileHosts[name]
+						if seen[host.URL] {
+							continue
+						}
+						seen[host.URL] = true
+						v, err := client.FileHostVersion(host)
+						probe("filehost:"+name, host.URL, v, err)
+					}
 				}
 			}
 
@@ -305,15 +313,22 @@ func humanizeBytes(n int64) string {
 // Passwords are deliberately not among them.
 func confRows(cfg client.Config, collectionFlag string) [][]string {
 	resolved := cfg.ResolveCollection(collectionFlag)
+	store := resolved.TripleStoreURL
+	if resolved.TripleStoreFile != "" {
+		store = "file:" + resolved.TripleStoreFile
+	}
 	rows := [][]string{
 		{"config", cfg.Path()},
 		{"collection", resolved.Collection},
 		{"namespace", resolved.Namespace},
-		{"triplestore", resolved.TripleStoreURL},
+		{"triplestore", store},
 		{"username", resolved.Username},
 		{"insecure", strconv.FormatBool(resolved.Insecure)},
 		{"filehosts", strings.Join(resolved.FileHosts, ", ")},
 		{"prev-versions", strconv.Itoa(cfg.PrevVersions)},
+	}
+	if resolved.TripleStoreFile != "" {
+		rows = append(rows, []string{"db-file", resolved.TripleStoreFile})
 	}
 
 	names := make([]string, 0, len(cfg.FileHosts))

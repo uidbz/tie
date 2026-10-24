@@ -73,6 +73,7 @@ cd test-env
 - Triplestore config keys: `ListenOn`, `Insecure`, `DbPath`, `CertFile`/`KeyFile`,
   `LogFile`/`LogLevel`, `MaxConcurrentRequests` (0 = unbounded),
   `LoadMemoryLimitMB`, `MaxRequestBytesMB` (a larger body is answered 413),
+  `DisableLocking` (off by default when omitted; see the DB section),
   `[[Users]]` (Username/Password/Role), `AnonymousAccess`, `ReverseRelations`,
   and `[[Collections]]` overrides — see below.
 - **Access control (both servers).** HTTP Basic Auth with a shared role model in
@@ -100,7 +101,9 @@ cd test-env
   `client.HTTPClientFor`.
 - **Client config (`client.Config`).** The triplestore URL key is `TripleStoreURL`
   (the older `Webservice` key was honored through v0.6.0 and is now refused with
-  a message naming the replacement). One config can bind several collections via
+  a message naming the replacement). `TripleStoreFile`, when set (by
+  `tie -f`/`--file` or in the config), opens that `.tie` file in-process instead
+  and makes every collection a sibling in its directory. One config can bind several collections via
   `[Collections.<name>]` entries (each may override `Namespace`, `Collection`,
   `TripleStoreURL`, `Username`/`Password`, `Insecure`, `FileHosts`; unset fields fall
   back to the top-level values). `DefaultCollection` picks the one used when no
@@ -224,6 +227,23 @@ triplestore (`Version` request, read role) and filehosts (`GET /-/version`).
 module version / VCS commit Go embeds in build info, so a plain `go build`
 still reports the commit; both servers log it at startup.
 
+**Direct database mode (`-f/--file <path.tie>`).** A global flag opens one local
+collection in-process with no triplestore: `tie -f db/Collections/Main.tie get …`.
+The CLI builds the same `webservice` + `api.RegisterAll` registry a server uses
+and serves requests through `webservice.Dispatch`/`DispatchStream`
+(`client/local.go`); there is no HTTP and no auth (the file's permissions are
+the boundary). `Config.TripleStoreFile` selects this mode; `Config.ResolveCollection`
+maps a collection `X` to `<dir>/X.tie`, so `-c X` and `<name>_prev` are siblings.
+The file must exist (a typo must not create an empty DB). Direct mode indexes
+**every** reverse relation — the set is derived at load time and is not stored in
+the file — and it installs the hash blob policy through
+`webservice.NewWebservice`. Filehost operations remain remote; `-f` is triples
+only. A `.tie` file is locked with `flock` while a tree has it loaded (server and
+direct mode alike), so two writers cannot meet; `WebserviceConfig.DisableLocking`
+and the triplestore's `DisableLocking` are the escape hatch for filesystems
+without reliable flock. `tie dump --file` shares the lock and the blob policy;
+`dump --file` needs no config, matching `-f`.
+
 **Forward/reverse index consistency (tiedb).** The forward index is
 authoritative (the `.tie` file holds forward records only); the reverse index
 is derived. Divergence — reverse-only *phantoms* (subjects reverse queries
@@ -333,6 +353,14 @@ through it via `dBWriteQueue`/`dBReadQueue`; producers never touch the fd.
   idle-close; holding the fd open is free). `closeDB` signals the writer to drain
   queued writes, `Sync()`, close, and exit — `TieTree.Close()` fans this across
   all live collections.
+- **A loaded collection holds an exclusive advisory lock** on its `.tie` file
+  when `TieTree.SetLocking(true)`; `webservice.NewWebservice` enables it by
+  default and direct (`-f`) mode always uses it. It is released in `closeDB` and
+  on a load failure; `DropCollection` takes it before removing an unloaded file.
+  The lock is what keeps a running server and `tie -f` (or two servers) from
+  writing one file at once; `WebserviceConfig.DisableLocking` /
+  `DisableLocking = true` is the escape hatch for filesystems without reliable
+  `flock`.
 - **Graceful shutdown:** the triplestore's `ListenAndServe` traps SIGINT/SIGTERM,
   `srv.Shutdown()`s the HTTP server (so in-flight handlers finish enqueuing their
   writes) **then** `ws.Close()` → `TieTree.Close()`. Ordering matters: draining

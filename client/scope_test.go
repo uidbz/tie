@@ -49,7 +49,7 @@ func TestInScopesEveryCall(t *testing.T) {
 	if other == tc {
 		t.Fatal("In(\"other\") returned the bound client")
 	}
-	if other.client != tc.client {
+	if other.transport != tc.transport {
 		t.Error("In() built a new transport for the same triplestore and credentials")
 	}
 	if id := other.CollectionInfo().CollectionId; id != "other" {

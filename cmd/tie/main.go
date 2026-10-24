@@ -22,23 +22,73 @@ func main() {
 	// command used to leave a config file behind in the user config dir. A
 	// missing config is reported by the Before hook, and `tie conf create` is
 	// the only thing that writes one.
-	configName, collection := parseGlobalFlags(os.Args)
+	configName, collection, dbFile, configExplicit := parseGlobalFlags(os.Args)
 	a := &app{}
-	if config, err := client.LoadConfig(configName); err != nil {
-		a.configErr = err
+
+	config, loadErr := client.LoadConfig(configName)
+	if loadErr == nil {
+		a.configLoaded = true
+	}
+	if dbFile != "" {
+		config, loadErr = configureDBFile(config, loadErr, dbFile, collection, configExplicit)
+	}
+	if loadErr != nil {
+		a.configErr = loadErr
 	} else {
 		a.config = config
 		a.tie = client.NewTieClientFor(config, collection)
 	}
 
 	root := newRootCommand(a)
-	if err := root.Run(context.Background(), os.Args); err != nil {
+	err := root.Run(context.Background(), os.Args)
+	// Flush and release a locally opened database before exiting. A server
+	// drains on SIGINT/SIGTERM; the CLI has exactly one command to finish, so a
+	// plain Close after Run covers the normal (and error) paths.
+	if a.tie != nil {
+		_ = a.tie.Close()
+	}
+	if err != nil {
 		// One shape for every failure: `tie <command>: what went wrong`, in
 		// lower case, with no second "Error:" inside the message (§6.8). The
 		// command comes from the tree, so a nested command names itself.
 		fmt.Fprintln(os.Stderr, errorPrefix(root, os.Args), err)
 		os.Exit(exitCodeFor(err))
 	}
+}
+
+// dbFileError marks a failure to open the -f/--file database (as opposed to a
+// config failure), so the Before hook names the right file.
+type dbFileError struct{ err error }
+
+func (e dbFileError) Error() string { return e.err.Error() }
+func (e dbFileError) Unwrap() error { return e.err }
+
+// configureDBFile applies a -f/--file direct-database choice to the loaded
+// config. A missing config is fine in file mode (the database needs none); an
+// explicitly requested config that is broken is not. Filehosts, ImportDest and
+// PrevVersions survive, so an offline triplestore still uploads/imports through
+// the configured filehost.
+func configureDBFile(config client.Config, loadErr error, dbFile, collection string, explicit bool) (client.Config, error) {
+	fileCfg, err := client.ConfigForFile(dbFile)
+	if err != nil {
+		return config, dbFileError{fmt.Errorf("cannot open %s: %w", dbFile, err)}
+	}
+	if loadErr != nil {
+		if explicit || !os.IsNotExist(loadErr) {
+			return config, loadErr
+		}
+		return fileCfg, nil
+	}
+
+	config.TripleStoreFile = fileCfg.TripleStoreFile
+	config.TripleStoreURL = ""
+	if collection == "" {
+		// -f names the database to open; the config's DefaultCollection must not
+		// redirect the invocation to a different (possibly absent) sibling.
+		config.Collection = fileCfg.Collection
+		config.DefaultCollection = fileCfg.Collection
+	}
+	return config, nil
 }
 
 // errorPrefix names the command that failed, so `tie tag files nope` says
@@ -55,6 +105,7 @@ func errorPrefix(root *cli.Command, args []string) string {
 // a value, so the scan for the command path can step over them.
 var globalFlagWithValues = map[string]bool{
 	"-C": true, "--config": true, "-c": true, "--collection": true, "--format": true,
+	"-f": true, "--file": true,
 }
 
 // commandPath walks the command tree along the argument list to name the command
@@ -105,7 +156,8 @@ func newRootCommand(a *app) *cli.Command {
 		Before: a.before,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"C"}, Usage: "Config file to load (the .toml extension may be omitted). Precedence: -C, then $TIE_CONFIG, then ./config.toml, then the user and system config dirs.", Value: "config.toml"},
-			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection)"},
+			&cli.StringFlag{Name: "file", Aliases: []string{"f"}, Usage: "Open a local .tie database file directly, without a triplestore server (filehost operations still use the config)"},
+			&cli.StringFlag{Name: "collection", Aliases: []string{"c"}, Usage: "Collection to operate on (a name from [Collections]; empty uses DefaultCollection; with --file, a sibling <name>.tie in the same directory)"},
 			&cli.BoolFlag{Name: "quiet", Aliases: []string{"q"}, Usage: "Report errors only; silence library warnings and progress"},
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "Also report what the library does per file"},
 			&cli.StringFlag{Name: "format", Usage: "Output format for listings: tsv, json or table (default: table on a terminal, tsv otherwise)"},
@@ -152,19 +204,24 @@ func exitCodeFor(err error) int {
 	return 1
 }
 
-// parseGlobalFlags extracts the global -C/--config and -c/--collection values
-// from the raw argument list before cli parses them (the command tree is built
-// from config first). It scans only the leading run of global flags, which
-// precede the subcommand, and stops at the first non-global token — so a local
-// --collection on a subcommand (verify/import) is left untouched. configName
-// matches the cli default when the flag is absent.
-// parseGlobalFlags also honours $TIE_CONFIG, the conventional override for a
-// tool whose config is otherwise found by searching (§6.6). -C still wins, so a
-// wrapper script can set the env once and a one-off invocation can override it.
-func parseGlobalFlags(args []string) (configName, collection string) {
+// parseGlobalFlags extracts the global -C/--config, -c/--collection and
+// -f/--file values from the raw argument list before cli parses them (the
+// command tree is built from config first). It scans only the leading run of
+// global flags, which precede the subcommand, and stops at the first non-global
+// token — so a local --collection or -f on a subcommand (verify/import/get's
+// filter) is left untouched. configName matches the cli default when the flag
+// is absent; configExplicit reports whether -C or $TIE_CONFIG named a file, so
+// -f can tolerate a missing default config but still report a broken explicit
+// one.
+//
+// $TIE_CONFIG is the conventional override for a tool whose config is otherwise
+// found by searching (§6.6). -C still wins, so a wrapper script can set the env
+// once and a one-off invocation can override it.
+func parseGlobalFlags(args []string) (configName, collection, dbFile string, configExplicit bool) {
 	configName = "config.toml"
 	if env := os.Getenv("TIE_CONFIG"); env != "" {
 		configName = env
+		configExplicit = true
 	}
 	for i := 1; i < len(args); i++ {
 		a := args[i]
@@ -172,12 +229,24 @@ func parseGlobalFlags(args []string) (configName, collection string) {
 		case a == "-C" || a == "--config":
 			if i+1 < len(args) {
 				configName = args[i+1]
+				configExplicit = true
 				i++
 			}
 		case strings.HasPrefix(a, "-C="):
 			configName = strings.TrimPrefix(a, "-C=")
+			configExplicit = true
 		case strings.HasPrefix(a, "--config="):
 			configName = strings.TrimPrefix(a, "--config=")
+			configExplicit = true
+		case a == "-f" || a == "--file":
+			if i+1 < len(args) {
+				dbFile = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "-f="):
+			dbFile = strings.TrimPrefix(a, "-f=")
+		case strings.HasPrefix(a, "--file="):
+			dbFile = strings.TrimPrefix(a, "--file=")
 		case a == "-c" || a == "--collection":
 			if i+1 < len(args) {
 				collection = args[i+1]

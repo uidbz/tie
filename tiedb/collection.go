@@ -104,6 +104,12 @@ func (ic *Collection) setIOErr(err error) {
 
 func (ic *Collection) closeDB() {
 	ic.closed.Store(true)
+	if ic.dBCloseWriter == nil {
+		// The collection failed before its writer goroutine started; there is
+		// nothing to drain, but the lock (if one was taken) must still go.
+		ic.releaseLock()
+		return
+	}
 	// Signal the writer to drain any queued writes, sync, and close the fd, then
 	// wait for it to exit (it calls finished.Done() on return). Do NOT close
 	// dBWriteQueue: nothing ranges over it, and a closed channel would make the
@@ -111,6 +117,16 @@ func (ic *Collection) closeDB() {
 	// the shutdown signal into the "Wrong EntryType" panic.
 	ic.dBCloseWriter <- true
 	ic.finished.Wait()
+	ic.releaseLock()
+}
+
+// releaseLock drops the exclusive advisory lock on the record file, if one was
+// taken. It is idempotent.
+func (ic *Collection) releaseLock() {
+	if ic.lock != nil {
+		_ = ic.lock.Close()
+		ic.lock = nil
+	}
 }
 
 // setFile/getFile give the writer goroutine (and tests injecting I/O faults)

@@ -222,11 +222,45 @@ tie restore                          import TSV (additive)
 tie mount <hash> <mountpoint>        mount an immutable content-addressed tree
 tie mount --db <mountpoint>          mount the live tag-derived filesystem
 tie conf create [name]               write a default config file
+tie -f <path.tie> <command>          run against a local database file, no server
 ```
 
 `tie -C <config>` selects a config file (searched in the working directory
 first). Run `tie conf create` to generate one. (`-c`/`--collection` selects a
 collection — see [Multiple collections](#multiple-collections) below.)
+
+### Opening a database file directly
+
+`tie -f/--file <path.tie>` opens one local collection file in-process, with no
+`tie-triplestore` and no network. Every triple command — `get`, `add`, `tag`,
+`stat`, `versions`, `verify`, `dump`, `restore`, `media`, `playlist`, `history`
+— works exactly as it does against a server, because the CLI runs the same
+request handlers against the file.
+
+```sh
+tie -f /var/lib/tie/Collections/Images.tie get -r tag holiday
+tie -f /var/lib/tie/Collections/Images.tie tag files holiday
+tie -f /var/lib/tie/Collections/Images.tie dump | gzip > backup.tsv.gz
+tie -f /var/lib/tie/Collections/Images.tie mount --db /mnt/tie
+```
+
+- The flag must come before the command (after the command, `-f` still means
+  `get`'s filter). `-c NAME` then selects a **sibling** collection:
+  `<dir>/NAME.tie`. The `_prev` history collection follows the same rule.
+- No config file is required. If one is found (or `-C` names one) its
+  `FileHosts`, `ImportDest`, `PrevVersions` and `Queries` still apply.
+- **The filehost is still remote.** `-f` opens the triples only. `upload`,
+  `download`, `import`, blob checks and file reads through `mount --db` still
+  need a configured `[FileHosts.*]`; without one they fail with the usual
+  "no filehost configured" message.
+- The database is locked for the life of the command (and of a mount), so a
+  running `tie-triplestore` and a `tie -f` invocation cannot write the same file
+  at once. A second opener gets a `locked by another process` error. Disable the
+  lock on a server with `DisableLocking = true` only on filesystems where
+  `flock` is unreliable.
+- Direct mode indexes every reverse relation (correctness over memory): the
+  reverse index is derived at load time and a file does not record the server's
+  configured subset.
 
 ### Filehosts and config
 
@@ -364,9 +398,11 @@ without a running triplestore, for offline backup:
 tie dump --file /var/lib/tie/myns/mycol.tie > backup.tsv
 ```
 
-It reflects flushed on-disk state only, so do not run it against a `.tie` file
-that a live `tie-triplestore` currently has open — the triplestore may hold unflushed
-writes, and no locking coordinates the two readers.
+`tie -f <path.tie> dump` does the same through the full direct-mode client. Both
+now take the per-collection lock, so a dump is refused with a
+`locked by another process` error while a live `tie-triplestore` (or another
+`tie` invocation) holds the file open. Stop the server first; the dump reflects
+flushed on-disk state.
 
 ## Building
 

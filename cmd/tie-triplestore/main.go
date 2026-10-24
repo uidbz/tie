@@ -58,7 +58,12 @@ type TripleStoreConfig struct {
 	// Batch (restore, repair) legitimately carries a lot, so the built-in
 	// default is generous. 0 selects it.
 	MaxRequestBytesMB int
-	Users             []User
+	// DisableLocking turns off the exclusive advisory lock on each collection's
+	// .tie file. Locking (the default) stops a direct `tie -f` open or a second
+	// server from writing the same file concurrently. Disable it only on a
+	// filesystem where flock is unavailable or unreliable (some network mounts).
+	DisableLocking bool
+	Users          []User
 	// AnonymousAccess is the role granted to a request with no valid credentials:
 	// "none" (require auth for everything), "read", or "write". Empty defaults to
 	// "none", preserving the always-authenticated behavior.
@@ -148,6 +153,7 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		MaxConcurrentRequests:      cfg.MaxConcurrentRequests,
 		LoadMemoryLimitMB:          cfg.LoadMemoryLimitMB,
 		MaxRequestBytes:            int64(cfg.MaxRequestBytesMB) * 1024 * 1024,
+		DisableLocking:             cfg.DisableLocking,
 	}
 
 	ws := webservice.NewWebservice(config)

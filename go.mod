@@ -13,6 +13,7 @@ require (
 	github.com/schollz/progressbar/v3 v3.19.1
 	github.com/uidbz/conf v1.1.6-0.20260830150407-08bf80e17ef6
 	github.com/urfave/cli/v3 v3.10.1
+	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.44.0
 )
 
@@ -44,7 +45,6 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/telemetry v0.0.0-20261010193011-f71dc92da45e // indirect
 	golang.org/x/text v0.29.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect

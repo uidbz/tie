@@ -65,19 +65,19 @@ func TestTIEConfigEnv(t *testing.T) {
 	fromFlag := filepath.Join(dir, "flag.toml")
 
 	t.Setenv("TIE_CONFIG", fromEnv)
-	if name, _ := parseGlobalFlags([]string{"tie"}); name != fromEnv {
+	if name, _, _, _ := parseGlobalFlags([]string{"tie"}); name != fromEnv {
 		t.Errorf("TIE_CONFIG was ignored: got %q", name)
 	}
-	if name, _ := parseGlobalFlags([]string{"tie", "-C", fromFlag, "get", "x"}); name != fromFlag {
+	if name, _, _, _ := parseGlobalFlags([]string{"tie", "-C", fromFlag, "get", "x"}); name != fromFlag {
 		t.Errorf("-C did not override TIE_CONFIG: got %q", name)
 	}
 
 	t.Setenv("TIE_CONFIG", "")
-	if name, _ := parseGlobalFlags([]string{"tie"}); name != "config.toml" {
+	if name, _, _, _ := parseGlobalFlags([]string{"tie"}); name != "config.toml" {
 		t.Errorf("without TIE_CONFIG the default should be config.toml, got %q", name)
 	}
 	// A local flag on a subcommand is not the global one.
-	if _, collection := parseGlobalFlags([]string{"tie", "verify", "-c", "Other"}); collection != "" {
+	if _, collection, _, _ := parseGlobalFlags([]string{"tie", "verify", "-c", "Other"}); collection != "" {
 		t.Errorf("a subcommand's -c leaked into the global collection: %q", collection)
 	}
 }

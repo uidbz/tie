@@ -28,7 +28,7 @@ import (
 // Note that scoped clients share one transport where they share a scope (see
 // In): setting the timeout on one affects the others that reuse that client.
 func (tc *TieClient) SetTimeout(d time.Duration) {
-	if tc.client != nil {
-		tc.client.SetTimeout(d)
+	if tc.transport != nil {
+		tc.transport.SetTimeout(d)
 	}
 }

@@ -204,11 +204,18 @@ var MediaValueTypes = map[Relation]ValueType{
 // types are declared, so EnsureMediaSchema costs one Get per process.
 var schemaEnsured sync.Map
 
+// scopeKey names one concrete collection for process-wide caches. The file path
+// is part of it so two local databases (or a local file and a URL) can never
+// share an entry.
+func (tc *TieClient) scopeKey() string {
+	return tc.active.TripleStoreFile + "|" + tc.active.TripleStoreURL + "|" + tc.active.Namespace + "|" + tc.active.Collection
+}
+
 // EnsureMediaSchema declares any media value type the collection lacks. It is
 // cheap after the first call (cached per collection) and safe to call from
 // every writer of media relations.
 func (tc *TieClient) EnsureMediaSchema() error {
-	key := tc.active.TripleStoreURL + "|" + tc.active.Namespace + "|" + tc.active.Collection
+	key := tc.scopeKey()
 	if _, ok := schemaEnsured.Load(key); ok {
 		return nil
 	}

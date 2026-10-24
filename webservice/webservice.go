@@ -41,6 +41,19 @@ type WebserviceConfig struct {
 	KeyFile  string
 	DbPath   string
 
+	// LocalDir, when non-empty, switches collection resolution to a single
+	// directory: every collection id X resolves to <LocalDir>/X.tie and the
+	// request's namespace is ignored. It is used by the in-process (network-free)
+	// transport that opens one .tie database directly; a server never sets it.
+	LocalDir string
+
+	// DisableLocking turns off the advisory exclusive lock a collection takes on
+	// its .tie file when it is loaded. Locking keeps a running server and a
+	// direct `tie -f` invocation (or two servers) from writing the same file at
+	// once. Turn it off only on a filesystem where flock is unavailable or
+	// unreliable (some network mounts).
+	DisableLocking bool
+
 	// Auth resolves each request's role from its Basic Auth credentials and gates
 	// read vs write operations. Access management is done by populating it from
 	// the server's config file; it is read-only at runtime.
@@ -93,6 +106,7 @@ func NewWebservice(config WebserviceConfig) *Webservice {
 	ws.Config = config
 	ws.handlers = map[string]registration{}
 	ws.db = tiedb.NewDB(true)
+	ws.db.SetLocking(!config.DisableLocking)
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	if config.LoadMemoryLimitMB > 0 {
 		ws.db.SetLoadMemoryLimit(int64(config.LoadMemoryLimitMB) * 1024 * 1024)
@@ -264,6 +278,11 @@ var collectionNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127
 
 func validCollectionName(s string) bool { return collectionNamePattern.MatchString(s) }
 
+// ValidCollectionName reports whether s is a name-safe collection id. It is the
+// same pattern a server applies to request-supplied names; direct mode uses it
+// to keep an `In(name)` (or a config entry) from naming an unintended path.
+func ValidCollectionName(s string) bool { return validCollectionName(s) }
+
 func (ws *Webservice) DbPath(namespace string) string {
 	return filepath.Join(ws.Config.DbPath, namespace)
 }
@@ -271,7 +290,17 @@ func (ws *Webservice) DbPath(namespace string) string {
 // collectionKey validates the request-supplied namespace and collection id
 // and builds the tiedb key. This is the single validation point for every
 // request-supplied collection name.
+//
+// In LocalDir mode the namespace is ignored (it names a directory on a server,
+// which a direct .tie-file open does not have) while the collection id is
+// still validated: it is the file's basename without ".tie".
 func (ws *Webservice) collectionKey(namespace, collection string) (tiedb.CollectionKey, error) {
+	if ws.Config.LocalDir != "" {
+		if !validCollectionName(collection) {
+			return tiedb.CollectionKey{}, fmt.Errorf("%w %q", ErrInvalidName, collection)
+		}
+		return tiedb.CollectionKey{Database: ws.Config.LocalDir, Collection: collection}, nil
+	}
 	if !validCollectionName(namespace) || !validCollectionName(collection) {
 		return tiedb.CollectionKey{}, fmt.Errorf("%w %q/%q", ErrInvalidName, namespace, collection)
 	}
@@ -339,19 +368,12 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	reg, known := ws.handlers[reqName]
 	if known {
-		// The handler decodes into a fresh request value, so concurrent
-		// requests never share mutable state. The HTTP server already runs
-		// each request on its own goroutine, so we answer inline.
-		if ws.sem != nil {
-			ws.sem <- struct{}{}
-			defer func() { <-ws.sem }()
-		}
 		// Write requests may create the collection; reads only look it up.
 		writable := reg.access == auth.AccessWrite
 		env := &Environment{username, func(ns, col string) (*tiedb.Collection, error) {
 			return ws.GetCollection(ns, col, writable)
 		}, ws}
-		reg.serve(env, raw_data, w)
+		ws.serve(reg, env, raw_data, w)
 		return
 	}
 
@@ -359,6 +381,163 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	// client then failed to JSON-decode.
 	slog.Warn("unrecognized request", "from", r.RemoteAddr, "request", reqName)
 	answerError(w, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqName))
+}
+
+// serve runs a registered handler under the configured concurrency ceiling.
+func (ws *Webservice) serve(reg registration, env *Environment, raw []byte, w http.ResponseWriter) {
+	// The handler decodes into a fresh request value, so concurrent requests
+	// never share mutable state. The HTTP server already runs each request on
+	// its own goroutine; the in-process transport may call concurrently too.
+	if ws.sem != nil {
+		ws.sem <- struct{}{}
+		defer func() { <-ws.sem }()
+	}
+	reg.serve(env, raw, w)
+}
+
+// localEnv builds the environment an in-process request runs with. Local mode
+// has no credentials: access is governed by filesystem permissions on the .tie
+// file. The registered access level still decides whether a collection may be
+// created, so a read cannot mint one — the same rule the HTTP handler applies.
+func (ws *Webservice) localEnv(access auth.Access) *Environment {
+	writable := access == auth.AccessWrite
+	return &Environment{
+		Username: "local",
+		Collection: func(namespace, collection string) (*tiedb.Collection, error) {
+			return ws.GetCollection(namespace, collection, writable)
+		},
+		Webservice: ws,
+	}
+}
+
+// localResponseWriter adapts an io.Writer to http.ResponseWriter so the shared
+// handler registry can answer without an HTTP server. Status defaults to 200,
+// matching net/http: a handler that only writes a body succeeds.
+type localResponseWriter struct {
+	header http.Header
+	w      io.Writer
+	status int
+	wrote  bool
+}
+
+func newLocalResponseWriter(w io.Writer) *localResponseWriter {
+	return &localResponseWriter{header: http.Header{}, w: w}
+}
+
+func (l *localResponseWriter) Header() http.Header { return l.header }
+
+func (l *localResponseWriter) WriteHeader(code int) {
+	if l.status == 0 {
+		l.status = code
+	}
+}
+
+func (l *localResponseWriter) Write(p []byte) (int, error) {
+	if l.status == 0 {
+		l.status = http.StatusOK
+	}
+	if len(p) > 0 {
+		l.wrote = true
+	}
+	return l.w.Write(p)
+}
+
+func (l *localResponseWriter) Status() int {
+	if l.status == 0 {
+		return http.StatusOK
+	}
+	return l.status
+}
+
+// Dispatch serves one registered request without HTTP. It writes the reply
+// body to w and returns the status code the HTTP handler would have used.
+//
+// Authentication is deliberately absent: an in-process caller already has the
+// .tie file open. The request's registered access level is still honored for
+// collection creation, so reads never create one.
+func (ws *Webservice) Dispatch(reqID string, raw []byte, w io.Writer) int {
+	lw := newLocalResponseWriter(w)
+	reg, known := ws.handlers[reqID]
+	if !known {
+		answerError(lw, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqID))
+		return lw.Status()
+	}
+	ws.serve(reg, ws.localEnv(reg.access), raw, lw)
+	return lw.Status()
+}
+
+// DispatchStream serves a streaming request in-process. started reports
+// whether the handler wrote any body byte: when false, err is a pre-body
+// failure the caller should report as a status error rather than hand to a
+// consumer expecting triples.
+func (ws *Webservice) DispatchStream(ctx context.Context, reqID string, raw []byte, w io.Writer) (started bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	reg, known := ws.handlers[reqID]
+	if !known {
+		return false, &StatusError{
+			Status:  http.StatusNotFound,
+			Request: reqID,
+			Message: fmt.Sprintf("Unknown request: %q", reqID),
+		}
+	}
+	env := ws.localEnv(reg.access)
+	if reg.stream == nil {
+		lw := newLocalResponseWriter(ctxWriter{ctx: ctx, w: w})
+		ws.serve(reg, env, raw, lw)
+		if lw.Status() >= 300 {
+			return lw.wrote, &StatusError{
+				Status:  lw.Status(),
+				Request: reqID,
+				Message: http.StatusText(lw.Status()),
+			}
+		}
+		return lw.wrote, nil
+	}
+	tw := &trackingWriter{w: ctxWriter{ctx: ctx, w: w}}
+	if ws.sem != nil {
+		ws.sem <- struct{}{}
+		defer func() { <-ws.sem }()
+	}
+	if err := reg.stream(env, raw, tw); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return tw.wrote, ctxErr
+		}
+		return tw.wrote, &StatusError{
+			Status:  statusForError(err),
+			Request: reqID,
+			Message: err.Error(),
+		}
+	}
+	return tw.wrote, nil
+}
+
+// ctxWriter stops a long stream once its context is cancelled. The underlying
+// tiedb walk is not interruptible mid-call, but it stops at the next record.
+type ctxWriter struct {
+	ctx context.Context
+	w   io.Writer
+}
+
+func (c ctxWriter) Write(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.w.Write(p)
+}
+
+// trackingWriter records whether a stream handler wrote any body byte.
+type trackingWriter struct {
+	w     io.Writer
+	wrote bool
+}
+
+func (t *trackingWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		t.wrote = true
+	}
+	return t.w.Write(p)
 }
 
 func ErrorToJsonString(prepend string, err error) string {

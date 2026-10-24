@@ -126,31 +126,62 @@ func (c *Client) effectiveTimeout() time.Duration {
 	}
 }
 
+// Doer is the transport one request travels over. A *Client implements it over
+// HTTP; an embedder that serves the same registry in-process (the client's
+// local .tie-file mode) implements it without a network. Call and CallContext
+// depend on this interface rather than on *Client, so the wire protocol and
+// the handler registry are shared by both transports.
+type Doer interface {
+	// Do sends one request body and returns the reply body. A non-2xx answer is
+	// reported as a *StatusError, exactly as the HTTP transport reports it.
+	Do(ctx context.Context, id string, body []byte) ([]byte, error)
+	// DoStream sends one request and hands the raw reply body to consume.
+	DoStream(ctx context.Context, id string, body []byte, consume func(io.Reader) error) error
+	// SetTimeout bounds one non-streaming request. Zero restores the transport
+	// default; a negative value disables the bound.
+	SetTimeout(d time.Duration)
+}
+
 // Call sends req and decodes the reply as Rep. The reply type is a parameter,
 // so nothing has to keep a prototype of the reply in sync with the handler:
 // disagreeing types are a compile error at the call site, not a wrong-shaped
 // decode at runtime.
-func Call[Req RequestID, Rep any](c *Client, req Req) (*Rep, error) {
+func Call[Req RequestID, Rep any](c Doer, req Req) (*Rep, error) {
 	return CallContext[Req, Rep](context.Background(), c, req)
 }
 
-// CallContext sends req honoring ctx and the client's per-request timeout
+// CallContext sends req honoring ctx and the transport's per-request timeout
 // (whichever is shorter). Only requests classified by retrySafe are replayed
 // after a transport failure.
-func CallContext[Req RequestID, Rep any](ctx context.Context, c *Client, req Req) (*Rep, error) {
+func CallContext[Req RequestID, Rep any](ctx context.Context, c Doer, req Req) (*Rep, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.send(ctx, req.GetId(), body)
+	reply, err := c.Do(ctx, req.GetId(), body)
 	if err != nil {
 		return nil, err
 	}
 	rep := new(Rep)
-	if err := json.Unmarshal(resp.body, rep); err != nil {
-		return nil, fmt.Errorf("webservice returned %s: %s", resp.status, snippet(resp.body))
+	if err := json.Unmarshal(reply, rep); err != nil {
+		return nil, fmt.Errorf("webservice returned an invalid reply: %s", snippet(reply))
 	}
 	return rep, nil
+}
+
+// Do sends one non-streaming request over HTTP. It is the *Client half of the
+// Doer seam; retry, auth, timeout and error-status handling stay in send.
+func (c *Client) Do(ctx context.Context, id string, body []byte) ([]byte, error) {
+	resp, err := c.send(ctx, id, body)
+	if err != nil {
+		return nil, err
+	}
+	return resp.body, nil
+}
+
+// DoStream sends one request over HTTP and hands its reply body to consume.
+func (c *Client) DoStream(ctx context.Context, id string, body []byte, consume func(io.Reader) error) error {
+	return c.runStreamBody(ctx, id, body, consume)
 }
 
 // response is one answered request: the status line and the body the server
@@ -275,7 +306,12 @@ func (c *Client) RunStreamContext(ctx context.Context, request RequestID, consum
 	if err != nil {
 		return err
 	}
+	return c.runStreamBody(ctx, request.GetId(), body, consume)
+}
 
+// runStreamBody is RunStreamContext over an already-marshalled request body, so
+// both the RequestID entry point and the Doer seam share one implementation.
+func (c *Client) runStreamBody(ctx context.Context, id string, body []byte, consume func(io.Reader) error) error {
 	// Retry only the connection attempt (before any body byte is consumed); a
 	// failure mid-stream still surfaces inside consume, since the reply is not
 	// replayable once reading has started. A stream is a read, so it is always
@@ -291,7 +327,7 @@ func (c *Client) RunStreamContext(ctx context.Context, request RequestID, consum
 			}
 		}
 
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, c.server+"/"+request.GetId(), bytes.NewReader(body))
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, c.server+"/"+id, bytes.NewReader(body))
 		if reqErr != nil {
 			return reqErr
 		}
@@ -310,7 +346,7 @@ func (c *Client) RunStreamContext(ctx context.Context, request RequestID, consum
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return c.statusError(request.GetId(), resp, body)
+		return c.statusError(id, resp, body)
 	}
 
 	return consume(resp.Body)

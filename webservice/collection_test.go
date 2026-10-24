@@ -85,7 +85,12 @@ func TestReadDoesNotCreateCollection(t *testing.T) {
 	}
 
 	// A fresh webservice (cold cache) also finds the on-disk collection on read.
+	// The first service must close first: each collection holds an exclusive
+	// lock on its .tie file while loaded, so two services cannot share a
+	// directory in one process any more than two processes can.
+	ws.Close()
 	ws2 := NewWebservice(WebserviceConfig{DbPath: ws.Config.DbPath, Auth: auth.NewStore(nil, auth.RoleWrite)})
+	defer ws2.Close()
 	col, err = ws2.GetCollection("Collections", "probe-me", false)
 	if err != nil || col == nil {
 		t.Fatalf("cold read of existing collection failed: %v", err)

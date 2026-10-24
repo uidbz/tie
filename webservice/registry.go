@@ -33,9 +33,15 @@ type StreamHandler[Req any] func(env *Environment, req *Req, w io.Writer) error
 
 // registration is a handler with the access level it requires, type-erased so
 // the registry can hold handlers for many request types in one map.
+//
+// stream is set only for streaming requests. The HTTP path uses serve (which
+// logs a mid-stream failure, since the status is already committed); the
+// in-process path uses stream so a failure before the first byte can still be
+// reported to the caller as an error.
 type registration struct {
 	access auth.Access
 	serve  func(env *Environment, raw []byte, w http.ResponseWriter)
+	stream func(env *Environment, raw []byte, w io.Writer) error
 }
 
 // Register installs one request type. The handler's argument and result types
@@ -86,6 +92,13 @@ func RegisterStream[Req any](ws *Webservice, id string, access auth.Access, h St
 				// that is left.
 				slog.Error("stream reply error", "request", id, "err", err)
 			}
+		},
+		stream: func(env *Environment, raw []byte, w io.Writer) error {
+			req := new(Req)
+			if err := json.Unmarshal(raw, req); err != nil {
+				return fmt.Errorf("unmarshalling request: %w", err)
+			}
+			return h(env, req, w)
 		},
 	})
 }

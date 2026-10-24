@@ -3,6 +3,7 @@ package tiedb
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"os"
 	"sync"
 	"sync/atomic"
 )
@@ -129,6 +130,10 @@ type Collection struct {
 	freespaceMutex sync.Mutex
 
 	writeToDisk bool
+	// lock is the exclusive advisory lock on the record file, held for the
+	// collection's lifetime when TieTree locking is enabled (see
+	// TieTree.SetLocking). Release it through releaseLock, never by hand.
+	lock *os.File
 	// loadMemoryLimit is a soft heap ceiling (GOMEMLIMIT semantics) applied
 	// while this collection loads from disk. 0 = runtime default.
 	loadMemoryLimit int64

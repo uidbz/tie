@@ -10,6 +10,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -116,10 +118,14 @@ func RowHas(r Row, relation Relation, value string) bool {
 }
 
 type TieClient struct {
-	client *ws.Client
-	// runErr records a construction failure (a triplestore URL that cannot be
-	// dialed). It surfaces on the first request rather than as a nil dereference
-	// inside the transport (§4.11).
+	// transport carries one request to the triplestore. It is an HTTP client by
+	// default; a client opened on a local .tie file serves the same handler
+	// registry in-process (see local.go).
+	transport ws.Doer
+	// local is non-nil when this client opened a .tie file in-process. It owns
+	// the database handle and its lock; Close releases them. Scoped clients in
+	// the same directory share this pointer.
+	local  *localBackend
 	runErr error
 	Config Config
 	// active is the resolved collection this client operates on (triplestore,
@@ -174,8 +180,9 @@ func (c Config) ResolveCollection(name string) ResolvedCollection {
 	}
 	store := c.TripleStoreURL
 	entry, ok := c.Collections[name]
+	var resolved ResolvedCollection
 	if !ok {
-		return ResolvedCollection{
+		resolved = ResolvedCollection{
 			Namespace:      c.Namespace,
 			Collection:     firstNonEmpty(name, c.Collection),
 			TripleStoreURL: store,
@@ -184,24 +191,66 @@ func (c Config) ResolveCollection(name string) ResolvedCollection {
 			Insecure:       c.WebserviceInsecure,
 			FileHosts:      c.DefaultFileHosts,
 		}
+	} else {
+		user, pass := c.Username, c.Password
+		if entry.Username != "" {
+			user, pass = entry.Username, entry.Password
+		}
+		hosts := entry.FileHosts
+		if len(hosts) == 0 {
+			hosts = c.DefaultFileHosts
+		}
+		resolved = ResolvedCollection{
+			Namespace:      firstNonEmpty(entry.Namespace, c.Namespace),
+			Collection:     firstNonEmpty(entry.Collection, name, c.Collection),
+			TripleStoreURL: firstNonEmpty(entry.TripleStoreURL, store),
+			Username:       user,
+			Password:       pass,
+			Insecure:       entry.Insecure || c.WebserviceInsecure,
+			FileHosts:      hosts,
+		}
 	}
-	user, pass := c.Username, c.Password
-	if entry.Username != "" {
-		user, pass = entry.Username, entry.Password
+	if c.TripleStoreFile != "" {
+		// Direct mode pins the whole invocation to this file's directory. A
+		// [Collections.*] entry's URL/credentials cannot mix a second transport
+		// into the same client; the entry still contributes its filehosts.
+		resolved.TripleStoreURL = ""
+		resolved.Username = ""
+		resolved.Password = ""
+		resolved.Insecure = false
+		primary := c.collectionFile("")
+		primaryBase := strings.TrimSuffix(filepath.Base(primary), ".tie")
+		if name == "" || name == primaryBase || resolved.Collection == "" {
+			// The pinned file is the collection. A same-named [Collections]
+			// entry must not redirect it to a differently-named sibling.
+			resolved.Collection = primaryBase
+			resolved.TripleStoreFile = primary
+		} else {
+			resolved.TripleStoreFile = c.collectionFile(resolved.Collection)
+		}
 	}
-	hosts := entry.FileHosts
-	if len(hosts) == 0 {
-		hosts = c.DefaultFileHosts
+	return resolved
+}
+
+// collectionFile maps a collection id onto the configured direct-mode database
+// file or a sibling in the same directory. Every collection in a direct-mode
+// invocation lives in one directory: <name>_prev and other sibling files are
+// what the tree/version code expects.
+func (c Config) collectionFile(collection string) string {
+	primary := filepath.Clean(c.TripleStoreFile)
+	if abs, err := filepath.Abs(primary); err == nil {
+		primary = abs
 	}
-	return ResolvedCollection{
-		Namespace:      firstNonEmpty(entry.Namespace, c.Namespace),
-		Collection:     firstNonEmpty(entry.Collection, name, c.Collection),
-		TripleStoreURL: firstNonEmpty(entry.TripleStoreURL, store),
-		Username:       user,
-		Password:       pass,
-		Insecure:       entry.Insecure || c.WebserviceInsecure,
-		FileHosts:      hosts,
+	base := strings.TrimSuffix(filepath.Base(primary), ".tie")
+	if collection == "" || collection == base {
+		return primary
 	}
+	if !ws.ValidCollectionName(collection) {
+		// Not a collection id a server would accept; leave the client with no
+		// local target so the first request reports the invalid name.
+		return ""
+	}
+	return filepath.Join(filepath.Dir(primary), collection+".tie")
 }
 
 type Config struct {
@@ -214,6 +263,12 @@ type Config struct {
 	// key spelled the same thing; it was honored through v0.6.0 and is now
 	// refused with a message that says what to change.
 	TripleStoreURL string
+	// TripleStoreFile, when non-empty, opens that .tie database file in-process
+	// instead of connecting to TripleStoreURL. Its directory is the collection
+	// directory: a collection named X resolves to <dir>/X.tie, so the
+	// <name>_prev history collection and other sibling collections work exactly
+	// as they do over a server. -f/--file sets this in the CLI.
+	TripleStoreFile string
 	// WebserviceInsecure enables TLS InsecureSkipVerify for the triplestore
 	// connection (accept self-signed certificates).
 	WebserviceInsecure bool
@@ -280,10 +335,13 @@ type ResolvedCollection struct {
 	Namespace      string
 	Collection     string
 	TripleStoreURL string
-	Username       string
-	Password       string
-	Insecure       bool
-	FileHosts      []string
+	// TripleStoreFile is the local .tie file this collection maps to when the
+	// config opens a database directly. Empty means an HTTP triplestore.
+	TripleStoreFile string
+	Username        string
+	Password        string
+	Insecure        bool
+	FileHosts       []string
 }
 
 // ResolveHosts picks the filehost names an upload or import targets. An
@@ -440,6 +498,7 @@ func NewTieClient(config Config) (client *TieClient) {
 // not part of it, because it does not change the transport.
 func sameScope(a, b ResolvedCollection) bool {
 	return a.TripleStoreURL == b.TripleStoreURL &&
+		a.TripleStoreFile == b.TripleStoreFile &&
 		a.Namespace == b.Namespace &&
 		a.Collection == b.Collection &&
 		a.Username == b.Username &&
@@ -472,7 +531,27 @@ func (tc *TieClient) In(name string) *TieClient {
 	}
 	sub := *tc
 	sub.active = active
-	if active.TripleStoreURL != tc.active.TripleStoreURL ||
+	if active.TripleStoreFile != "" {
+		if tc.local != nil && localDirFor(active.TripleStoreFile) == tc.local.dir {
+			// Same directory: share the open database and its exclusive lock.
+			sub.transport = tc.local.transport
+			return &sub
+		}
+		lb, err := openLocalBackend(active.TripleStoreFile)
+		if err != nil {
+			sub.runErr = err
+			return &sub
+		}
+		sub.local = lb
+		sub.transport = lb.transport
+		return &sub
+	}
+	// A [Collections.*] entry can name a server while the root config opens a
+	// file. Drop the parent's backend on the scoped client so closing the child
+	// cannot close the parent's database.
+	sub.local = nil
+	if tc.local != nil ||
+		active.TripleStoreURL != tc.active.TripleStoreURL ||
 		active.Username != tc.active.Username ||
 		active.Password != tc.active.Password ||
 		active.Insecure != tc.active.Insecure {
@@ -481,25 +560,74 @@ func (tc *TieClient) In(name string) *TieClient {
 			sub.runErr = err
 			return &sub
 		}
-		sub.client = wsc
+		sub.transport = wsc
 	}
 	return &sub
 }
 
 // NewTieClientFor builds a client bound to the named collection (empty selects
 // the default). The transport targets that collection's resolved triplestore and
-// credentials.
+// credentials, or opens the local .tie file in-process when the resolved
+// collection names one.
 func NewTieClientFor(config Config, collection string) (client *TieClient) {
 	active := config.ResolveCollection(collection)
 	client = &TieClient{Config: config, active: active}
+	if active.TripleStoreFile != "" {
+		// The pinned collection must exist; siblings (`In("Other")` or
+		// `<name>_prev`) are legitimately absent until first write. This is what
+		// makes a typo in a config's TripleStoreFile fail instead of silently
+		// creating an empty database.
+		if active.Collection == strings.TrimSuffix(filepath.Base(active.TripleStoreFile), ".tie") {
+			if _, err := os.Stat(active.TripleStoreFile); err != nil {
+				client.runErr = fmt.Errorf("opening database %s: %w", active.TripleStoreFile, err)
+				return client
+			}
+		}
+		lb, err := openLocalBackend(active.TripleStoreFile)
+		if err != nil {
+			client.runErr = err
+			return client
+		}
+		client.local = lb
+		client.transport = lb.transport
+		return client
+	}
 	wsc, err := ws.NewClient(active.TripleStoreURL, active.Username, active.Password, active.Insecure)
 	if err != nil {
 		client.runErr = err
 		return client
 	}
-	client.client = wsc
+	client.transport = wsc
 	return client
 }
+
+// Close flushes and releases the local database opened by this client. It is a
+// no-op over HTTP and is safe to call more than once. A client obtained from
+// In() shares its parent's database handle; close the client you created.
+func (tc *TieClient) Close() error {
+	if tc.local != nil {
+		tc.local.Close()
+	}
+	return nil
+}
+
+// Target is what this client talks to: the local .tie file in direct mode,
+// otherwise the triplestore URL. It is for reporting (tie version, conf show),
+// never for dialing.
+func (tc *TieClient) Target() string {
+	if tc.active.TripleStoreFile != "" {
+		return tc.active.TripleStoreFile
+	}
+	return tc.active.TripleStoreURL
+}
+
+// IsLocal reports whether this client opened a .tie file in-process.
+func (tc *TieClient) IsLocal() bool { return tc.active.TripleStoreFile != "" }
+
+// Err reports a construction failure — an unreadable local database
+// directory or an invalid triplestore URL — that would otherwise surface only
+// on the first request. The CLI uses it to fail before dispatching a command.
+func (tc *TieClient) Err() error { return tc.runErr }
 
 func (tc *TieClient) NewUpdate(key, value1, value2, newValue2 string) api.Update {
 	return api.Update{
@@ -542,7 +670,7 @@ func callCtx[Req ws.RequestID, Rep any](ctx context.Context, tc *TieClient, requ
 	if tc.runErr != nil {
 		return nil, tc.runErr
 	}
-	return ws.CallContext[Req, Rep](ctx, tc.client, request)
+	return ws.CallContext[Req, Rep](ctx, tc.transport, request)
 }
 
 // replyError turns an unsuccessful reply into an error: ErrNotFound for the
@@ -760,8 +888,12 @@ func (tc *TieClient) DumpStream(fn func(tiedb.StringTriple) error) error {
 		return tc.runErr
 	}
 	request := tc.CollectionInfo().NewDumpRequest()
+	body, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
 
-	return tc.client.RunStream(request, func(r io.Reader) error {
+	return tc.transport.DoStream(context.Background(), request.GetId(), body, func(r io.Reader) error {
 		dec := json.NewDecoder(r)
 		for dec.More() {
 			var t tiedb.StringTriple
