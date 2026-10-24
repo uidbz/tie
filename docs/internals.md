@@ -386,6 +386,9 @@ TieClient ── transport (Doer) ──┬─ webservice.Client (HTTP)
   while a mount or server holds the exclusive lock. Reads are a load-time
   snapshot; writes return `tiedb.ErrReadOnly` and `Dispatch` refuses write
   requests with 403. The reader does not see records appended after it loaded.
+  POSIX shared locks are deliberately not used: a writer must hold `LOCK_EX`, so
+  `LOCK_SH` would block exactly when coexistence is wanted; the reader is
+  lockless and its snapshot semantics are documented.
 - `tiedb.TieTree.SetLocking(true)` takes an exclusive `flock` on each loaded
   `.tie` file. The server enables it by default and direct mode always does, so
   a running triplestore and a `tie -f` command exclude each other; a second

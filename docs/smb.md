@@ -307,6 +307,7 @@ so copy tools don't fail.
 | `mount -t cifs` says "Host is down" / protocol error | Pin `vers=3.0`; for high ports pass both `//host:port` and `port=`. |
 | Bind failure at start (`permission denied` on :445) | Needs root or `AmbientCapabilities=CAP_NET_BIND_SERVICE` (the systemd unit sets it). |
 | Server refuses to start: "triplestore not reachable" | The `TieConfig` triplestore URL is wrong or the triplestore is down — tie-smb checks connectivity at startup. |
+| Server refuses to start: "opening database" | `TripleStoreFile` is missing, is not a `.tie` file, or `ReadOnly = true` was set without a file. |
 
 ## Testing
 

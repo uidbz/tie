@@ -175,6 +175,9 @@ func firstNonEmpty(vals ...string) string {
 // selects DefaultCollection; a name matching no entry is treated as a bare
 // collection id on the top-level triplestore/namespace.
 func (c Config) ResolveCollection(name string) ResolvedCollection {
+	// requested remembers an empty call, which in direct mode always means the
+	// pinned file rather than the config's DefaultCollection.
+	requested := name
 	if name == "" {
 		name = c.DefaultCollection
 	}
@@ -220,9 +223,10 @@ func (c Config) ResolveCollection(name string) ResolvedCollection {
 		resolved.Insecure = false
 		primary := c.collectionFile("")
 		primaryBase := strings.TrimSuffix(filepath.Base(primary), ".tie")
-		if name == "" || name == primaryBase || resolved.Collection == "" {
-			// The pinned file is the collection. A same-named [Collections]
-			// entry must not redirect it to a differently-named sibling.
+		if requested == "" || name == "" || name == primaryBase || resolved.Collection == "" {
+			// The pinned file is the collection. An empty request (or a
+			// same-named [Collections] entry) must not redirect it to the
+			// config's DefaultCollection or a differently-named sibling.
 			resolved.Collection = primaryBase
 			resolved.TripleStoreFile = primary
 		} else {
@@ -267,7 +271,9 @@ type Config struct {
 	// instead of connecting to TripleStoreURL. Its directory is the collection
 	// directory: a collection named X resolves to <dir>/X.tie, so the
 	// <name>_prev history collection and other sibling collections work exactly
-	// as they do over a server. -f/--file sets this in the CLI.
+	// as they do over a server. An empty collection request selects the file's
+	// own basename (not DefaultCollection); use In(name)/-c for a sibling.
+	// -f/--file sets this in the CLI.
 	TripleStoreFile string
 	// ReadOnly, with TripleStoreFile, opens the database for reading only: no
 	// writer, no lock, and write requests are refused. It can run beside a live

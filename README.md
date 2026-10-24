@@ -223,6 +223,7 @@ tie mount <hash> <mountpoint>        mount an immutable content-addressed tree
 tie mount --db <mountpoint>          mount the live tag-derived filesystem
 tie conf create [name]               write a default config file
 tie -f <path.tie> <command>          run against a local database file, no server
+tie -f <path.tie> --read-only <cmd>  read a snapshot beside a live mount/server
 ```
 
 `tie -C <config>` selects a config file (searched in the working directory

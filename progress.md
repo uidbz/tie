@@ -132,6 +132,7 @@ ready (`ConfigForFile`, `ReadOnly`, `ReverseRelations`). See the note in
 | manual `tie dump --file` after closing the client | reads the flushed write |
 | manual offline (no config, `HOME` empty) | works; version does not probe a server |
 | manual `tie -f … mount --db` + `tie -f … --read-only get` | reader coexists with the mount |
+| manual `tie-smb` with `TripleStoreFile`/`ReadOnly` | starts read-only, all users downgraded, clean shutdown |
 | `make build` | all four commands build with ldflags |
 
 ## Remaining optional follow-up

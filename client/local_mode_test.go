@@ -188,6 +188,16 @@ func TestLocalClientSiblingCollections(t *testing.T) {
 	main := NewTieClientFor(cfg, "")
 	defer main.Close()
 
+	// An empty request pins the -f file even when the config names another
+	// DefaultCollection (tie-smb and library callers rely on this).
+	pinnedCfg := cfg
+	pinnedCfg.DefaultCollection = "Other"
+	pinned := NewTieClientFor(pinnedCfg, "")
+	if got := pinned.CollectionInfo().CollectionId; got != "Main" {
+		t.Errorf("empty request with DefaultCollection=Other opened %q, want Main", got)
+	}
+	pinned.Close()
+
 	other := main.In("Other")
 	if other == main {
 		t.Fatal("In(\"Other\") returned the bound client")
