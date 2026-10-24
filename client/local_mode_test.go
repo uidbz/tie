@@ -328,6 +328,13 @@ func TestReadOnlyClientBesideWriter(t *testing.T) {
 	if _, err := ro.MkTieDirAll("tie:/nope"); err == nil {
 		t.Fatal("MkDir through a read-only client succeeded")
 	}
+	// The diagnostic index check is allowed; a repair is not.
+	if _, err := ro.CheckIndex(false, false); err != nil {
+		t.Errorf("read-only CheckIndex(diagnostic): %v", err)
+	}
+	if _, err := ro.CheckIndex(false, true); err == nil || !strings.Contains(strings.ToLower(err.Error()), "write requests are disabled") {
+		t.Errorf("read-only CheckIndex(repair): err = %v", err)
+	}
 
 	// The writer is unaffected: the reader held no lock.
 	if _, err := rw.Add("k3", "tag", "v3"); err != nil {

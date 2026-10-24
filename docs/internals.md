@@ -385,7 +385,9 @@ TieClient ── transport (Doer) ──┬─ webservice.Client (HTTP)
   `db_size` trimmed to whole frames, no truncation. This lets a reader load
   while a mount or server holds the exclusive lock. Reads are a load-time
   snapshot; writes return `tiedb.ErrReadOnly` and `Dispatch` refuses write
-  requests with 403. The reader does not see records appended after it loaded.
+  requests with 403. The diagnostic index check (`CheckIndex` without repair)
+  opts in through `SetReadOnlyGuard`; a repair is refused. The reader does not
+  see records appended after it loaded.
   POSIX shared locks are deliberately not used: a writer must hold `LOCK_EX`, so
   `LOCK_SH` would block exactly when coexistence is wanted; the reader is
   lockless and its snapshot semantics are documented.

@@ -381,7 +381,7 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	reg, known := ws.handlers[reqName]
 	if known {
-		if ws.Config.ReadOnly && reg.access == auth.AccessWrite {
+		if ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw_data) {
 			answerError(w, http.StatusForbidden, "Read-only database:", errors.New("write requests are disabled"))
 			return
 		}
@@ -398,6 +398,24 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 	// client then failed to JSON-decode.
 	slog.Warn("unrecognized request", "from", r.RemoteAddr, "request", reqName)
 	answerError(w, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqName))
+}
+
+// SetReadOnlyGuard marks a write-classified request as safe to run against a
+// read-only database when guard(raw) returns true. It is called during
+// registration (single-threaded), so the registry map needs no lock.
+func (ws *Webservice) SetReadOnlyGuard(id string, guard func(raw []byte) bool) {
+	reg, ok := ws.handlers[id]
+	if !ok {
+		return
+	}
+	reg.readOnlyGuard = guard
+	ws.handlers[id] = reg
+}
+
+// readOnlyAllowed reports whether a write-classified request may run against a
+// read-only database. Only CheckIndex (without Repair) opts in.
+func readOnlyAllowed(reg registration, raw []byte) bool {
+	return reg.readOnlyGuard != nil && reg.readOnlyGuard(raw)
 }
 
 // serve runs a registered handler under the configured concurrency ceiling.
@@ -479,7 +497,7 @@ func (ws *Webservice) Dispatch(reqID string, raw []byte, w io.Writer) int {
 		answerError(lw, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqID))
 		return lw.Status()
 	}
-	if ws.Config.ReadOnly && reg.access == auth.AccessWrite {
+	if ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw) {
 		answerError(lw, http.StatusForbidden, "Read-only database:", errors.New("write requests are disabled"))
 		return lw.Status()
 	}
@@ -503,7 +521,7 @@ func (ws *Webservice) DispatchStream(ctx context.Context, reqID string, raw []by
 			Message: fmt.Sprintf("Unknown request: %q", reqID),
 		}
 	}
-	if ws.Config.ReadOnly && reg.access == auth.AccessWrite {
+	if ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw) {
 		return false, &StatusError{
 			Status:  http.StatusForbidden,
 			Request: reqID,

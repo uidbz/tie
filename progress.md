@@ -2,8 +2,10 @@
 
 Detailed design: `docs/local-db-plan.md`.
 
-Status: **implemented** (milestones 1–6). Full test suite and `-race` on the
-affected packages pass; `go vet` and `staticcheck` are clean.
+Status: **implemented** (milestones 1–6 and the read-only, reverse-index and
+tie-smb follow-ups). Full test suite and `-race` on the affected packages pass;
+`go vet` and `staticcheck` are clean. The tie-gui setting remains blocked on
+that repo's v0.6.0 client migration.
 
 ## Milestone 1 — transport seam (no behavior change)
 
@@ -85,6 +87,8 @@ affected packages pass; `go vet` and `staticcheck` are clean.
       refuses repair on a snapshot.
 - [x] `WebserviceConfig.ReadOnly`: no lock, write requests answered 403 (both
       `RequestHandler` and `Dispatch`/`DispatchStream`).
+- [x] `CheckIndex` diagnostic is allowed through `SetReadOnlyGuard`; a repair is
+      refused, so `tie verify --read-only` works.
 - [x] `Config.ReadOnly` + CLI `--read-only` (requires `-f`).
 - [x] Tests: engine read/write coexistence, missing file creates nothing,
       client read beside a writer, CLI read-only, writer still works.

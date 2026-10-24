@@ -42,6 +42,10 @@ type registration struct {
 	access auth.Access
 	serve  func(env *Environment, raw []byte, w http.ResponseWriter)
 	stream func(env *Environment, raw []byte, w io.Writer) error
+	// readOnlyGuard, when non-nil, lets a write-classified request run against a
+	// read-only database when it answers true for the raw request (e.g.
+	// CheckIndex without Repair). Nil means the request is always refused.
+	readOnlyGuard func(raw []byte) bool
 }
 
 // Register installs one request type. The handler's argument and result types

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/json"
+
 	"github.com/uidbz/tie/auth"
 	ws "github.com/uidbz/tie/webservice"
 )
@@ -36,4 +38,14 @@ func RegisterAll(srv *ws.Webservice) {
 	ws.Register(srv, IdDrop, auth.AccessWrite, dropHandler)
 	ws.Register(srv, IdSync, auth.AccessWrite, syncHandler)
 	ws.Register(srv, IdCheckIndex, auth.AccessWrite, checkIndexHandler)
+	// CheckIndex is classified write because it blocks the collection's writers,
+	// but the diagnostic pass (no repair) is safe on a read-only snapshot. A
+	// repair request is still refused.
+	srv.SetReadOnlyGuard(IdCheckIndex, func(raw []byte) bool {
+		var req CheckIndexRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return false
+		}
+		return !req.Repair
+	})
 }

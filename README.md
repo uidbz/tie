@@ -263,8 +263,9 @@ tie -f /var/lib/tie/Collections/Images.tie --read-only get -r tag holiday
   lock on a server with `DisableLocking = true` only on filesystems where
   `flock` is unreliable.
 - **`--read-only`** opens no writer and takes no lock, so it can run beside a
-  live mount or triplestore. Write requests are refused. Reads are a snapshot
-  from load time: changes made by the writer after the load are not seen, and a
+  live mount or triplestore. Write requests are refused (the diagnostic index
+  check, `verify`, is allowed; `--repair` is not). Reads are a snapshot from
+  load time: changes made by the writer after the load are not seen, and a
   trailing in-progress record is ignored. The mount/SMB server keeps the lock;
   only readers use `--read-only`.
 - **`--reverse-relations tag,path,parent,…`** restricts what is indexed in
