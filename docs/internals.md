@@ -349,6 +349,27 @@ relations. Collections that never set an allowlist keep full reverse generality.
   the cost of an O(n) first query; the opt-in approach was chosen because this
   codebase's reverse queries hit a small, known set of relations.
 
+## Free-text search
+
+Search is a derived read view, never stored. `Collection.Search` builds a
+transient corpus from the forward-association index and the value trie:
+
+- Candidate subjects come from the reverse `tie-type` index when the request
+  names tie-types (falling back to a full forward walk if that relation is not
+  reverse-indexed).
+- For each candidate, the forward set names `(relation, value-id)` pairs. The
+  value string is reconstructed with `levelOf(valueID)` +
+  `getValueString(level, valueID)`; the subject key with `levelOf(subjectID)` +
+  `getValueString`. Both are entry-trie walks, so the build reads no records and
+  does not use the triple cache or the disk-read queue.
+- The corpus is cached per `(relations, tie-types)` and tagged with
+  `searchGen`. Every forward-index mutation bumps the generation; a corpus is
+  reused only while its revision matches. `CheckIndex --repair` bumps it too.
+
+Matching is subject-level and supports `words` (cross-field, default),
+`substring`, `prefix` and `fuzzy`. See [`search.md`](search.md) for the full
+semantics, scoring and protocol.
+
 ## Direct (.tie file) mode
 
 `tie -f <path.tie>` (and `client.Config.TripleStoreFile`) opens one collection

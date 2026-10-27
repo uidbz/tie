@@ -44,4 +44,14 @@
 // Add reserves a slot, queues the FILE_ADD, and only then inserts into the
 // index, so any reader that can see an index entry finds the write already
 // queued; the writer drains the queue before serving a read (readSlot).
+//
+// # Search
+//
+// Collection.Search is a derived read view, not another stored structure. It
+// builds a transient corpus from the forward-association index and the value
+// trie (levelOf + getValueString), narrowing candidates through the reverse
+// tie-type index when the caller names tie-types. The build performs no
+// record-file I/O. The corpus is cached per (relations, tie-types) and
+// invalidated by searchGen, which every forward-index mutation bumps; memory is
+// bounded by SetSearchCacheBytes. See ../docs/search.md.
 package tiedb

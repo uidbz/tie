@@ -208,6 +208,7 @@ func newRootCommand(a *app) *cli.Command {
 			cmdAdd(a),
 			cmdDel(a),
 			cmdGet(a),
+			cmdSearch(a),
 			cmdConf(a),
 			cmdVersion(a),
 			cmdTag(a),

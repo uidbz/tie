@@ -152,6 +152,18 @@ client parses. Use `tie.Get` to fetch one key's attributes, `tie.Query` for
 tag/association searches, `tie.Expand` to fetch many keys at once, and
 `tie.Set` to replace a relation's values in one op.
 
+Free-text search is `tie.Search`, with reusable relation/type profiles:
+
+```go
+spec := client.AudioSearchProfile.Spec("beatles abbey")
+spec.Expand = true
+matches, total, err := tie.Search(spec)
+```
+
+`matches` is ranked best-first; `total` is the number of matching subjects
+before paging. No matches is a nil error. See
+[`docs/search.md`](docs/search.md) for the modes, scoring and integration notes.
+
 Client methods return `(reply, error)`; `error` is non-nil for both transport
 failures and API-level failures. `client.ErrNotFound` distinguishes "no such
 key" from a real error — check it with `errors.Is`.
@@ -213,6 +225,7 @@ so upload hashing and download verification cannot drift apart.
 ```
 tie add <key> <value1> <value2>      add a triple
 tie get [-r] [-f value1] <key>       query triples (reverse, filtered)
+tie search <query> --relation <rel>  free-text search over named relations
 tie del <key> <value1> <value2>      delete triples
 tie import ... [--collection name]   upload and tag files into a collection
 tie upload <file>                    upload a file/dir to a filehost
@@ -229,6 +242,35 @@ tie -f <path.tie> --read-only <cmd>  read a snapshot beside a live mount/server
 `tie -C <config>` selects a config file (searched in the working directory
 first). Run `tie conf create` to generate one. (`-c`/`--collection` selects a
 collection — see [Multiple collections](#multiple-collections) below.)
+
+### Free-text search
+
+Triples are exact-match. `tie search` adds a free-text layer over the
+triplestore's in-memory index without introducing a new record type or an
+on-disk index:
+
+```sh
+tie search "abbey road" --relation album --relation title
+tie search beatles --relation artist --relation album-artist --type audio-file
+tie search cover --relation filename --relation name --type directory --type file
+tie search beet --relation artist --mode fuzzy
+tie search jazz --relation tag --relation genre --format json
+```
+
+- The default `words` mode requires every query token to match somewhere on the
+  subject, so different fields can satisfy different tokens
+  (`beatles abbey` = artist + album).
+- Relations are required — there is no implicit vocabulary. `--type` narrows
+  candidates with the reverse `tie-type` index and is what keeps a large
+  collection fast.
+- Modes: `words`, `substring`, `prefix`, `fuzzy`. Matching is case-insensitive
+  and accent-folded.
+- No matches is an empty result (exit 0). Columns are `key`, `relation`,
+  `value`, `score`.
+- The engine caches a per-collection corpus (64 MiB default) and invalidates it
+  on writes; `SearchCacheMaxMB` / `DisableSearchCache` tune that. The full
+  design, protocol and performance numbers are in
+  [`docs/search.md`](docs/search.md).
 
 ### Opening a database file directly
 

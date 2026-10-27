@@ -89,6 +89,15 @@ type WebserviceConfig struct {
 	// pacer can otherwise reach on a small machine. 0 = runtime default.
 	LoadMemoryLimitMB int
 
+	// DisableSearchCache turns off the per-collection free-text search corpus
+	// cache. Searches still work, but each one rebuilds the corpus from the
+	// in-memory index. Use it on a memory-constrained host.
+	DisableSearchCache bool
+
+	// SearchCacheMaxMB bounds the free-text search corpus per collection.
+	// 0 selects the built-in 64 MiB default.
+	SearchCacheMaxMB int
+
 	// MaxConcurrentRequests caps how many requests execute simultaneously.
 	// Zero or negative means unbounded. tiedb is concurrency-safe, so this is a
 	// load-shedding knob, not a correctness requirement.
@@ -123,6 +132,11 @@ func NewWebservice(config WebserviceConfig) *Webservice {
 	ws.db.SetDefaultReverseRelations(config.ReverseRelations)
 	if config.LoadMemoryLimitMB > 0 {
 		ws.db.SetLoadMemoryLimit(int64(config.LoadMemoryLimitMB) * 1024 * 1024)
+	}
+	if config.DisableSearchCache {
+		ws.db.SetSearchCacheBytes(0)
+	} else if config.SearchCacheMaxMB > 0 {
+		ws.db.SetSearchCacheBytes(int64(config.SearchCacheMaxMB) * 1024 * 1024)
 	}
 	if len(config.CollectionReverseRelations) > 0 {
 		overrides := make(map[tiedb.CollectionKey][]string, len(config.CollectionReverseRelations))

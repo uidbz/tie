@@ -8,6 +8,18 @@ to follow semantic versioning.
 
 ### Added
 
+- **Free-text search (`Search`, `client.Search`, `tie search`).** A new
+  read-only request searches named relations with `words` (default,
+  cross-field), `substring`, `prefix` and `fuzzy` modes. Matching is
+  case-insensitive and accent-folded, and results are ranked deterministically.
+  The server derives a transient corpus from the existing in-memory index —
+  narrowed through the reverse `tie-type` index when types are supplied — caches
+  it per `(relations, tie-types)` and invalidates it on writes. The corpus build
+  does no record-file I/O, and **the `.tie` format is unchanged**. Cache size is
+  bounded per collection (64 MiB default) by `SearchCacheMaxMB`;
+  `DisableSearchCache` turns it off. `client.AudioSearchProfile` and
+  `client.FileSearchProfile` are the shared vocabularies for tie-audio and
+  tie-fm. See [`docs/search.md`](docs/search.md).
 - **`tie -f/--file <path.tie>` opens a database directly, with no triplestore.**
   The CLI builds the same `webservice` + `api.RegisterAll` registry the server
   uses and serves requests in-process, so `get`, `add`, `tag`, `stat`,

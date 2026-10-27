@@ -74,6 +74,8 @@ cd test-env
   `LogFile`/`LogLevel`, `MaxConcurrentRequests` (0 = unbounded),
   `LoadMemoryLimitMB`, `MaxRequestBytesMB` (a larger body is answered 413),
   `DisableLocking` (off by default when omitted; see the DB section),
+  `SearchCacheMaxMB` / `DisableSearchCache` (free-text corpus budget; see
+  `docs/search.md`),
   `[[Users]]` (Username/Password/Role), `AnonymousAccess`, `ReverseRelations`,
   and `[[Collections]]` overrides — see below.
 - **Access control (both servers).** HTTP Basic Auth with a shared role model in
@@ -142,7 +144,8 @@ cd test-env
 
 ## CLI commands
 
-`add`/`del`/`get` (triples), `upload`/`download` (files), `import` (dir trees),
+`add`/`del`/`get` (triples), `search` (free text), `upload`/`download` (files),
+`import` (dir trees),
 `stat`, `mount` (FUSE), `dump`/`restore` (TSV backup), `verify`/`repair` (fsck),
 `tag`, `versions`, `conf`, `media`, `playlist`, `history`, `version`,
 `completion`. There is no `put` — use `upload`.
@@ -300,6 +303,43 @@ set). Cost is O(candidates) forward point-lookups, memory O(result) — no
 full-collection scan or client-side download, so it holds to the memory-over-load
 weighting. `UntaggedFiles`/`tag untagged` set `MissingRelation="tag"` scoped to a
 `tie-type`; any client (e.g. imgview) can pass the field on a normal `Query`.
+
+## Free-text search (`Search`)
+
+The triples are exact-match only, so free-text search is a new read path over
+the **in-memory index**, not a new record type. `tiedb/search.go` builds a
+transient corpus per `(relations, tie-types)` selection:
+
+- Candidate subjects are narrowed with the reverse `tie-type` index (default
+  reverse-indexed); without it the engine falls back to a full forward walk plus
+  direct type membership. Results are identical either way.
+- Values are reconstructed with `levelOf` + `getValueString` from the entry
+  trie, so the build does **no record-file I/O** and touches neither the triple
+  cache nor the writer queue.
+- The corpus is one entry per subject with one field per searchable
+  `(relation, value)`; identical value text is shared. It is immutable, so
+  concurrent readers need no lock.
+- `Collection.searchGen` (atomic) is bumped by `insertAssociation`,
+  `deleteAssociation` and a repairing `CheckIndex`. A corpus carries its
+  revision and is reused only while the generation matches; a write during a
+  build prevents installation.
+- Cache: per collection, LRU over corpora, `searchMaxBytes` (64 MiB default,
+  `SetSearchCacheBytes(0)` disables). The triplestore config exposes
+  `SearchCacheMaxMB` and `DisableSearchCache`.
+
+Matching is **subject-level**, so different query tokens may be satisfied by
+different fields (`beatles abbey` = artist + album). Modes: `words` (default,
+cross-field), `substring` (one field, in order), `prefix`, `fuzzy` (bounded
+Levenshtein). Case and accents are folded, apostrophes dropped. Scores are
+integers (deterministic); ties break by relation, value, key. Empty query/relation
+lists and no matches are successful empty results (not `ErrNotFound`).
+
+The wire request is `api.Search` (`IdSearch`, read role, also in
+`webservice/client.go`'s retry allowlist). `client.Search`/`SearchContext`,
+`client.AudioSearchProfile` and `client.FileSearchProfile` are the shared
+surface; `tie search QUERY --relation ...` is the CLI (it requires an explicit
+relation). Full semantics, protocol examples, performance and app wiring are in
+[`docs/search.md`](docs/search.md).
 
 ## Read path: the blob cache (perf-relevant)
 

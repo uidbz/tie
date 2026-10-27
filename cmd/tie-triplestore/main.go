@@ -72,6 +72,12 @@ type TripleStoreConfig struct {
 	// reverse for every collection. Empty falls back to defaultReverseRelations
 	// below. Restricting it cuts association memory on metadata-heavy stores.
 	ReverseRelations []string
+	// DisableSearchCache turns off the per-collection free-text search corpus
+	// cache. Searches still work by rebuilding the corpus per request.
+	DisableSearchCache bool
+	// SearchCacheMaxMB bounds the free-text search corpus per collection.
+	// 0 selects the built-in 64 MiB default.
+	SearchCacheMaxMB int
 	// Collections holds per-collection overrides of ReverseRelations. A restart
 	// is required for a change to take effect (the reverse index is rebuilt from
 	// forward triples at load time).
@@ -154,6 +160,8 @@ Configuration (server settings and user accounts) is read from a TOML file.
 		LoadMemoryLimitMB:          cfg.LoadMemoryLimitMB,
 		MaxRequestBytes:            int64(cfg.MaxRequestBytesMB) * 1024 * 1024,
 		DisableLocking:             cfg.DisableLocking,
+		DisableSearchCache:         cfg.DisableSearchCache,
+		SearchCacheMaxMB:           cfg.SearchCacheMaxMB,
 	}
 
 	ws := webservice.NewWebservice(config)

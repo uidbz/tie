@@ -21,6 +21,7 @@ func RegisterAll(srv *ws.Webservice) {
 	// Reads.
 	ws.Register(srv, IdDummy, auth.AccessRead, dummyHandler)
 	ws.Register(srv, IdQuery, auth.AccessRead, queryHandler)
+	ws.Register(srv, IdSearch, auth.AccessRead, searchHandler)
 	ws.Register(srv, IdExpand, auth.AccessRead, expandHandler)
 	ws.Register(srv, IdAssociated, auth.AccessRead, associatedHandler)
 	ws.Register(srv, IdCoTags, auth.AccessRead, coTagsHandler)

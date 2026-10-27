@@ -104,6 +104,12 @@ func (ic *Collection) setIOErr(err error) {
 
 func (ic *Collection) closeDB() {
 	ic.closed.Store(true)
+	// Release the search corpus: it is derived data and holding it after a
+	// shutdown only delays the memory going back to the OS.
+	ic.searchMu.Lock()
+	ic.searchCache = nil
+	ic.searchBytes = 0
+	ic.searchMu.Unlock()
 	if ic.readOnly {
 		// No writer goroutine, no lock; just the private read fd.
 		if f := ic.getFile(); f != nil {

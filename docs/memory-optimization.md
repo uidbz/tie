@@ -273,3 +273,33 @@ What remains is smaller, workload-dependent, or high-risk:
 values) or a custom map implementation, there is no known large structural memory
 win left in the association index.** Further effort is better aimed at the entry
 axis or at accepting the current heap.
+
+## Free-text search corpus (2026-10)
+
+`tiedb/search.go` adds a **transient** corpus, not a persistent index. It exists
+because triples are exact-match and materialising tokens/trigrams as triples
+would add permanent associations and reverse-index entries for every searchable
+string.
+
+The corpus is derived from the already-resident index — candidate subjects via
+the reverse `tie-type` index when types are supplied, values via `levelOf` +
+`getValueString` — so the build performs **no record-file I/O** and allocates no
+entry or association records. Its memory is therefore additive to the loaded
+index, not a rewrite of it:
+
+- one `searchSubject` per subject, one `searchField` per searchable
+  `(relation, value)` pair;
+- one shared `*searchValue` per distinct text, so repeated artist/album names
+  cost one string, not one per track;
+- folded text and a token slice per distinct value (tokens are separate strings
+  because apostrophes are removed).
+
+The cache is keyed by `(relations, tie-types)` and is LRU-evicted against a
+per-collection byte budget (`searchMaxBytes`, 64 MiB default). A corpus larger
+than the whole budget is used for the request and not installed. `0` disables
+caching entirely: searches still work by rebuilding the corpus per request.
+
+This keeps the memory discipline in this document intact: **search does not
+change the load path, the record format, the entry trie, or either association
+index.** It only adds an opt-in, capped, evictable cache, and the write path
+pays one atomic increment per forward-index mutation (`searchGen.Add(1)`).

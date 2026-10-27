@@ -54,6 +54,11 @@ type TieTree struct {
 	// that must coexist with a live writer (a direct `tie --read-only` beside a
 	// running mount).
 	readOnly bool
+
+	// searchMaxBytes is the per-collection free-text search corpus budget in
+	// bytes. NewDB sets the 64 MiB default; SetSearchCacheBytes(0) disables
+	// caching (searches still work, rebuilding the corpus each time).
+	searchMaxBytes int64
 }
 
 // SetBlobPolicy sets a whole-value blob policy applied to newly created
@@ -82,11 +87,19 @@ func (tree *TieTree) SetReverseRelationsOverrides(overrides map[CollectionKey][]
 	tree.reverseOverrides = overrides
 }
 
+// SetSearchCacheBytes sets the per-collection free-text search corpus budget
+// in bytes. The default is 64 MiB; 0 disables caching (every search rebuilds
+// the corpus from the in-memory index). Call before collections are loaded.
+func (tree *TieTree) SetSearchCacheBytes(n int64) {
+	tree.searchMaxBytes = n
+}
+
 func NewDB(writeToDisk bool) *TieTree {
 	return &TieTree{
-		collections: newLockedTree[CollectionKey, *Collection](collectionKeyHash),
-		writeToDisk: writeToDisk,
-		pending:     map[CollectionKey]*pendingLoad{},
+		collections:    newLockedTree[CollectionKey, *Collection](collectionKeyHash),
+		writeToDisk:    writeToDisk,
+		pending:        map[CollectionKey]*pendingLoad{},
+		searchMaxBytes: defaultSearchCacheBytes,
 	}
 }
 
@@ -277,6 +290,7 @@ func (db *TieTree) initialize(path string, dbname string, clearExistingDB bool) 
 	ic.SetReverseRelations(reverse)
 	ic.SetBlobPolicy(db.blobPolicy)
 	ic.loadMemoryLimit = db.loadMemoryLimit
+	ic.searchMaxBytes = db.searchMaxBytes
 
 	if db.writeToDisk {
 		ic.cache = newTripleCache(defaultTripleCacheSize)

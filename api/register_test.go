@@ -16,12 +16,12 @@ import (
 // readRequests table allowed (§7.5).
 var protocolIds = []string{
 	IdAdd, IdAssociated, IdBatch, IdCheckIndex, IdCoTags, IdDelete, IdDrop,
-	IdDummy, IdDump, IdExpand, IdMkDir, IdQuery, IdSet, IdSync, IdUpdate, IdVersion,
+	IdDummy, IdDump, IdExpand, IdMkDir, IdQuery, IdSearch, IdSet, IdSync, IdUpdate, IdVersion,
 }
 
 // readIds are the requests that change nothing server-side.
 var readIds = []string{
-	IdDummy, IdQuery, IdExpand, IdAssociated, IdCoTags, IdVersion, IdDump,
+	IdDummy, IdQuery, IdSearch, IdExpand, IdAssociated, IdCoTags, IdVersion, IdDump,
 }
 
 func registerAllServer(t *testing.T) *httptest.Server {

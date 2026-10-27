@@ -38,6 +38,7 @@ func retryBackoff(attempt int) time.Duration {
 var readOnlyRequests = map[string]bool{
 	"Dummy":      true,
 	"Query":      true,
+	"Search":     true,
 	"Expand":     true,
 	"Associated": true,
 	"CoTags":     true,

@@ -287,6 +287,13 @@ func (ic *Collection) CheckIndex(opts IndexCheckOptions) IndexReport {
 		}
 		rep.Repaired++
 	}
+	if rep.Repaired > 0 {
+		// Repairs mutate forward or reverse index entries directly rather than
+		// through insertAssociation/deleteAssociation. Any forward change must
+		// invalidate the search corpus; bump unconditionally (a repair is rare
+		// and the cost is one atomic add).
+		ic.searchGen.Add(1)
+	}
 	return rep
 }
 
