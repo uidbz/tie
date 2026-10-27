@@ -93,6 +93,10 @@ func (ic *Collection) addLocked(key string, value1 string, value2 string) error 
 		pos = ic.arenaStore(&ass)
 	}
 	ic.insertAssociation(keyLevel, &ass, pos)
+	// The forward index changed: a cached search corpus is now stale. Bump
+	// here, not in insertAssociation, so a bulk load (which calls that helper
+	// once per record) does not pay an atomic per triple.
+	ic.searchGen.Add(1)
 	return nil
 }
 
@@ -150,6 +154,7 @@ func (ic *Collection) deleteLocked(key string, value1 string, value2 string) (st
 		if pos, found := asses.Get(assKey); found {
 			ic.deleteAssociation(asses, assKey, pos)
 			rev.Delete(reverseAssKey)
+			ic.searchGen.Add(1) // forward index changed; corpus is stale
 			return "", true
 		}
 	}
@@ -247,13 +252,11 @@ func (ic *Collection) insertAssociation(level int, a *Triple, pos int64) {
 
 	// Insert reverse association (only for relations we index in reverse)
 	if !ic.shouldBuildReverse(a) {
-		ic.searchGen.Add(1)
 		return
 	}
 	rev, _ := ic.reverseAssociationsTree(a.Value2Level) // exists after secureLevelInIndex / hash store
 	putAssoc(rev, a.Value2,
 		UniqueAssociation{AssociateTo: a.Key, Relation: a.Value1}, pos)
-	ic.searchGen.Add(1)
 }
 
 func (ic *Collection) getAssociations(level int, entryID uint64) *AssociationSet {
@@ -276,10 +279,6 @@ func (ic *Collection) getReverseAssociations(level int, entryID uint64) *Associa
 
 func (ic *Collection) deleteAssociation(tree *AssociationSet, key UniqueAssociation, triplePos int64) {
 	tree.Delete(key)
-	// The forward index changed: invalidate the search corpus. A delete that
-	// only clears a stale reverse entry never reaches this function and does
-	// not affect search (which reads forward sets only).
-	ic.searchGen.Add(1)
 
 	if ic.writeToDisk {
 		if ic.cache != nil && triplePos >= 0 {
