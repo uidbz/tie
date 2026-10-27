@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"time"
 
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/tiedb"
@@ -198,8 +197,3 @@ func relationWeights(weights map[Relation]int) map[string]int {
 	}
 	return out
 }
-
-// SearchTimeout is a convenience bound for callers that do not already carry a
-// context (a CLI one-shot, a script). GUI callers should cancel their own
-// context when the query changes instead of using a fixed timeout.
-const SearchTimeout = 30 * time.Second
