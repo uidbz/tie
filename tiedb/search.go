@@ -105,7 +105,6 @@ type SearchMatch struct {
 // subjects. It is shared by concurrent readers without locks.
 type searchCorpus struct {
 	revision uint64
-	key      string
 	subjects []*searchSubject
 	bytes    int64
 	lastUse  uint64 // guarded by Collection.searchMu; LRU order

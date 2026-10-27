@@ -273,7 +273,7 @@ func TestSearchCacheDisabled(t *testing.T) {
 			t.Fatalf("run %d: total = %d, matches = %v", i, total, searchKeys(matches))
 		}
 	}
-	if col.searchCache != nil && len(col.searchCache) != 0 {
+	if len(col.searchCache) != 0 {
 		t.Errorf("cache disabled but %d corpora installed", len(col.searchCache))
 	}
 }
