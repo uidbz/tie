@@ -74,6 +74,16 @@ func TestSearchCommandBadMode(t *testing.T) {
 	}
 }
 
+func TestSearchCommandBadType(t *testing.T) {
+	a := searchTestApp(t)
+
+	_, err := runSearch(t, a, "abbey", "--relation", "album", "--type", "audioo-file")
+	var ee exitError
+	if !errors.As(err, &ee) || ee.code != exitUsage {
+		t.Fatalf("bad type: err = %v, want exit-2", err)
+	}
+}
+
 func TestSearchCommandNoMatchesIsEmptySuccess(t *testing.T) {
 	a := searchTestApp(t)
 

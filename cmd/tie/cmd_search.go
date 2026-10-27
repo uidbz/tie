@@ -51,11 +51,15 @@ func cmdSearch(a *app) *cli.Command {
 			if err != nil {
 				return exitError{code: exitUsage, msg: err.Error()}
 			}
+			types, err := searchTypes(ctx.StringSlice("type"))
+			if err != nil {
+				return exitError{code: exitUsage, msg: err.Error()}
+			}
 
 			spec := client.SearchSpec{
 				Query:     args[0],
 				Relations: searchRelations(relations),
-				TieTypes:  searchTypes(ctx.StringSlice("type")),
+				TieTypes:  types,
 				Mode:      mode,
 				Weights:   weights,
 				Offset:    ctx.Int("offset"),
@@ -133,12 +137,18 @@ func searchRelations(values []string) []client.Relation {
 	return out
 }
 
-func searchTypes(values []string) []client.TieType {
+func searchTypes(values []string) ([]client.TieType, error) {
 	out := make([]client.TieType, 0, len(values))
 	for _, v := range values {
-		if v = strings.TrimSpace(v); v != "" {
-			out = append(out, client.StringToTieType(v))
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
 		}
+		t := client.StringToTieType(v)
+		if t.String() != v {
+			return nil, fmt.Errorf("unknown tie-type %q: use a built-in type such as audio-file, audio-dir, directory or file", v)
+		}
+		out = append(out, t)
 	}
-	return out
+	return out, nil
 }
