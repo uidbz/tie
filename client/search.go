@@ -74,18 +74,20 @@ func (p SearchProfile) Spec(query string) SearchSpec {
 	}
 }
 
-// AudioSearchProfile is the vocabulary tie-audio searches: artist/album names
-// and track titles, scoped to audio collections, audio files and audio
-// archives. Album/artist matches live on track rows too, so callers should
-// expect several rows per album and group them by member-of/parent.
+// AudioSearchProfile is the vocabulary tie-audio searches: artist/album names,
+// track titles, genre and tags, scoped to audio collections, audio files and
+// audio archives. Album/artist matches live on track rows too, so callers
+// should expect several rows per album and group them by member-of/parent.
 var AudioSearchProfile = SearchProfile{
-	Relations: []Relation{RelTitle, RelAlbum, RelAlbumArtist, RelArtist, RelFilename},
+	Relations: []Relation{RelTitle, RelAlbum, RelAlbumArtist, RelArtist, RelGenre, RelTag, RelFilename},
 	TieTypes:  []TieType{TieAudioFile, TieAudioDir, TieAudioArchive},
 	Weights: map[Relation]int{
 		RelTitle:       150,
 		RelAlbum:       120,
 		RelAlbumArtist: 110,
 		RelArtist:      100,
+		RelGenre:       90,
+		RelTag:         80,
 		RelFilename:    60,
 	},
 	Mode: SearchWords,

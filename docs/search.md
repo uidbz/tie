@@ -54,7 +54,7 @@ Typical sets:
 
 | App | Relations |
 |---|---|
-| tie-audio | `title`, `album`, `album-artist`, `artist`, `filename` |
+| tie-audio | `title`, `album`, `album-artist`, `artist`, `genre`, `tag`, `filename` |
 | tie-fm | `filename`, `name` |
 | Ad hoc | `tag`, `genre`, any relation the collection uses |
 
@@ -386,7 +386,9 @@ The apps use the same profiles and add only presentation logic.
 
 1. `Session.Search` calls `client.AudioSearchProfile.Spec(query)` with
    `Expand: true` and a generous page (500) so album grouping sees a
-   representative set.
+   representative set. The profile also searches `genre` and `tag`, so a query
+   like `jazz` surfaces tagged/genre-matched albums without a separate tag
+   query.
 2. Album/artist/title hits are expanded. Track hits contribute their
    `member-of` (preferred) or `parent` album UID; those album rows are fetched
    with one `Expand` and classified with the same row classifier the album wall

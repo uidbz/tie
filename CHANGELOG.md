@@ -19,7 +19,8 @@ to follow semantic versioning.
   bounded per collection (64 MiB default) by `SearchCacheMaxMB`;
   `DisableSearchCache` turns it off. `client.AudioSearchProfile` and
   `client.FileSearchProfile` are the shared vocabularies for tie-audio and
-  tie-fm. See [`docs/search.md`](docs/search.md).
+  tie-fm (the audio profile includes genre and tags). See
+  [`docs/search.md`](docs/search.md).
 - **`tie -f/--file <path.tie>` opens a database directly, with no triplestore.**
   The CLI builds the same `webservice` + `api.RegisterAll` registry the server
   uses and serves requests in-process, so `get`, `add`, `tag`, `stat`,
