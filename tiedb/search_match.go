@@ -90,6 +90,11 @@ type preparedSearchQuery struct {
 	raw     string   // folded, whitespace-collapsed full query
 	tokens  []string // folded tokens, de-duplicated, order preserved
 	weights map[string]int
+
+	// fieldScores is scratch owned by one Search call. matchTokens reuses it
+	// for every subject, so a warm query does not allocate a score slice per
+	// subject. It is not safe to use one preparedSearchQuery concurrently.
+	fieldScores []int
 }
 
 func prepareSearchQuery(q SearchQuery) preparedSearchQuery {
@@ -184,7 +189,13 @@ func fieldAt(s *searchSubject, i int) *searchField {
 }
 
 func (q *preparedSearchQuery) matchTokens(s *searchSubject) (bool, int, int) {
-	perField := make([]int, len(s.fields))
+	if cap(q.fieldScores) < len(s.fields) {
+		q.fieldScores = make([]int, len(s.fields))
+	} else {
+		q.fieldScores = q.fieldScores[:len(s.fields)]
+		clear(q.fieldScores)
+	}
+	perField := q.fieldScores
 	total := 0
 	for _, token := range q.tokens {
 		best, bestField := -1, -1
