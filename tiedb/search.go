@@ -370,6 +370,18 @@ func (ic *Collection) buildCorpus(q SearchQuery, revision uint64) *searchCorpus 
 	}
 
 	shared := make(map[string]*searchValue)
+	// Entry text is immutable for the life of a collection, and ids are
+	// collection-global, so one build can reuse a value's reconstructed text
+	// instead of walking the trie again for every track that carries it.
+	textByID := make(map[uint64]string)
+	textFor := func(level int, id uint64) string {
+		if text, ok := textByID[id]; ok {
+			return text
+		}
+		text := ic.getValueString(level, id)
+		textByID[id] = text
+		return text
+	}
 	valueFor := func(text string) *searchValue {
 		if v, ok := shared[text]; ok {
 			return v
@@ -381,32 +393,33 @@ func (ic *Collection) buildCorpus(q SearchQuery, revision uint64) *searchCorpus 
 	}
 
 	addSubject := func(subjectID uint64, level int, set *AssociationSet) {
-		// Snapshot the association entries first: AssociationSet.ForEach may
-		// hold a shard read lock across the callback, and resolving a value
+		// Snapshot the requested association entries first: AssociationSet.ForEach
+		// may hold a shard read lock across the callback, and resolving a value
 		// takes entry-tree locks. Doing the resolution after ForEach returns
-		// keeps the lock layers in the order doc.go documents.
+		// keeps the lock layers in the order doc.go documents. Filtering inside
+		// the callback is only a map lookup; it keeps unrelated metadata out of
+		// the snapshot.
 		refs := make([]UniqueAssociation, 0, 8)
 		set.ForEach(func(ua UniqueAssociation, _ int64) {
-			refs = append(refs, ua)
+			if _, ok := relIDs[ua.Relation]; ok {
+				refs = append(refs, ua)
+			}
 		})
 		if len(refs) == 0 {
 			return
 		}
-		key := ic.getValueString(level, subjectID)
+		key := textFor(level, subjectID)
 		if key == "" {
 			return
 		}
 		fields := make([]searchField, 0, len(refs))
 		for _, ua := range refs {
-			relation, ok := relIDs[ua.Relation]
-			if !ok {
-				continue
-			}
+			relation := relIDs[ua.Relation]
 			valueLevel, ok := ic.levelOf(ua.AssociateTo)
 			if !ok {
 				continue
 			}
-			text := ic.getValueString(valueLevel, ua.AssociateTo)
+			text := textFor(valueLevel, ua.AssociateTo)
 			if text == "" || len(text) > maxSearchFieldBytes {
 				continue
 			}

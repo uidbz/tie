@@ -379,6 +379,26 @@ func TestNormalizeSearchNamesAndWeights(t *testing.T) {
 	}
 }
 
+func TestSearchCorpusOnlyRequestedRelations(t *testing.T) {
+	col := NewDB(false).GetCollection(CollectionKey{"mem", "relations"})
+	col.Add("s", "tie-type", "audio-file")
+	col.Add("s", "album", "Abbey Road")
+	col.Add("s", "artist", "The Beatles")
+	col.Add("s", "tag", "rock")
+	col.Add("s", "filename", "01 - Come Together.flac")
+
+	q := normalizeSearchQuery(SearchQuery{Text: "abbey", Relations: []string{"album"}})
+	corpus := col.corpusFor(corpusKey(q), q)
+	if len(corpus.subjects) != 1 {
+		t.Fatalf("subjects = %d, want 1", len(corpus.subjects))
+	}
+	for _, f := range corpus.subjects[0].fields {
+		if f.relation != "album" {
+			t.Errorf("corpus carries unrequested relation %q", f.relation)
+		}
+	}
+}
+
 func TestSearchEmptyAndLimits(t *testing.T) {
 	col := searchFixture(t)
 
