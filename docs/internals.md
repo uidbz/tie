@@ -363,8 +363,11 @@ transient corpus from the forward-association index and the value trie:
   `getValueString`. Both are entry-trie walks, so the build reads no records and
   does not use the triple cache or the disk-read queue.
 - The corpus is cached per `(relations, tie-types)` and tagged with
-  `searchGen`. Every forward-index mutation bumps the generation; a corpus is
-  reused only while its revision matches. `CheckIndex --repair` bumps it too.
+  `searchGen`. Every user write (`addLocked`/`deleteLocked`, including
+  Update/Set/batches) bumps the generation, and a repairing `CheckIndex` does
+  too; bulk load does not, because the collection is not served until it
+  finishes. A corpus is reused only while its revision matches, and stale
+  corpora are dropped on the next search.
 
 Matching is subject-level and supports `words` (cross-field, default),
 `substring`, `prefix` and `fuzzy`. See [`search.md`](search.md) for the full

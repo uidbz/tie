@@ -15,10 +15,10 @@ package tiedb
 //     trie. No record-file reads, no blob cache, no writer-queue traffic.
 //
 // The corpus is cached per (relations, tie-types) pair and invalidated by
-// searchGen, which every forward-index mutation bumps. Memory is bounded by
-// searchMaxBytes; a corpus that does not fit is used for one request and not
-// installed. Cache-off is a supported mode: the same code path builds and
-// discards the corpus on every search.
+// searchGen, which user writes (addLocked/deleteLocked) and a repairing
+// CheckIndex bump. Memory is bounded by searchMaxBytes; a corpus that does not
+// fit is used for one request and not installed. Cache-off is a supported mode:
+// the same code path builds and discards the corpus on every search.
 
 import (
 	"cmp"

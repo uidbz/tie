@@ -52,6 +52,7 @@
 // trie (levelOf + getValueString), narrowing candidates through the reverse
 // tie-type index when the caller names tie-types. The build performs no
 // record-file I/O. The corpus is cached per (relations, tie-types) and
-// invalidated by searchGen, which every forward-index mutation bumps; memory is
-// bounded by SetSearchCacheBytes. See ../docs/search.md.
+// invalidated by searchGen, which user writes (addLocked/deleteLocked) and a
+// repairing CheckIndex bump; memory is bounded by SetSearchCacheBytes. See
+// ../docs/search.md.
 package tiedb

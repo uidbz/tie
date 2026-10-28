@@ -65,7 +65,10 @@ attributes already carry `path` for navigation.
 ### Tie-types
 
 `TieTypes` restricts candidates to subjects carrying at least one of the named
-`tie-type` values (`audio-file`, `audio-dir`, `directory`, `file`, …).
+`tie-type` values (`audio-file`, `audio-dir`, `directory`, `file`, …). Custom
+dir-type labels (`live-album`, `playlist`, a site-specific label) are valid
+`tie-type` values too; the Go client passes them through `SearchSpec.TieTypeNames`
+and `tie search --type` accepts any label registered under `(types, all, …)`.
 
 When `tie-type` is in the collection's reverse index (the default), candidate
 subjects are looked up directly with `GetReverseAssociations(type)`, so a search
@@ -107,22 +110,29 @@ They are not probabilities; only relative order matters.
 
 | Match | Base |
 |---|---|
-| Field equals the whole query | 1000 |
-| Field starts with the whole query | 850 |
-| Token equals a candidate token | 800 |
+| Field equals the whole query (`substring`) | 1000 |
+| Field starts with the whole query (`substring`) | 850 |
+| Whole query at a word boundary (`substring`) | 800 |
+| Whole query anywhere in a field (`substring`) | 600 |
+| Token equals a candidate token (`words`/`prefix`/`fuzzy`) | 800 |
 | Candidate token starts with the query token | 700 |
 | Candidate token contains the query token | 600 |
 | Field contains the query token across token boundaries | 500 |
 | Fuzzy distance 1 | 500 |
 | Fuzzy distance 2 | 400 |
 
+The whole-query rows are used by `substring` mode. The other modes score each
+query token and sum the per-token bests.
+
 Then:
 
-- The per-token best scores are summed.
-- A field containing the complete query gets a `+250` phrase bonus.
+- A field containing the complete query gets a `+250` phrase bonus (`words`,
+  `prefix`, `fuzzy`).
 - An optional per-relation weight (percent) scales a field's contribution.
 - A small length bonus prefers `Rock` over a long title beginning with `Rock`.
 - Ties break deterministically: relation ascending, then value, then subject key.
+  The representative relation/value of a hit uses the same tie-break, so a
+  corpus rebuild cannot reorder equal-scoring hits.
 
 ### Limits and empty results
 
@@ -132,9 +142,11 @@ Then:
 | Query tokens | — | 16 |
 | Relations | — | 16 |
 | Tie-types | — | 32 |
+| Relation/type/weight name | — | 256 bytes |
 | Field value length | — | 1024 bytes |
 | Page size | 100 | 1000 |
 | Offset | 0 | 100000 |
+| Cached corpora per collection | — | 16 |
 
 - An empty query, a punctuation-only query, or an empty relation list is a
   **successful empty result**, not `ErrNotFound`. Search is a UI primitive;
@@ -202,18 +214,21 @@ nests an association-set lock inside an entry-tree lookup.
 
 ### Invalidation
 
-`Collection.searchGen` is an atomic counter bumped by:
+`Collection.searchGen` is an atomic counter bumped by the user-write paths:
 
-- `insertAssociation` (every successful `Add`, including load),
-- `deleteAssociation` (every forward removal; reverse-only cleanup does not
-  count),
-- `CheckIndex` with a repair.
+- `addLocked` (every successful `Add`, `Update`, `Set` and batch add),
+- `deleteLocked` (every forward removal; reverse-only cleanup does not count),
+- `CheckIndex` when a repair actually changes the index.
+
+The bulk load inserts entries and associations without bumping: a collection is
+not served until the load finishes, so no corpus can exist at generation 0.
 
 A corpus carries the generation it was built at. `Search` reuses it only if the
-generation still matches; otherwise it rebuilds. A write that lands during a
-build prevents that corpus from being installed, so a later query cannot serve
-stale data. The in-flight query itself is a snapshot, exactly like a paged
-`Query` held across a write.
+generation still matches; otherwise it rebuilds. Corpora with an older
+generation are dropped as soon as a search observes the new one, and a write
+that lands during a build prevents that corpus from being installed, so a later
+query cannot serve stale data. The in-flight query itself is a snapshot, exactly
+like a paged `Query` held across a write.
 
 ### Memory
 
@@ -228,10 +243,11 @@ DisableSearchCache = false
 ```
 
 The budget is an estimate (`len(text) + len(norm) + tokens*16 + struct
-overhead`), and eviction is least-recently-used across corpora. A corpus larger
-than the whole budget is used for the request and not installed. With
-`DisableSearchCache = true`, every search rebuilds the corpus — correct, just
-slower; useful on a memory-constrained host.
+overhead`), plus the selection key itself, and eviction is least-recently-used
+across corpora. At most 16 corpora are retained, so empty selections cannot
+accumulate. A corpus larger than the whole budget is used for the request and
+not installed. With `DisableSearchCache = true`, every search rebuilds the
+corpus — correct, just slower; useful on a memory-constrained host.
 
 ### Measured performance
 
@@ -331,11 +347,17 @@ for _, m := range matches {
 
 - `SearchContext` is the cancellable form; GUIs should cancel the in-flight
   query when the user types again.
-- `SearchWords/Substring/Prefix/Fuzzy` are re-exported, as are `SearchMatch`
-  and `SearchSpec`.
+- `SearchPage`/`SearchPageContext` return `SearchResult{Matches, Total,
+  Revision}`. Use them when paging a live collection: if page two reports a
+  different `Revision` than page one, a write landed in between and the caller
+  should restart the query. `Search` keeps the old three-value signature and is
+  a wrapper around `SearchPage`.
+- `SearchWords/Substring/Prefix/Fuzzy` are re-exported, as are `SearchMatch`,
+  `SearchResult` and `SearchSpec`.
 - `AudioSearchProfile` and `FileSearchProfile` are the shared vocabularies.
   They are plain values; copy and adjust the relation/type lists for an app's
-  own collection.
+  own collection. `SearchSpec.TieTypeNames`/`SearchProfile.TieTypeNames` carry
+  custom dir-type labels the `TieType` enum cannot express.
 
 Building a raw spec:
 
@@ -354,12 +376,14 @@ matches, total, err := tie.Search(client.SearchSpec{
 ## CLI
 
 `tie search` requires at least one `--relation`; it deliberately has no default
-vocabulary.
+vocabulary. `--type` accepts a built-in tie-type name or any custom dir-type
+label registered in the collection.
 
 ```sh
 tie search "abbey road" --relation album --relation title
 tie search beatles --relation artist --relation album-artist --type audio-file
 tie search cover --relation filename --relation name --type directory --type file
+tie search remaster --relation album --type live-album
 tie search abbey --relation album --mode substring
 tie search beet --relation artist --mode fuzzy --limit 20
 tie search jazz --relation tag --relation genre
@@ -374,9 +398,10 @@ Useful combinations:
 - `--type` is what keeps a search cheap; without it the engine may fall back to
   a full subject walk.
 - `--weight relation=percent` tunes ranking, e.g. `--weight title=150`.
-- `-o/--offset` and `-l/--limit` page a large result list; the exact total is
-  available in JSON (`totalCount`) and in the terminal note when a page is
-  truncated.
+- `-o/--offset` and `-l/--limit` page a large result list. The exact total is
+  printed on stderr when stdout is a terminal and the page is truncated; a
+  script that needs the total or the revision (to detect a write between pages)
+  should call `client.SearchPage`, whose `SearchResult` carries both.
 
 ## tie-audio and tie-fm integration
 

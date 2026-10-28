@@ -319,10 +319,13 @@ transient corpus per `(relations, tie-types)` selection:
 - The corpus is one entry per subject with one field per searchable
   `(relation, value)`; identical value text is shared. It is immutable, so
   concurrent readers need no lock.
-- `Collection.searchGen` (atomic) is bumped by `insertAssociation`,
-  `deleteAssociation` and a repairing `CheckIndex`. A corpus carries its
-  revision and is reused only while the generation matches; a write during a
-  build prevents installation.
+- `Collection.searchGen` (atomic) is bumped by the user-write paths
+  (`addLocked`/`deleteLocked`, including Update/Set/batches) and by a repairing
+  `CheckIndex`; the bulk load deliberately does not bump it, because a
+  collection is not served until loading finishes and no corpus can exist at
+  generation 0. A corpus carries its revision and is reused only while the
+  generation matches; a write during a build prevents installation. Corpora
+  from an older generation are dropped on the next search.
 - Cache: per collection, LRU over corpora, `searchMaxBytes` (64 MiB default,
   `SetSearchCacheBytes(0)` disables). The triplestore config exposes
   `SearchCacheMaxMB` and `DisableSearchCache`.

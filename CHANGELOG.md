@@ -61,6 +61,28 @@ to follow semantic versioning.
 - `tie conf show` gained a `db-file` row and shows `file:<path>` for the
   triplestore in direct mode.
 
+### Fixed
+
+- **Search results are deterministic again.** Equal-scoring fields are picked
+  with a total order (score, relation, value), so a corpus rebuild after a write
+  can no longer reorder hits by map iteration order (#131).
+- **Search corpus keys are unambiguous and bounded.** Names are length-prefixed
+  and sorted, key bytes and an entry cap count toward the cache budget, and stale
+  corpora are dropped as soon as a search sees the new generation (#132, #136).
+- **`client.SearchPage` exposes the index revision**, so paging across a write
+  can restart; empty replies encode `matches: []` instead of `null` (#133).
+- **`tie search --type` accepts registered custom dir-types** such as
+  `live-album`, while still rejecting typos (#134).
+- **Search input is clamped before it is allocated** (rune truncation, capped
+  relation/type/weight names), and corpus builds no longer re-walk the value
+  trie for repeated values or snapshot unrelated relations (#135, #137).
+- **Warm search and fuzzy matching allocate less**: the per-subject field-score
+  slice is reused and fuzzy edit distance uses stack buffers with an early
+  exit (#138, #139).
+- **Search documentation matches the implementation** (invalidation points at
+  the user-write paths, scoring is mode-specific, and the CLI total is the TTY
+  note; scripts use `client.SearchPage`) (#140).
+
 ## [v0.7.4] - 2026-10-20
 
 ### Added

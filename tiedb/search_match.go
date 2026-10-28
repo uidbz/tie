@@ -74,7 +74,7 @@ func searchTokens(s string) []string {
 		if r == '\'' || r == '\u2019' || r == '\u02bc' {
 			continue // keep "don't" one token even on unfolded input
 		}
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		if isSearchTokenRune(r) {
 			b.WriteRune(r)
 			continue
 		}
@@ -82,6 +82,21 @@ func searchTokens(s string) []string {
 	}
 	flush()
 	return toks
+}
+
+// hasSearchToken reports whether s contains at least one letter or digit, the
+// characters searchTokens treats as a token. Punctuation-only input has none.
+func hasSearchToken(s string) bool {
+	for _, r := range s {
+		if isSearchTokenRune(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSearchTokenRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 // preparedSearchQuery is one request's query text, folded and tokenised once.
@@ -120,12 +135,15 @@ func prepareSearchQuery(q SearchQuery) preparedSearchQuery {
 
 // empty reports whether the query has nothing to match on after folding (for
 // example a query of only punctuation).
+// empty reports whether the query has nothing to match on after folding (for
+// example a query of only punctuation). Substring mode does not tokenise, so it
+// checks for a letter/digit directly.
 func (q *preparedSearchQuery) empty() bool {
 	if q.raw == "" {
 		return true
 	}
 	if q.mode == SearchSubstring {
-		return false
+		return !hasSearchToken(q.raw)
 	}
 	return len(q.tokens) == 0
 }

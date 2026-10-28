@@ -379,6 +379,17 @@ func TestNormalizeSearchNamesAndWeights(t *testing.T) {
 	}
 }
 
+func TestSearchPunctuationOnlyIsEmptyInEveryMode(t *testing.T) {
+	col := NewDB(false).GetCollection(CollectionKey{"mem", "punctuation"})
+	col.Add("s", "album", "Wow!!!")
+	for _, mode := range []SearchMode{SearchWords, SearchSubstring, SearchPrefix, SearchFuzzy} {
+		matches, total, _ := col.Search(SearchQuery{Text: "!!!", Relations: []string{"album"}, Mode: mode})
+		if total != 0 || len(matches) != 0 {
+			t.Errorf("%s mode: matches = %v (total %d), want empty", mode, searchKeys(matches), total)
+		}
+	}
+}
+
 func TestSearchCorpusOnlyRequestedRelations(t *testing.T) {
 	col := NewDB(false).GetCollection(CollectionKey{"mem", "relations"})
 	col.Add("s", "tie-type", "audio-file")

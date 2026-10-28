@@ -24,12 +24,13 @@ func cmdSearch(a *app) *cli.Command {
 		Description: "Relations are required and repeatable. Matching is case-insensitive and accent-folded.\n" +
 			"The default mode is `words`: every query token must match somewhere on the subject, so\n" +
 			"`beatles abbey` finds an album whose artist is The Beatles and whose title is Abbey Road.\n" +
-			"Scoping with --type narrows candidates through the reverse tie-type index, which is what\n" +
-			"keeps a search over audio files from walking the rest of the collection.\n\n" +
+			"Scoping with --type (a built-in tie-type or a registered dir-type label) narrows candidates\n" +
+			"through the reverse tie-type index, which is what keeps a search over audio files from walking\n" +
+			"the rest of the collection.\n\n" +
 			"Output columns are key, relation, value and score. No matches is an empty result (exit 0).",
 		Flags: []cli.Flag{
 			&cli.StringSliceFlag{Name: "relation", Aliases: []string{"r"}, Usage: "Searchable relation (repeatable; required)"},
-			&cli.StringSliceFlag{Name: "type", Aliases: []string{"t"}, Usage: "tie-type scope (repeatable; empty = all types)"},
+			&cli.StringSliceFlag{Name: "type", Aliases: []string{"t"}, Usage: "tie-type scope: a built-in type or a registered dir-type (repeatable; empty = all types)"},
 			&cli.StringFlag{Name: "mode", Usage: "Match mode: words, substring, prefix or fuzzy (default: words)"},
 			&cli.IntFlag{Name: "offset", Aliases: []string{"o"}, Value: 0, Usage: "Skip this many ranked matches"},
 			&cli.IntFlag{Name: "limit", Aliases: []string{"l"}, Value: clientSearchDefaultLimit, Usage: "Maximum matches to return (max 1000)"},

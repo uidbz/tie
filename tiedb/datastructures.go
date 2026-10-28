@@ -160,10 +160,11 @@ type Collection struct {
 	db_size    int64
 
 	// Free-text search: a transient, generation-invalidated corpus derived
-	// from the in-memory index (see search.go). searchGen is bumped by every
-	// forward-index mutation; searchCache holds immutable corpora keyed by
-	// (relations, tie-types); searchBytes is their approximate size, bounded by
-	// searchMaxBytes (0 disables caching). searchUse is the LRU clock.
+	// from the in-memory index (see search.go). searchGen is bumped by the
+	// user-write paths (addLocked/deleteLocked) and a repairing CheckIndex;
+	// searchCache holds immutable corpora keyed by (relations, tie-types);
+	// searchBytes is their approximate size, bounded by searchMaxBytes (0
+	// disables caching); searchUse is the LRU clock.
 	searchGen      atomic.Uint64
 	searchMu       sync.Mutex
 	searchCache    map[string]*searchCorpus
