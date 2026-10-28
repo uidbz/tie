@@ -241,3 +241,17 @@ func TestSearchProfiles(t *testing.T) {
 		t.Errorf("FileSearchProfile types = %v, want directory and file", FileSearchProfile.TieTypes)
 	}
 }
+
+func TestSearchTieTypeNames(t *testing.T) {
+	got := tieTypeStrings([]TieType{TieAudioFile}, []string{" live-album ", ""})
+	if len(got) != 2 || got[0] != TieAudioFile.String() || got[1] != "live-album" {
+		t.Errorf("tieTypeStrings = %v, want [audio-file live-album]", got)
+	}
+	profile := SearchProfile{TieTypeNames: []string{"live-album"}}
+	if spec := profile.Spec("x"); len(spec.TieTypeNames) != 1 || spec.TieTypeNames[0] != "live-album" {
+		t.Errorf("profile spec TieTypeNames = %v", spec.TieTypeNames)
+	}
+	if !IsBuiltinTieType("audio-file") || IsBuiltinTieType("live-album") {
+		t.Error("IsBuiltinTieType classification is wrong")
+	}
+}

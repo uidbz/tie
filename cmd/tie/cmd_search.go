@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -51,19 +52,23 @@ func cmdSearch(a *app) *cli.Command {
 			if err != nil {
 				return exitError{code: exitUsage, msg: err.Error()}
 			}
-			types, err := searchTypes(ctx.StringSlice("type"))
+			types, err := searchTypes(a.tie, ctx.StringSlice("type"))
 			if err != nil {
-				return exitError{code: exitUsage, msg: err.Error()}
+				var unknown unknownTieTypeError
+				if errors.As(err, &unknown) {
+					return exitError{code: exitUsage, msg: err.Error()}
+				}
+				return operationalError("search: %v", err)
 			}
 
 			spec := client.SearchSpec{
-				Query:     args[0],
-				Relations: searchRelations(relations),
-				TieTypes:  types,
-				Mode:      mode,
-				Weights:   weights,
-				Offset:    ctx.Int("offset"),
-				Limit:     ctx.Int("limit"),
+				Query:        args[0],
+				Relations:    searchRelations(relations),
+				TieTypeNames: types,
+				Mode:         mode,
+				Weights:      weights,
+				Offset:       ctx.Int("offset"),
+				Limit:        ctx.Int("limit"),
 			}
 			matches, total, err := a.tie.Search(spec)
 			if err != nil {
@@ -137,18 +142,50 @@ func searchRelations(values []string) []client.Relation {
 	return out
 }
 
-func searchTypes(values []string) ([]client.TieType, error) {
-	out := make([]client.TieType, 0, len(values))
+// unknownTieTypeError is a usage error: the name is neither a built-in
+// TieType nor a registered dir-type. It is a distinct type so the command can
+// keep exit 2 for a typo while a failure to read the registry exits 4.
+type unknownTieTypeError struct{ name string }
+
+func (e unknownTieTypeError) Error() string {
+	return fmt.Sprintf("unknown tie-type %q: use a built-in type or a registered dir-type", e.name)
+}
+
+// searchTypes accepts built-in TieType names and custom dir-type labels from
+// the store's registry. Built-ins need no round trip; only an unknown name
+// asks ListDirTypes, so a typo is still rejected instead of silently matching
+// nothing (StringToTieType collapses an unknown name to unknown-file).
+func searchTypes(tie *client.TieClient, values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	unknown := make([]string, 0, len(values))
 	for _, v := range values {
 		v = strings.TrimSpace(v)
 		if v == "" {
 			continue
 		}
-		t := client.StringToTieType(v)
-		if t.String() != v {
-			return nil, fmt.Errorf("unknown tie-type %q: use a built-in type such as audio-file, audio-dir, directory or file", v)
+		if client.IsBuiltinTieType(v) {
+			out = append(out, v)
+			continue
 		}
-		out = append(out, t)
+		unknown = append(unknown, v)
+	}
+	if len(unknown) == 0 {
+		return out, nil
+	}
+
+	known, err := tie.ListDirTypes()
+	if err != nil {
+		return nil, fmt.Errorf("listing dir-types: %w", err)
+	}
+	set := make(map[string]bool, len(known))
+	for _, name := range known {
+		set[name] = true
+	}
+	for _, name := range unknown {
+		if !set[name] {
+			return nil, unknownTieTypeError{name: name}
+		}
+		out = append(out, name)
 	}
 	return out, nil
 }

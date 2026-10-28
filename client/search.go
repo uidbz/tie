@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"strings"
 
 	"github.com/uidbz/tie/api"
 	"github.com/uidbz/tie/tiedb"
@@ -41,7 +42,11 @@ type SearchSpec struct {
 	Query     string
 	Relations []Relation
 	TieTypes  []TieType
-	Mode      SearchMode
+	// TieTypeNames scopes candidates by raw tie-type names that the TieType
+	// enum cannot express — custom dir-type labels such as "live-album". It is
+	// merged with TieTypes; an empty list searches all types.
+	TieTypeNames []string
+	Mode         SearchMode
 	// Weights optionally scales a relation's contribution, in percent
 	// (100 = neutral). A nil map uses neutral weights for every relation.
 	Weights map[Relation]int
@@ -56,20 +61,22 @@ type SearchSpec struct {
 // SearchProfile is a reusable relation/type selection for one kind of app
 // (audio browsing, file browsing, …).
 type SearchProfile struct {
-	Relations []Relation
-	TieTypes  []TieType
-	Weights   map[Relation]int
-	Mode      SearchMode
+	Relations    []Relation
+	TieTypes     []TieType
+	TieTypeNames []string
+	Weights      map[Relation]int
+	Mode         SearchMode
 }
 
 // Spec builds a SearchSpec for query with the profile's defaults.
 func (p SearchProfile) Spec(query string) SearchSpec {
 	return SearchSpec{
-		Query:     query,
-		Relations: p.Relations,
-		TieTypes:  p.TieTypes,
-		Mode:      p.Mode,
-		Weights:   p.Weights,
+		Query:        query,
+		Relations:    p.Relations,
+		TieTypes:     p.TieTypes,
+		TieTypeNames: p.TieTypeNames,
+		Mode:         p.Mode,
+		Weights:      p.Weights,
 	}
 }
 
@@ -165,7 +172,7 @@ func (tc *TieClient) SearchPageContext(ctx context.Context, spec SearchSpec) (Se
 	request := tc.CollectionInfo().NewSearchRequest()
 	request.Query = spec.Query
 	request.Relations = relationStrings(spec.Relations)
-	request.TieTypes = tieTypeStrings(spec.TieTypes)
+	request.TieTypes = tieTypeStrings(spec.TieTypes, spec.TieTypeNames)
 	request.Mode = spec.Mode
 	request.Weights = relationWeights(spec.Weights)
 	request.Offset = spec.Offset
@@ -205,13 +212,18 @@ func relationStrings(relations []Relation) []string {
 	return out
 }
 
-func tieTypeStrings(types []TieType) []string {
-	if len(types) == 0 {
+func tieTypeStrings(types []TieType, names []string) []string {
+	if len(types) == 0 && len(names) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(types))
+	out := make([]string, 0, len(types)+len(names))
 	for _, t := range types {
 		out = append(out, t.String())
+	}
+	for _, name := range names {
+		if name = strings.TrimSpace(name); name != "" {
+			out = append(out, name)
+		}
 	}
 	return out
 }
