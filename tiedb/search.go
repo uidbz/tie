@@ -290,7 +290,7 @@ func (ic *Collection) corpusFor(key string, q SearchQuery) *searchCorpus {
 
 	ic.searchMu.Lock()
 	defer ic.searchMu.Unlock()
-	if ic.searchGen.Load() != revision || ic.searchMaxBytes <= 0 {
+	if ic.closed.Load() || ic.searchGen.Load() != revision || ic.searchMaxBytes <= 0 {
 		return c
 	}
 	if existing, ok := ic.searchCache[key]; ok && existing.revision == revision {
