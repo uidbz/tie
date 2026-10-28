@@ -123,6 +123,46 @@ func TestSearchIntegration(t *testing.T) {
 	}
 }
 
+func TestSearchPageRevision(t *testing.T) {
+	tie := NewTieClient(TestingConfig())
+	requireServer(t, tie)
+	searchSeed(t, tie)
+
+	first, err := tie.SearchPage(SearchSpec{
+		Query:     "beatles",
+		Relations: []Relation{RelAlbum, RelArtist},
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("SearchPage: %v", err)
+	}
+	if first.Revision == 0 {
+		t.Fatal("Revision = 0 after seeded writes")
+	}
+	if first.Total == 0 || len(first.Matches) == 0 {
+		t.Fatal("SearchPage found nothing")
+	}
+
+	key := "searchtest-track-revision"
+	if _, err := tie.Add(key, string(RelTitle), "Revision Test"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := tie.SearchPage(SearchSpec{
+		Query:     "revision test",
+		Relations: []Relation{RelTitle},
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("SearchPage after write: %v", err)
+	}
+	if second.Revision <= first.Revision {
+		t.Errorf("revision did not advance: first %d, second %d", first.Revision, second.Revision)
+	}
+	if second.Total != 1 || len(second.Matches) != 1 || second.Matches[0].Key != key {
+		t.Errorf("after-write page = %v (total %d), want %s", second.Matches, second.Total, key)
+	}
+}
+
 func TestSearchEmptyRelationsAndUnknownServer(t *testing.T) {
 	tie := NewTieClient(TestingConfig())
 	requireServer(t, tie)
