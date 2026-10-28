@@ -410,6 +410,34 @@ func TestSearchCorpusOnlyRequestedRelations(t *testing.T) {
 	}
 }
 
+func TestSearchCorpusConcurrentKeys(t *testing.T) {
+	col := searchFixture(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			relation := "album"
+			if i%2 == 1 {
+				relation = "title"
+			}
+			for j := 0; j < 20; j++ {
+				col.Search(SearchQuery{Text: "abbey", Relations: []string{relation}})
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if len(col.searchCache) != 2 {
+		t.Errorf("cache holds %d corpora, want 2", len(col.searchCache))
+	}
+	for key, c := range col.searchCache {
+		if c.revision != col.searchGen.Load() {
+			t.Errorf("corpus %q has revision %d, current %d", key, c.revision, col.searchGen.Load())
+		}
+	}
+}
+
 func TestSearchEmptyAndLimits(t *testing.T) {
 	col := searchFixture(t)
 

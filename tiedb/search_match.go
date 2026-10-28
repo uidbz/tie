@@ -134,8 +134,6 @@ func prepareSearchQuery(q SearchQuery) preparedSearchQuery {
 }
 
 // empty reports whether the query has nothing to match on after folding (for
-// example a query of only punctuation).
-// empty reports whether the query has nothing to match on after folding (for
 // example a query of only punctuation). Substring mode does not tokenise, so it
 // checks for a letter/digit directly.
 func (q *preparedSearchQuery) empty() bool {
