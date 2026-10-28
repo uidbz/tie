@@ -26,7 +26,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -45,6 +44,10 @@ const (
 	// maxSearchFieldBytes skips pathologically long field values (paths, blobs
 	// stored as strings) so one relation cannot dominate the corpus.
 	maxSearchFieldBytes = 1024
+	// maxSearchNameBytes bounds one relation, tie-type or weight key. Names are
+	// predicates, not data: a caller cannot use a megabyte-long "relation" to
+	// inflate a corpus key or a comparison.
+	maxSearchNameBytes = 256
 	// maxSearchRelations and maxSearchTypes bound the corpus key and the work
 	// one request can ask for.
 	maxSearchRelations = 16
@@ -151,10 +154,7 @@ func (ic *Collection) Search(q SearchQuery) (matches []SearchMatch, total int, r
 // stable order keeps one corpus per selection regardless of how a caller spells
 // it).
 func normalizeSearchQuery(q SearchQuery) SearchQuery {
-	q.Text = strings.TrimSpace(q.Text)
-	if n := utf8.RuneCountInString(q.Text); n > maxSearchTextRunes {
-		q.Text = string([]rune(q.Text)[:maxSearchTextRunes])
-	}
+	q.Text = truncateSearchText(strings.TrimSpace(q.Text), maxSearchTextRunes)
 	switch q.Mode {
 	case SearchSubstring, SearchWords, SearchPrefix, SearchFuzzy:
 	default:
@@ -177,9 +177,17 @@ func normalizeSearchQuery(q SearchQuery) SearchQuery {
 		q.Limit = MaxSearchLimit
 	}
 	if len(q.Weights) > 0 {
-		weights := make(map[string]int, len(q.Weights))
+		// Weights are only meaningful for relations this request searches, so
+		// keying by the capped relation list also bounds the map: at most 16
+		// entries, no matter how many a request carried.
+		wanted := make(map[string]bool, len(q.Relations))
+		for _, relation := range q.Relations {
+			wanted[relation] = true
+		}
+		weights := make(map[string]int, len(q.Relations))
 		for relation, w := range q.Weights {
-			if relation == "" || w <= 0 {
+			relation = strings.TrimSpace(relation)
+			if !wanted[relation] || w <= 0 {
 				continue
 			}
 			if w < 10 {
@@ -195,15 +203,37 @@ func normalizeSearchQuery(q SearchQuery) SearchQuery {
 	return q
 }
 
+// truncateSearchText cuts s to maxRunes without converting the whole string to
+// a rune slice. The walk stops at the byte index of the first rune that would
+// exceed the limit, which is also the only allocation-free way to honour the
+// limit on a hostile query.
+func truncateSearchText(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	n := 0
+	for i := range s {
+		if n == maxRunes {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 func dedupeNonEmpty(values []string, limit int) []string {
-	if len(values) == 0 {
+	if len(values) == 0 || limit <= 0 {
 		return nil
 	}
-	out := make([]string, 0, len(values))
-	seen := make(map[string]bool, len(values))
+	capacity := len(values)
+	if capacity > limit {
+		capacity = limit
+	}
+	out := make([]string, 0, capacity)
+	seen := make(map[string]bool, capacity)
 	for _, v := range values {
 		v = strings.TrimSpace(v)
-		if v == "" || seen[v] {
+		if v == "" || len(v) > maxSearchNameBytes || seen[v] {
 			continue
 		}
 		seen[v] = true

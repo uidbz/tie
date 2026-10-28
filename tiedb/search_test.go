@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 func searchFixture(t *testing.T) *Collection {
@@ -345,6 +346,36 @@ func TestSearchCacheDropsStale(t *testing.T) {
 		if c.revision != col.searchGen.Load() {
 			t.Errorf("corpus %q has stale revision %d, current %d", key, c.revision, col.searchGen.Load())
 		}
+	}
+}
+
+func TestNormalizeSearchTextTruncatesByRune(t *testing.T) {
+	input := strings.Repeat("é", maxSearchTextRunes+10)
+	q := normalizeSearchQuery(SearchQuery{Text: input})
+	if got := utf8.RuneCountInString(q.Text); got != maxSearchTextRunes {
+		t.Errorf("text has %d runes, want %d", got, maxSearchTextRunes)
+	}
+	if !utf8.ValidString(q.Text) {
+		t.Error("truncated text is not valid UTF-8")
+	}
+}
+
+func TestNormalizeSearchNamesAndWeights(t *testing.T) {
+	long := strings.Repeat("x", maxSearchNameBytes+1)
+	q := normalizeSearchQuery(SearchQuery{
+		Text:      "x",
+		Relations: []string{" album ", long, "album"},
+		TieTypes:  []string{"audio-dir", long},
+		Weights:   map[string]int{" album ": 150, "artist": 200, "": 100, "album ": 0},
+	})
+	if !slices.Equal(q.Relations, []string{"album"}) {
+		t.Errorf("relations = %v, want [album]", q.Relations)
+	}
+	if !slices.Equal(q.TieTypes, []string{"audio-dir"}) {
+		t.Errorf("types = %v, want [audio-dir]", q.TieTypes)
+	}
+	if len(q.Weights) != 1 || q.Weights["album"] != 150 {
+		t.Errorf("weights = %v, want map[album:150]", q.Weights)
 	}
 }
 
