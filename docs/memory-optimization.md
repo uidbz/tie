@@ -302,4 +302,4 @@ caching entirely: searches still work by rebuilding the corpus per request.
 This keeps the memory discipline in this document intact: **search does not
 change the load path, the record format, the entry trie, or either association
 index.** It only adds an opt-in, capped, evictable cache, and the write path
-pays one atomic increment per forward-index mutation (`searchGen.Add(1)`).
+pays one atomic increment per user Add/Delete (not per record during load).

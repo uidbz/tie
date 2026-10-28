@@ -25,8 +25,10 @@ func searchTestApp(t *testing.T) *app {
 	a := &app{config: cfg, tie: client.NewTieClientFor(cfg, "")}
 	b := a.tie.NewBatch()
 	b.Add("clisearch-album", "tie-type", "audio-dir")
+	b.Add("clisearch-album", "tie-type", "live-album")
 	b.Add("clisearch-album", "album", "Abbey Road")
 	b.Add("clisearch-album", "album-artist", "The Beatles")
+	b.Add("types", "all", "live-album")
 	if _, err := a.tie.Batch(b); err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +83,18 @@ func TestSearchCommandBadType(t *testing.T) {
 	var ee exitError
 	if !errors.As(err, &ee) || ee.code != exitUsage {
 		t.Fatalf("bad type: err = %v, want exit-2", err)
+	}
+}
+
+func TestSearchCommandCustomType(t *testing.T) {
+	a := searchTestApp(t)
+
+	out, err := runSearch(t, a, "abbey", "--relation", "album", "--type", "live-album")
+	if err != nil {
+		t.Fatalf("custom type search: %v", err)
+	}
+	if len(out) == 0 || out[:len("clisearch-album")] != "clisearch-album" {
+		t.Errorf("custom type output = %q, want clisearch-album row", out)
 	}
 }
 

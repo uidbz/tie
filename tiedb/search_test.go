@@ -2,9 +2,11 @@ package tiedb
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 )
 
 func searchFixture(t *testing.T) *Collection {
@@ -275,6 +277,164 @@ func TestSearchCacheDisabled(t *testing.T) {
 	}
 	if len(col.searchCache) != 0 {
 		t.Errorf("cache disabled but %d corpora installed", len(col.searchCache))
+	}
+}
+
+func TestSearchCorpusKeyUnambiguous(t *testing.T) {
+	// Relation/type names are arbitrary strings. Separator bytes used to let
+	// these two selections share a key and therefore a corpus.
+	if a, b := corpusKey(SearchQuery{Relations: []string{"a\x1fb"}}), corpusKey(SearchQuery{Relations: []string{"a", "b"}}); a == b {
+		t.Errorf("relation names containing the old separator collide: %q", a)
+	}
+	if a, b := corpusKey(SearchQuery{Relations: []string{"a"}, TieTypes: []string{"b"}}), corpusKey(SearchQuery{Relations: []string{"a\x1e"}, TieTypes: []string{"b"}}); a == b {
+		t.Errorf("relation/type boundary collides: %q", a)
+	}
+}
+
+func TestSearchCorpusKeyCanonicalOrder(t *testing.T) {
+	first := normalizeSearchQuery(SearchQuery{Text: "x", Relations: []string{"b", "a", "a"}, TieTypes: []string{"y", "x"}})
+	second := normalizeSearchQuery(SearchQuery{Text: "x", Relations: []string{"a", "b"}, TieTypes: []string{"x", "y"}})
+	if !slices.Equal(first.Relations, []string{"a", "b"}) {
+		t.Errorf("relations = %v, want [a b]", first.Relations)
+	}
+	if !slices.Equal(first.TieTypes, []string{"x", "y"}) {
+		t.Errorf("types = %v, want [x y]", first.TieTypes)
+	}
+	if corpusKey(first) != corpusKey(second) {
+		t.Errorf("same selection got different keys: %q vs %q", corpusKey(first), corpusKey(second))
+	}
+}
+
+func TestSearchCacheBounded(t *testing.T) {
+	col := searchFixture(t)
+	col.searchMaxBytes = 1 << 20
+	for i := 0; i < 100; i++ {
+		col.Search(SearchQuery{Text: "x", Relations: []string{fmt.Sprintf("missing-relation-%d", i)}})
+	}
+	if len(col.searchCache) > maxSearchCorpora {
+		t.Errorf("cache holds %d corpora, want <= %d", len(col.searchCache), maxSearchCorpora)
+	}
+	if col.searchBytes < 0 {
+		t.Errorf("searchBytes = %d, want >= 0", col.searchBytes)
+	}
+
+	// An empty corpus still occupies a key and a map slot, so the key bytes
+	// must be charged to the budget.
+	col.searchCache = nil
+	col.searchBytes = 0
+	col.Search(SearchQuery{Text: "x", Relations: []string{"no-such-relation"}})
+	key := corpusKey(normalizeSearchQuery(SearchQuery{Text: "x", Relations: []string{"no-such-relation"}}))
+	if col.searchBytes < int64(len(key)) {
+		t.Errorf("searchBytes = %d, want at least key length %d", col.searchBytes, len(key))
+	}
+}
+
+func TestSearchCacheDropsStale(t *testing.T) {
+	col := searchFixture(t)
+	col.Search(SearchQuery{Text: "abbey", Relations: []string{"album"}})
+	col.Search(SearchQuery{Text: "abbey", Relations: []string{"title"}})
+	if len(col.searchCache) != 2 {
+		t.Fatalf("cache holds %d corpora, want 2", len(col.searchCache))
+	}
+
+	col.Add("track-new", "title", "New Song")
+	col.Search(SearchQuery{Text: "abbey", Relations: []string{"album"}})
+	if len(col.searchCache) != 1 {
+		t.Errorf("after a write the cache holds %d corpora, want only the rebuilt one", len(col.searchCache))
+	}
+	for key, c := range col.searchCache {
+		if c.revision != col.searchGen.Load() {
+			t.Errorf("corpus %q has stale revision %d, current %d", key, c.revision, col.searchGen.Load())
+		}
+	}
+}
+
+func TestNormalizeSearchTextTruncatesByRune(t *testing.T) {
+	input := strings.Repeat("é", maxSearchTextRunes+10)
+	q := normalizeSearchQuery(SearchQuery{Text: input})
+	if got := utf8.RuneCountInString(q.Text); got != maxSearchTextRunes {
+		t.Errorf("text has %d runes, want %d", got, maxSearchTextRunes)
+	}
+	if !utf8.ValidString(q.Text) {
+		t.Error("truncated text is not valid UTF-8")
+	}
+}
+
+func TestNormalizeSearchNamesAndWeights(t *testing.T) {
+	long := strings.Repeat("x", maxSearchNameBytes+1)
+	q := normalizeSearchQuery(SearchQuery{
+		Text:      "x",
+		Relations: []string{" album ", long, "album"},
+		TieTypes:  []string{"audio-dir", long},
+		Weights:   map[string]int{" album ": 150, "artist": 200, "": 100, "album ": 0},
+	})
+	if !slices.Equal(q.Relations, []string{"album"}) {
+		t.Errorf("relations = %v, want [album]", q.Relations)
+	}
+	if !slices.Equal(q.TieTypes, []string{"audio-dir"}) {
+		t.Errorf("types = %v, want [audio-dir]", q.TieTypes)
+	}
+	if len(q.Weights) != 1 || q.Weights["album"] != 150 {
+		t.Errorf("weights = %v, want map[album:150]", q.Weights)
+	}
+}
+
+func TestSearchPunctuationOnlyIsEmptyInEveryMode(t *testing.T) {
+	col := NewDB(false).GetCollection(CollectionKey{"mem", "punctuation"})
+	col.Add("s", "album", "Wow!!!")
+	for _, mode := range []SearchMode{SearchWords, SearchSubstring, SearchPrefix, SearchFuzzy} {
+		matches, total, _ := col.Search(SearchQuery{Text: "!!!", Relations: []string{"album"}, Mode: mode})
+		if total != 0 || len(matches) != 0 {
+			t.Errorf("%s mode: matches = %v (total %d), want empty", mode, searchKeys(matches), total)
+		}
+	}
+}
+
+func TestSearchCorpusOnlyRequestedRelations(t *testing.T) {
+	col := NewDB(false).GetCollection(CollectionKey{"mem", "relations"})
+	col.Add("s", "tie-type", "audio-file")
+	col.Add("s", "album", "Abbey Road")
+	col.Add("s", "artist", "The Beatles")
+	col.Add("s", "tag", "rock")
+	col.Add("s", "filename", "01 - Come Together.flac")
+
+	q := normalizeSearchQuery(SearchQuery{Text: "abbey", Relations: []string{"album"}})
+	corpus := col.corpusFor(corpusKey(q), q)
+	if len(corpus.subjects) != 1 {
+		t.Fatalf("subjects = %d, want 1", len(corpus.subjects))
+	}
+	for _, f := range corpus.subjects[0].fields {
+		if f.relation != "album" {
+			t.Errorf("corpus carries unrequested relation %q", f.relation)
+		}
+	}
+}
+
+func TestSearchCorpusConcurrentKeys(t *testing.T) {
+	col := searchFixture(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			relation := "album"
+			if i%2 == 1 {
+				relation = "title"
+			}
+			for j := 0; j < 20; j++ {
+				col.Search(SearchQuery{Text: "abbey", Relations: []string{relation}})
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if len(col.searchCache) != 2 {
+		t.Errorf("cache holds %d corpora, want 2", len(col.searchCache))
+	}
+	for key, c := range col.searchCache {
+		if c.revision != col.searchGen.Load() {
+			t.Errorf("corpus %q has revision %d, current %d", key, c.revision, col.searchGen.Load())
+		}
 	}
 }
 

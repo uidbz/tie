@@ -45,7 +45,7 @@ type SearchReply struct {
 }
 
 func searchHandler(env *ws.Environment, request *SearchRequest) (*SearchReply, error) {
-	reply := SearchReply{Success: true}
+	reply := SearchReply{Success: true, Matches: []tiedb.SearchMatch{}}
 
 	col, found, err := resolveReadCollection(env, request.Namespace, request.CollectionId)
 	if err != nil {
@@ -64,6 +64,11 @@ func searchHandler(env *ws.Environment, request *SearchRequest) (*SearchReply, e
 		Limit:     request.Limit,
 		Weights:   request.Weights,
 	})
+	if matches == nil {
+		// An empty result is an empty array on the wire, not null: a client
+		// can iterate it without a special case.
+		matches = []tiedb.SearchMatch{}
+	}
 	reply.Matches = matches
 	reply.TotalCount = total
 	reply.Revision = revision

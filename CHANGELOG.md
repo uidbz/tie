@@ -52,6 +52,10 @@ to follow semantic versioning.
 
 ### Changed
 
+- **The build now requires Go 1.27.3**, and `golang.org/x/text` is v0.39.0.
+  `govulncheck` flagged GO-2026-6809 (crypto/x509 in Go 1.27.2) and
+  GO-2026-5970 (an infinite loop in x/text 0.29.0); both are fixed in these
+  versions. `tie-9999.ebuild` tracks the Go requirement.
 - **`tie dump --file` now takes the collection lock** and fails with
   `locked by another process` while a live triplestore holds the file, instead
   of silently reading a file a server may still be writing. It still needs no
@@ -60,6 +64,28 @@ to follow semantic versioning.
   the file path, and does not probe filehosts when no config was loaded.
 - `tie conf show` gained a `db-file` row and shows `file:<path>` for the
   triplestore in direct mode.
+
+### Fixed
+
+- **Search results are deterministic again.** Equal-scoring fields are picked
+  with a total order (score, relation, value), so a corpus rebuild after a write
+  can no longer reorder hits by map iteration order (#131).
+- **Search corpus keys are unambiguous and bounded.** Names are length-prefixed
+  and sorted, key bytes and an entry cap count toward the cache budget, and stale
+  corpora are dropped as soon as a search sees the new generation (#132, #136).
+- **`client.SearchPage` exposes the index revision**, so paging across a write
+  can restart; empty replies encode `matches: []` instead of `null` (#133).
+- **`tie search --type` accepts registered custom dir-types** such as
+  `live-album`, while still rejecting typos (#134).
+- **Search input is clamped before it is allocated** (rune truncation, capped
+  relation/type/weight names), and corpus builds no longer re-walk the value
+  trie for repeated values or snapshot unrelated relations (#135, #137).
+- **Warm search and fuzzy matching allocate less**: the per-subject field-score
+  slice is reused and fuzzy edit distance uses stack buffers with an early
+  exit (#138, #139).
+- **Search documentation matches the implementation** (invalidation points at
+  the user-write paths, scoring is mode-specific, and the CLI total is the TTY
+  note; scripts use `client.SearchPage`) (#140).
 
 ## [v0.7.4] - 2026-10-20
 

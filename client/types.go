@@ -122,6 +122,14 @@ func StringToTieType(t string) TieType {
 	return TieUnknownFile
 }
 
+// IsBuiltinTieType reports whether name is one of the built-in TieType names
+// (audio-file, image-dir, directory, file, …). Custom dir-type labels live only
+// in the store's (types, all, …) registry; use ListDirTypes to validate those.
+func IsBuiltinTieType(name string) bool {
+	_, ok := tieTypeByName[name]
+	return ok
+}
+
 func SliceToTieType(types []string) (t []TieType) {
 	for _, x := range types {
 		t = append(t, StringToTieType(x))

@@ -15,17 +15,17 @@ package tiedb
 //     trie. No record-file reads, no blob cache, no writer-queue traffic.
 //
 // The corpus is cached per (relations, tie-types) pair and invalidated by
-// searchGen, which every forward-index mutation bumps. Memory is bounded by
-// searchMaxBytes; a corpus that does not fit is used for one request and not
-// installed. Cache-off is a supported mode: the same code path builds and
-// discards the corpus on every search.
+// searchGen, which user writes (addLocked/deleteLocked) and a repairing
+// CheckIndex bump. Memory is bounded by searchMaxBytes; a corpus that does not
+// fit is used for one request and not installed. Cache-off is a supported mode:
+// the same code path builds and discards the corpus on every search.
 
 import (
 	"cmp"
 	"container/heap"
 	"slices"
+	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 const (
@@ -44,10 +44,18 @@ const (
 	// maxSearchFieldBytes skips pathologically long field values (paths, blobs
 	// stored as strings) so one relation cannot dominate the corpus.
 	maxSearchFieldBytes = 1024
+	// maxSearchNameBytes bounds one relation, tie-type or weight key. Names are
+	// predicates, not data: a caller cannot use a megabyte-long "relation" to
+	// inflate a corpus key or a comparison.
+	maxSearchNameBytes = 256
 	// maxSearchRelations and maxSearchTypes bound the corpus key and the work
 	// one request can ask for.
 	maxSearchRelations = 16
 	maxSearchTypes     = 32
+	// maxSearchCorpora bounds the number of cached corpora. The byte budget
+	// alone is not enough: a corpus for an unknown relation is empty, so its
+	// estimated size is zero while its key and map slot still cost memory.
+	maxSearchCorpora = 16
 
 	// defaultSearchCacheBytes is the per-collection corpus budget. Values are
 	// shared by text across fields, so this covers a six-figure media library
@@ -142,13 +150,11 @@ func (ic *Collection) Search(q SearchQuery) (matches []SearchMatch, total int, r
 }
 
 // normalizeSearchQuery clamps every user-controlled dimension and canonicalises
-// the relation/type lists (deduplicated, order preserved: the order is the
-// implicit tie-break in the API documentation).
+// the relation/type lists (deduplicated and sorted; order is not semantic, and a
+// stable order keeps one corpus per selection regardless of how a caller spells
+// it).
 func normalizeSearchQuery(q SearchQuery) SearchQuery {
-	q.Text = strings.TrimSpace(q.Text)
-	if n := utf8.RuneCountInString(q.Text); n > maxSearchTextRunes {
-		q.Text = string([]rune(q.Text)[:maxSearchTextRunes])
-	}
+	q.Text = truncateSearchText(strings.TrimSpace(q.Text), maxSearchTextRunes)
 	switch q.Mode {
 	case SearchSubstring, SearchWords, SearchPrefix, SearchFuzzy:
 	default:
@@ -156,6 +162,8 @@ func normalizeSearchQuery(q SearchQuery) SearchQuery {
 	}
 	q.Relations = dedupeNonEmpty(q.Relations, maxSearchRelations)
 	q.TieTypes = dedupeNonEmpty(q.TieTypes, maxSearchTypes)
+	slices.Sort(q.Relations)
+	slices.Sort(q.TieTypes)
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
@@ -169,9 +177,17 @@ func normalizeSearchQuery(q SearchQuery) SearchQuery {
 		q.Limit = MaxSearchLimit
 	}
 	if len(q.Weights) > 0 {
-		weights := make(map[string]int, len(q.Weights))
+		// Weights are only meaningful for relations this request searches, so
+		// keying by the capped relation list also bounds the map: at most 16
+		// entries, no matter how many a request carried.
+		wanted := make(map[string]bool, len(q.Relations))
+		for _, relation := range q.Relations {
+			wanted[relation] = true
+		}
+		weights := make(map[string]int, len(q.Relations))
 		for relation, w := range q.Weights {
-			if relation == "" || w <= 0 {
+			relation = strings.TrimSpace(relation)
+			if !wanted[relation] || w <= 0 {
 				continue
 			}
 			if w < 10 {
@@ -187,15 +203,37 @@ func normalizeSearchQuery(q SearchQuery) SearchQuery {
 	return q
 }
 
+// truncateSearchText cuts s to maxRunes without converting the whole string to
+// a rune slice. The walk stops at the byte index of the first rune that would
+// exceed the limit, which is also the only allocation-free way to honour the
+// limit on a hostile query.
+func truncateSearchText(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	n := 0
+	for i := range s {
+		if n == maxRunes {
+			return s[:i]
+		}
+		n++
+	}
+	return s
+}
+
 func dedupeNonEmpty(values []string, limit int) []string {
-	if len(values) == 0 {
+	if len(values) == 0 || limit <= 0 {
 		return nil
 	}
-	out := make([]string, 0, len(values))
-	seen := make(map[string]bool, len(values))
+	capacity := len(values)
+	if capacity > limit {
+		capacity = limit
+	}
+	out := make([]string, 0, capacity)
+	seen := make(map[string]bool, capacity)
 	for _, v := range values {
 		v = strings.TrimSpace(v)
-		if v == "" || seen[v] {
+		if v == "" || len(v) > maxSearchNameBytes || seen[v] {
 			continue
 		}
 		seen[v] = true
@@ -208,46 +246,94 @@ func dedupeNonEmpty(values []string, limit int) []string {
 }
 
 // corpusKey identifies the field/type selection of a corpus. Mode, weights and
-// paging are query-time concerns and deliberately not part of the key.
+// paging are query-time concerns and deliberately not part of the key. Every
+// name is length-prefixed and each list carries its own count, so names that
+// contain separators (or control bytes) cannot make two selections collide.
+// Relations and types are sorted by normalizeSearchQuery, so callers that list
+// the same selection in a different order share one corpus.
 func corpusKey(q SearchQuery) string {
-	return strings.Join(q.Relations, "\x1f") + "\x1e" + strings.Join(q.TieTypes, "\x1f")
+	var b strings.Builder
+	b.Grow(32 + len(q.Relations)*8 + len(q.TieTypes)*8)
+	writeList := func(values []string) {
+		b.WriteString(strconv.Itoa(len(values)))
+		b.WriteByte(';')
+		for _, v := range values {
+			b.WriteString(strconv.Itoa(len(v)))
+			b.WriteByte(':')
+			b.WriteString(v)
+		}
+	}
+	writeList(q.Relations)
+	b.WriteByte('|')
+	writeList(q.TieTypes)
+	return b.String()
 }
 
 // corpusFor returns the cached corpus for key, building it when absent or when
-// the index has changed. searchMu serialises builds; readers of an installed
-// corpus need no further lock because the corpus is immutable.
+// the index has changed. searchMu guards the cache map only: a cold build runs
+// outside it, so a warm search for another selection is not parked behind a
+// large build. Two workers that race on the same key may both build, but only
+// one corpus is installed; the other reuses it.
 func (ic *Collection) corpusFor(key string, q SearchQuery) *searchCorpus {
 	ic.searchMu.Lock()
-	defer ic.searchMu.Unlock()
-
 	revision := ic.searchGen.Load()
+	ic.dropStaleCorporaLocked(revision)
 	if c, ok := ic.searchCache[key]; ok && c.revision == revision {
 		ic.searchUse++
 		c.lastUse = ic.searchUse
+		ic.searchMu.Unlock()
 		return c
 	}
+	ic.searchMu.Unlock()
+
 	c := ic.buildCorpus(q, revision)
-	if ic.searchGen.Load() == revision && ic.searchMaxBytes > 0 {
-		ic.installCorpusLocked(key, c)
+
+	ic.searchMu.Lock()
+	defer ic.searchMu.Unlock()
+	if ic.closed.Load() || ic.searchGen.Load() != revision || ic.searchMaxBytes <= 0 {
+		return c
 	}
+	if existing, ok := ic.searchCache[key]; ok && existing.revision == revision {
+		// Another search built and installed this selection while we were
+		// building. Reuse its corpus instead of replacing it with an equal one.
+		ic.searchUse++
+		existing.lastUse = ic.searchUse
+		return existing
+	}
+	ic.installCorpusLocked(key, c)
 	return c
 }
 
+// dropStaleCorporaLocked discards every corpus whose revision is older than the
+// current generation. Without this, a write leaves every cached selection in
+// memory until its own key is searched again. Caller holds searchMu.
+func (ic *Collection) dropStaleCorporaLocked(revision uint64) {
+	for key, c := range ic.searchCache {
+		if c.revision == revision {
+			continue
+		}
+		ic.searchBytes -= c.bytes + int64(len(key))
+		delete(ic.searchCache, key)
+	}
+}
+
 // installCorpusLocked stores c and evicts least-recently-used corpora until the
-// collection is under its byte budget. Caller holds searchMu.
+// collection is under its byte and entry budgets. Key bytes count toward the
+// budget too: an empty corpus still costs a map entry and its selection string.
+// Caller holds searchMu.
 func (ic *Collection) installCorpusLocked(key string, c *searchCorpus) {
 	if ic.searchCache == nil {
 		ic.searchCache = make(map[string]*searchCorpus)
 	}
 	if old, ok := ic.searchCache[key]; ok {
-		ic.searchBytes -= old.bytes
+		ic.searchBytes -= old.bytes + int64(len(key))
 	}
 	ic.searchUse++
 	c.lastUse = ic.searchUse
 	ic.searchCache[key] = c
-	ic.searchBytes += c.bytes
+	ic.searchBytes += c.bytes + int64(len(key))
 
-	for ic.searchBytes > ic.searchMaxBytes && len(ic.searchCache) > 0 {
+	for (ic.searchBytes > ic.searchMaxBytes || len(ic.searchCache) > maxSearchCorpora) && len(ic.searchCache) > 0 {
 		var eldest string
 		var eldestUse uint64
 		first := true
@@ -256,7 +342,7 @@ func (ic *Collection) installCorpusLocked(key string, c *searchCorpus) {
 				eldest, eldestUse, first = k, v.lastUse, false
 			}
 		}
-		ic.searchBytes -= ic.searchCache[eldest].bytes
+		ic.searchBytes -= ic.searchCache[eldest].bytes + int64(len(eldest))
 		delete(ic.searchCache, eldest)
 		if eldest == key {
 			// The corpus just built is itself over budget: use it for this
@@ -284,6 +370,18 @@ func (ic *Collection) buildCorpus(q SearchQuery, revision uint64) *searchCorpus 
 	}
 
 	shared := make(map[string]*searchValue)
+	// Entry text is immutable for the life of a collection, and ids are
+	// collection-global, so one build can reuse a value's reconstructed text
+	// instead of walking the trie again for every track that carries it.
+	textByID := make(map[uint64]string)
+	textFor := func(level int, id uint64) string {
+		if text, ok := textByID[id]; ok {
+			return text
+		}
+		text := ic.getValueString(level, id)
+		textByID[id] = text
+		return text
+	}
 	valueFor := func(text string) *searchValue {
 		if v, ok := shared[text]; ok {
 			return v
@@ -295,32 +393,33 @@ func (ic *Collection) buildCorpus(q SearchQuery, revision uint64) *searchCorpus 
 	}
 
 	addSubject := func(subjectID uint64, level int, set *AssociationSet) {
-		// Snapshot the association entries first: AssociationSet.ForEach may
-		// hold a shard read lock across the callback, and resolving a value
+		// Snapshot the requested association entries first: AssociationSet.ForEach
+		// may hold a shard read lock across the callback, and resolving a value
 		// takes entry-tree locks. Doing the resolution after ForEach returns
-		// keeps the lock layers in the order doc.go documents.
+		// keeps the lock layers in the order doc.go documents. Filtering inside
+		// the callback is only a map lookup; it keeps unrelated metadata out of
+		// the snapshot.
 		refs := make([]UniqueAssociation, 0, 8)
 		set.ForEach(func(ua UniqueAssociation, _ int64) {
-			refs = append(refs, ua)
+			if _, ok := relIDs[ua.Relation]; ok {
+				refs = append(refs, ua)
+			}
 		})
 		if len(refs) == 0 {
 			return
 		}
-		key := ic.getValueString(level, subjectID)
+		key := textFor(level, subjectID)
 		if key == "" {
 			return
 		}
 		fields := make([]searchField, 0, len(refs))
 		for _, ua := range refs {
-			relation, ok := relIDs[ua.Relation]
-			if !ok {
-				continue
-			}
+			relation := relIDs[ua.Relation]
 			valueLevel, ok := ic.levelOf(ua.AssociateTo)
 			if !ok {
 				continue
 			}
-			text := ic.getValueString(valueLevel, ua.AssociateTo)
+			text := textFor(valueLevel, ua.AssociateTo)
 			if text == "" || len(text) > maxSearchFieldBytes {
 				continue
 			}

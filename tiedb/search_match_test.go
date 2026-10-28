@@ -1,6 +1,9 @@
 package tiedb
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFoldSearchText(t *testing.T) {
 	cases := map[string]string{
@@ -62,6 +65,95 @@ func TestEditDistanceWithin(t *testing.T) {
 		d, ok := editDistanceWithin(c.a, c.b, c.max)
 		if ok != c.ok || (ok && d != c.dist) {
 			t.Errorf("editDistanceWithin(%q,%q,%d) = (%d,%v), want (%d,%v)", c.a, c.b, c.max, d, ok, c.dist, c.ok)
+		}
+	}
+}
+
+func TestSearchRepresentativeFieldDeterministic(t *testing.T) {
+	value := &searchValue{text: "x", norm: "x", tokens: []string{"x"}}
+	fields := func(first, second string) []searchField {
+		return []searchField{
+			{relation: first, value: value},
+			{relation: second, value: value},
+		}
+	}
+	q := prepareSearchQuery(SearchQuery{Text: "x", Mode: SearchWords})
+
+	// The forward association set is iterated from Go maps, so the field order
+	// differs between two builds of the same logical subject. The representative
+	// field (and therefore the rank tie-break) must not.
+	first := &searchSubject{key: "a", fields: fields("b", "a")}
+	second := &searchSubject{key: "z", fields: fields("a", "b")}
+	if ok, _, field := q.match(first); !ok || first.fields[field].relation != "a" {
+		t.Fatalf("first representative = %q (ok=%v), want a", first.fields[field].relation, ok)
+	}
+	if ok, _, field := q.match(second); !ok || second.fields[field].relation != "a" {
+		t.Fatalf("second representative = %q (ok=%v), want a", second.fields[field].relation, ok)
+	}
+
+	matches, total, _ := rankCorpus(&searchCorpus{revision: 1, subjects: []*searchSubject{first, second}}, &q, 0, 10)
+	if total != 2 || len(matches) != 2 {
+		t.Fatalf("matches = %v (total %d), want 2", searchKeys(matches), total)
+	}
+	if matches[0].Key != "a" || matches[1].Key != "z" {
+		t.Errorf("order = %v, want [a z] (key tie-break, not map order)", searchKeys(matches))
+	}
+}
+
+func TestSearchPhraseRepresentativeDeterministic(t *testing.T) {
+	value := &searchValue{text: "abbey road", norm: "abbey road", tokens: []string{"abbey", "road"}}
+	fields := func(first, second string) []searchField {
+		return []searchField{
+			{relation: first, value: value},
+			{relation: second, value: value},
+		}
+	}
+	q := prepareSearchQuery(SearchQuery{Text: "abbey road", Mode: SearchWords})
+	first := &searchSubject{key: "a", fields: fields("z", "a")}
+	second := &searchSubject{key: "z", fields: fields("a", "z")}
+	_, _, f1 := q.match(first)
+	_, _, f2 := q.match(second)
+	if first.fields[f1].relation != second.fields[f2].relation {
+		t.Errorf("phrase representatives differ: %q vs %q", first.fields[f1].relation, second.fields[f2].relation)
+	}
+}
+
+func TestEditDistanceWithinMatchesReference(t *testing.T) {
+	// A plain full-matrix implementation is the oracle for the bounded one.
+	reference := func(a, b string) int {
+		ar, br := []rune(a), []rune(b)
+		prev := make([]int, len(br)+1)
+		for j := range prev {
+			prev[j] = j
+		}
+		for i := 1; i <= len(ar); i++ {
+			cur := make([]int, len(br)+1)
+			cur[0] = i
+			for j := 1; j <= len(br); j++ {
+				cost := 1
+				if ar[i-1] == br[j-1] {
+					cost = 0
+				}
+				cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+			}
+			prev = cur
+		}
+		return prev[len(br)]
+	}
+
+	inputs := []string{"", "a", "ab", "abc", "abcd", "abbey", "abey", "xyzzy", "éé", "aé", "motörhead", "motorhead", strings.Repeat("x", 80)}
+	for _, a := range inputs {
+		for _, b := range inputs {
+			want := reference(a, b)
+			for max := 0; max <= 3; max++ {
+				got, ok := editDistanceWithin(a, b, max)
+				if ok != (want <= max) {
+					t.Fatalf("editDistanceWithin(%q, %q, %d) ok = %v, want %v (distance %d)", a, b, max, ok, want <= max, want)
+				}
+				if ok && got != want {
+					t.Fatalf("editDistanceWithin(%q, %q, %d) = %d, want %d", a, b, max, got, want)
+				}
+			}
 		}
 	}
 }

@@ -1,6 +1,6 @@
 module github.com/uidbz/tie
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/go-filesystems/interface v0.5.0
@@ -15,7 +15,7 @@ require (
 	github.com/urfave/cli/v3 v3.10.1
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.44.0
-	golang.org/x/text v0.29.0
+	golang.org/x/text v0.39.0
 )
 
 require (

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -22,8 +23,19 @@ func TestSearchEmptyCollection(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	var reply SearchReply
-	if err := json.NewDecoder(resp.Body).Decode(&reply); err != nil {
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		t.Fatal(err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(envelope["matches"]); got != "[]" {
+		t.Errorf("matches on the wire = %s, want []", got)
 	}
 	if !reply.Success {
 		t.Errorf("Success = false, message %q", reply.Message)
