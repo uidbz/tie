@@ -24,6 +24,7 @@ import (
 	"cmp"
 	"container/heap"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -48,6 +49,10 @@ const (
 	// one request can ask for.
 	maxSearchRelations = 16
 	maxSearchTypes     = 32
+	// maxSearchCorpora bounds the number of cached corpora. The byte budget
+	// alone is not enough: a corpus for an unknown relation is empty, so its
+	// estimated size is zero while its key and map slot still cost memory.
+	maxSearchCorpora = 16
 
 	// defaultSearchCacheBytes is the per-collection corpus budget. Values are
 	// shared by text across fields, so this covers a six-figure media library
@@ -142,8 +147,9 @@ func (ic *Collection) Search(q SearchQuery) (matches []SearchMatch, total int, r
 }
 
 // normalizeSearchQuery clamps every user-controlled dimension and canonicalises
-// the relation/type lists (deduplicated, order preserved: the order is the
-// implicit tie-break in the API documentation).
+// the relation/type lists (deduplicated and sorted; order is not semantic, and a
+// stable order keeps one corpus per selection regardless of how a caller spells
+// it).
 func normalizeSearchQuery(q SearchQuery) SearchQuery {
 	q.Text = strings.TrimSpace(q.Text)
 	if n := utf8.RuneCountInString(q.Text); n > maxSearchTextRunes {
@@ -156,6 +162,8 @@ func normalizeSearchQuery(q SearchQuery) SearchQuery {
 	}
 	q.Relations = dedupeNonEmpty(q.Relations, maxSearchRelations)
 	q.TieTypes = dedupeNonEmpty(q.TieTypes, maxSearchTypes)
+	slices.Sort(q.Relations)
+	slices.Sort(q.TieTypes)
 	if q.Offset < 0 {
 		q.Offset = 0
 	}
@@ -208,46 +216,94 @@ func dedupeNonEmpty(values []string, limit int) []string {
 }
 
 // corpusKey identifies the field/type selection of a corpus. Mode, weights and
-// paging are query-time concerns and deliberately not part of the key.
+// paging are query-time concerns and deliberately not part of the key. Every
+// name is length-prefixed and each list carries its own count, so names that
+// contain separators (or control bytes) cannot make two selections collide.
+// Relations and types are sorted by normalizeSearchQuery, so callers that list
+// the same selection in a different order share one corpus.
 func corpusKey(q SearchQuery) string {
-	return strings.Join(q.Relations, "\x1f") + "\x1e" + strings.Join(q.TieTypes, "\x1f")
+	var b strings.Builder
+	b.Grow(32 + len(q.Relations)*8 + len(q.TieTypes)*8)
+	writeList := func(values []string) {
+		b.WriteString(strconv.Itoa(len(values)))
+		b.WriteByte(';')
+		for _, v := range values {
+			b.WriteString(strconv.Itoa(len(v)))
+			b.WriteByte(':')
+			b.WriteString(v)
+		}
+	}
+	writeList(q.Relations)
+	b.WriteByte('|')
+	writeList(q.TieTypes)
+	return b.String()
 }
 
 // corpusFor returns the cached corpus for key, building it when absent or when
-// the index has changed. searchMu serialises builds; readers of an installed
-// corpus need no further lock because the corpus is immutable.
+// the index has changed. searchMu guards the cache map only: a cold build runs
+// outside it, so a warm search for another selection is not parked behind a
+// large build. Two workers that race on the same key may both build, but only
+// one corpus is installed; the other reuses it.
 func (ic *Collection) corpusFor(key string, q SearchQuery) *searchCorpus {
 	ic.searchMu.Lock()
-	defer ic.searchMu.Unlock()
-
 	revision := ic.searchGen.Load()
+	ic.dropStaleCorporaLocked(revision)
 	if c, ok := ic.searchCache[key]; ok && c.revision == revision {
 		ic.searchUse++
 		c.lastUse = ic.searchUse
+		ic.searchMu.Unlock()
 		return c
 	}
+	ic.searchMu.Unlock()
+
 	c := ic.buildCorpus(q, revision)
-	if ic.searchGen.Load() == revision && ic.searchMaxBytes > 0 {
-		ic.installCorpusLocked(key, c)
+
+	ic.searchMu.Lock()
+	defer ic.searchMu.Unlock()
+	if ic.searchGen.Load() != revision || ic.searchMaxBytes <= 0 {
+		return c
 	}
+	if existing, ok := ic.searchCache[key]; ok && existing.revision == revision {
+		// Another search built and installed this selection while we were
+		// building. Reuse its corpus instead of replacing it with an equal one.
+		ic.searchUse++
+		existing.lastUse = ic.searchUse
+		return existing
+	}
+	ic.installCorpusLocked(key, c)
 	return c
 }
 
+// dropStaleCorporaLocked discards every corpus whose revision is older than the
+// current generation. Without this, a write leaves every cached selection in
+// memory until its own key is searched again. Caller holds searchMu.
+func (ic *Collection) dropStaleCorporaLocked(revision uint64) {
+	for key, c := range ic.searchCache {
+		if c.revision == revision {
+			continue
+		}
+		ic.searchBytes -= c.bytes + int64(len(key))
+		delete(ic.searchCache, key)
+	}
+}
+
 // installCorpusLocked stores c and evicts least-recently-used corpora until the
-// collection is under its byte budget. Caller holds searchMu.
+// collection is under its byte and entry budgets. Key bytes count toward the
+// budget too: an empty corpus still costs a map entry and its selection string.
+// Caller holds searchMu.
 func (ic *Collection) installCorpusLocked(key string, c *searchCorpus) {
 	if ic.searchCache == nil {
 		ic.searchCache = make(map[string]*searchCorpus)
 	}
 	if old, ok := ic.searchCache[key]; ok {
-		ic.searchBytes -= old.bytes
+		ic.searchBytes -= old.bytes + int64(len(key))
 	}
 	ic.searchUse++
 	c.lastUse = ic.searchUse
 	ic.searchCache[key] = c
-	ic.searchBytes += c.bytes
+	ic.searchBytes += c.bytes + int64(len(key))
 
-	for ic.searchBytes > ic.searchMaxBytes && len(ic.searchCache) > 0 {
+	for (ic.searchBytes > ic.searchMaxBytes || len(ic.searchCache) > maxSearchCorpora) && len(ic.searchCache) > 0 {
 		var eldest string
 		var eldestUse uint64
 		first := true
@@ -256,7 +312,7 @@ func (ic *Collection) installCorpusLocked(key string, c *searchCorpus) {
 				eldest, eldestUse, first = k, v.lastUse, false
 			}
 		}
-		ic.searchBytes -= ic.searchCache[eldest].bytes
+		ic.searchBytes -= ic.searchCache[eldest].bytes + int64(len(eldest))
 		delete(ic.searchCache, eldest)
 		if eldest == key {
 			// The corpus just built is itself over budget: use it for this

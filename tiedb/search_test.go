@@ -2,6 +2,7 @@ package tiedb
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -275,6 +276,75 @@ func TestSearchCacheDisabled(t *testing.T) {
 	}
 	if len(col.searchCache) != 0 {
 		t.Errorf("cache disabled but %d corpora installed", len(col.searchCache))
+	}
+}
+
+func TestSearchCorpusKeyUnambiguous(t *testing.T) {
+	// Relation/type names are arbitrary strings. Separator bytes used to let
+	// these two selections share a key and therefore a corpus.
+	if a, b := corpusKey(SearchQuery{Relations: []string{"a\x1fb"}}), corpusKey(SearchQuery{Relations: []string{"a", "b"}}); a == b {
+		t.Errorf("relation names containing the old separator collide: %q", a)
+	}
+	if a, b := corpusKey(SearchQuery{Relations: []string{"a"}, TieTypes: []string{"b"}}), corpusKey(SearchQuery{Relations: []string{"a\x1e"}, TieTypes: []string{"b"}}); a == b {
+		t.Errorf("relation/type boundary collides: %q", a)
+	}
+}
+
+func TestSearchCorpusKeyCanonicalOrder(t *testing.T) {
+	first := normalizeSearchQuery(SearchQuery{Text: "x", Relations: []string{"b", "a", "a"}, TieTypes: []string{"y", "x"}})
+	second := normalizeSearchQuery(SearchQuery{Text: "x", Relations: []string{"a", "b"}, TieTypes: []string{"x", "y"}})
+	if !slices.Equal(first.Relations, []string{"a", "b"}) {
+		t.Errorf("relations = %v, want [a b]", first.Relations)
+	}
+	if !slices.Equal(first.TieTypes, []string{"x", "y"}) {
+		t.Errorf("types = %v, want [x y]", first.TieTypes)
+	}
+	if corpusKey(first) != corpusKey(second) {
+		t.Errorf("same selection got different keys: %q vs %q", corpusKey(first), corpusKey(second))
+	}
+}
+
+func TestSearchCacheBounded(t *testing.T) {
+	col := searchFixture(t)
+	col.searchMaxBytes = 1 << 20
+	for i := 0; i < 100; i++ {
+		col.Search(SearchQuery{Text: "x", Relations: []string{fmt.Sprintf("missing-relation-%d", i)}})
+	}
+	if len(col.searchCache) > maxSearchCorpora {
+		t.Errorf("cache holds %d corpora, want <= %d", len(col.searchCache), maxSearchCorpora)
+	}
+	if col.searchBytes < 0 {
+		t.Errorf("searchBytes = %d, want >= 0", col.searchBytes)
+	}
+
+	// An empty corpus still occupies a key and a map slot, so the key bytes
+	// must be charged to the budget.
+	col.searchCache = nil
+	col.searchBytes = 0
+	col.Search(SearchQuery{Text: "x", Relations: []string{"no-such-relation"}})
+	key := corpusKey(normalizeSearchQuery(SearchQuery{Text: "x", Relations: []string{"no-such-relation"}}))
+	if col.searchBytes < int64(len(key)) {
+		t.Errorf("searchBytes = %d, want at least key length %d", col.searchBytes, len(key))
+	}
+}
+
+func TestSearchCacheDropsStale(t *testing.T) {
+	col := searchFixture(t)
+	col.Search(SearchQuery{Text: "abbey", Relations: []string{"album"}})
+	col.Search(SearchQuery{Text: "abbey", Relations: []string{"title"}})
+	if len(col.searchCache) != 2 {
+		t.Fatalf("cache holds %d corpora, want 2", len(col.searchCache))
+	}
+
+	col.Add("track-new", "title", "New Song")
+	col.Search(SearchQuery{Text: "abbey", Relations: []string{"album"}})
+	if len(col.searchCache) != 1 {
+		t.Errorf("after a write the cache holds %d corpora, want only the rebuilt one", len(col.searchCache))
+	}
+	for key, c := range col.searchCache {
+		if c.revision != col.searchGen.Load() {
+			t.Errorf("corpus %q has stale revision %d, current %d", key, c.revision, col.searchGen.Load())
+		}
 	}
 }
 
