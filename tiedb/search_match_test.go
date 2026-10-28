@@ -1,6 +1,9 @@
 package tiedb
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestFoldSearchText(t *testing.T) {
 	cases := map[string]string{
@@ -112,6 +115,46 @@ func TestSearchPhraseRepresentativeDeterministic(t *testing.T) {
 	_, _, f2 := q.match(second)
 	if first.fields[f1].relation != second.fields[f2].relation {
 		t.Errorf("phrase representatives differ: %q vs %q", first.fields[f1].relation, second.fields[f2].relation)
+	}
+}
+
+func TestEditDistanceWithinMatchesReference(t *testing.T) {
+	// A plain full-matrix implementation is the oracle for the bounded one.
+	reference := func(a, b string) int {
+		ar, br := []rune(a), []rune(b)
+		prev := make([]int, len(br)+1)
+		for j := range prev {
+			prev[j] = j
+		}
+		for i := 1; i <= len(ar); i++ {
+			cur := make([]int, len(br)+1)
+			cur[0] = i
+			for j := 1; j <= len(br); j++ {
+				cost := 1
+				if ar[i-1] == br[j-1] {
+					cost = 0
+				}
+				cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+			}
+			prev = cur
+		}
+		return prev[len(br)]
+	}
+
+	inputs := []string{"", "a", "ab", "abc", "abcd", "abbey", "abey", "xyzzy", "éé", "aé", "motörhead", "motorhead", strings.Repeat("x", 80)}
+	for _, a := range inputs {
+		for _, b := range inputs {
+			want := reference(a, b)
+			for max := 0; max <= 3; max++ {
+				got, ok := editDistanceWithin(a, b, max)
+				if ok != (want <= max) {
+					t.Fatalf("editDistanceWithin(%q, %q, %d) ok = %v, want %v (distance %d)", a, b, max, ok, want <= max, want)
+				}
+				if ok && got != want {
+					t.Fatalf("editDistanceWithin(%q, %q, %d) = %d, want %d", a, b, max, got, want)
+				}
+			}
+		}
 	}
 }
 

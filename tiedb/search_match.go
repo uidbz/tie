@@ -282,7 +282,7 @@ func tokenScore(v *searchValue, token string, mode SearchMode) (int, bool) {
 	if best == 0 && mode == SearchFuzzy {
 		if max := fuzzyDistanceFor(token); max > 0 {
 			for _, tok := range v.tokens {
-				if len(tok) > 64 {
+				if len(tok) > maxFuzzyCandidateBytes {
 					continue
 				}
 				if d, ok := editDistanceWithin(token, tok, max); ok {
@@ -350,6 +350,11 @@ func weightedScore(score int, relation string, weights map[string]int) int {
 	return score * w / 100
 }
 
+// maxFuzzyCandidateBytes bounds a candidate token compared by the fuzzy
+// matcher. It also sizes the stack buffers in editDistanceWithin; a longer
+// candidate falls back to heap buffers.
+const maxFuzzyCandidateBytes = 64
+
 // fuzzyDistanceFor caps edit distance by query-token length: short tokens need
 // an exact/prefix match, while a long token tolerates one or two edits. A cap
 // keeps a typo-tolerant search from turning into a noise generator.
@@ -366,10 +371,19 @@ func fuzzyDistanceFor(token string) int {
 }
 
 // editDistanceWithin computes the Levenshtein distance between a and b, giving
-// up as soon as every cell of a row exceeds max. It returns ok=false when the
-// distance is above max. Callers cap candidate length to keep the two-row DP
-// bounded.
+// up as soon as the distance to the whole candidate already exceeds max plus
+// the query runes left to process. It returns ok=false when the distance is
+// above max. Callers cap candidate length to keep the DP bounded.
 func editDistanceWithin(a, b string, max int) (int, bool) {
+	if max < 0 {
+		return 0, false
+	}
+	if a == b {
+		return 0, true
+	}
+	if max == 0 {
+		return 0, false
+	}
 	ar, br := []rune(a), []rune(b)
 	if absInt(len(ar)-len(br)) > max {
 		return 0, false
@@ -377,23 +391,43 @@ func editDistanceWithin(a, b string, max int) (int, bool) {
 	if len(ar) == 0 {
 		return len(br), len(br) <= max
 	}
-	prev := make([]int, len(br)+1)
-	cur := make([]int, len(br)+1)
-	for j := range prev {
+	if len(br) == 0 {
+		return len(ar), len(ar) <= max
+	}
+
+	// Fuzzy candidates are at most 64 bytes, so their rune count fits the
+	// stack buffers. Keeping them on the stack removes two allocations per
+	// candidate comparison in the fuzzy hot loop.
+	n := len(br)
+	var prevBuf, curBuf [maxFuzzyCandidateBytes + 1]int
+	prev, cur := prevBuf[:n+1], curBuf[:n+1]
+	if n > maxFuzzyCandidateBytes {
+		prev, cur = make([]int, n+1), make([]int, n+1)
+	}
+	for j := 0; j <= n; j++ {
 		prev[j] = j
 	}
+
+	remaining := len(ar)
 	for i := 1; i <= len(ar); i++ {
 		cur[0] = i
-		for j := 1; j <= len(br); j++ {
+		for j := 1; j <= n; j++ {
 			cost := 1
 			if ar[i-1] == br[j-1] {
 				cost = 0
 			}
 			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
 		}
+		remaining--
+		// cur[n] is the distance from a[:i] to the full candidate. Each
+		// remaining query rune can lower it by at most one, so a value above
+		// max+remaining can never finish inside max.
+		if cur[n] > max+remaining {
+			return 0, false
+		}
 		prev, cur = cur, prev
 	}
-	d := prev[len(br)]
+	d := prev[n]
 	return d, d <= max
 }
 
