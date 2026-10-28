@@ -52,6 +52,10 @@ to follow semantic versioning.
 
 ### Changed
 
+- **The build now requires Go 1.27.3**, and `golang.org/x/text` is v0.39.0.
+  `govulncheck` flagged GO-2026-6809 (crypto/x509 in Go 1.27.2) and
+  GO-2026-5970 (an infinite loop in x/text 0.29.0); both are fixed in these
+  versions. `tie-9999.ebuild` tracks the Go requirement.
 - **`tie dump --file` now takes the collection lock** and fails with
   `locked by another process` while a live triplestore holds the file, instead
   of silently reading a file a server may still be writing. It still needs no
