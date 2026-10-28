@@ -146,7 +146,7 @@ func (q *preparedSearchQuery) matchSubstring(s *searchSubject) (bool, int, int) 
 		sc := substringScore(text, q.raw)
 		sc = weightedScore(sc, f.relation, q.weights)
 		sc += lengthBonus(text, q.raw)
-		if sc > best {
+		if betterSearchField(sc, f, best, fieldAt(s, bestField)) {
 			best, bestField = sc, i
 		}
 	}
@@ -154,6 +154,33 @@ func (q *preparedSearchQuery) matchSubstring(s *searchSubject) (bool, int, int) 
 		return false, 0, -1
 	}
 	return true, best, bestField
+}
+
+// betterSearchField reports whether candidate (with score) should replace the
+// current best field. A higher score always wins; equal scores tie-break by
+// relation name, then value text. The tie-break matters because the forward
+// association set is iterated from Go maps: without it, a subject with two
+// equally-scoring fields can report a different representative relation after
+// a corpus rebuild, and rankCorpus uses that relation as its ordering key.
+func betterSearchField(score int, candidate *searchField, bestScore int, best *searchField) bool {
+	if best == nil || score > bestScore {
+		return true
+	}
+	if score < bestScore {
+		return false
+	}
+	if candidate.relation != best.relation {
+		return candidate.relation < best.relation
+	}
+	return candidate.value.text < best.value.text
+}
+
+// fieldAt returns s.fields[i], or nil for the "no field chosen yet" index.
+func fieldAt(s *searchSubject, i int) *searchField {
+	if i < 0 || i >= len(s.fields) {
+		return nil
+	}
+	return &s.fields[i]
 }
 
 func (q *preparedSearchQuery) matchTokens(s *searchSubject) (bool, int, int) {
@@ -168,7 +195,7 @@ func (q *preparedSearchQuery) matchTokens(s *searchSubject) (bool, int, int) {
 				continue
 			}
 			sc = weightedScore(sc, f.relation, q.weights)
-			if sc > best {
+			if betterSearchField(sc, f, best, fieldAt(s, bestField)) {
 				best, bestField = sc, i
 			}
 		}
@@ -181,25 +208,32 @@ func (q *preparedSearchQuery) matchTokens(s *searchSubject) (bool, int, int) {
 
 	// Phrase bonus: a field containing the complete folded query is a much
 	// stronger signal than the same tokens scattered across fields. It also
-	// makes the phrase field the representative field.
+	// makes the phrase field the representative field. When several fields
+	// contain the phrase, pick deterministically rather than by map order.
 	if len(q.tokens) > 1 {
 		const phraseBonus = 250
+		phraseField := -1
 		for i := range s.fields {
-			if strings.Contains(s.fields[i].value.norm, q.raw) {
-				perField[i] += phraseBonus
-				total += phraseBonus
-				break
+			if !strings.Contains(s.fields[i].value.norm, q.raw) {
+				continue
 			}
+			if phraseField < 0 || betterSearchField(perField[i], &s.fields[i], perField[phraseField], fieldAt(s, phraseField)) {
+				phraseField = i
+			}
+		}
+		if phraseField >= 0 {
+			perField[phraseField] += phraseBonus
+			total += phraseBonus
 		}
 	}
 
-	bestField, bestContribution := 0, -1
+	bestField := -1
 	for i, c := range perField {
-		if c > bestContribution {
-			bestField, bestContribution = i, c
+		if bestField < 0 || betterSearchField(c, &s.fields[i], perField[bestField], fieldAt(s, bestField)) {
+			bestField = i
 		}
 	}
-	if bestContribution <= 0 {
+	if bestField < 0 || perField[bestField] <= 0 {
 		return false, 0, -1
 	}
 	total += lengthBonus(s.fields[bestField].value.norm, q.raw)

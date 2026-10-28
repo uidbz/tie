@@ -66,6 +66,55 @@ func TestEditDistanceWithin(t *testing.T) {
 	}
 }
 
+func TestSearchRepresentativeFieldDeterministic(t *testing.T) {
+	value := &searchValue{text: "x", norm: "x", tokens: []string{"x"}}
+	fields := func(first, second string) []searchField {
+		return []searchField{
+			{relation: first, value: value},
+			{relation: second, value: value},
+		}
+	}
+	q := prepareSearchQuery(SearchQuery{Text: "x", Mode: SearchWords})
+
+	// The forward association set is iterated from Go maps, so the field order
+	// differs between two builds of the same logical subject. The representative
+	// field (and therefore the rank tie-break) must not.
+	first := &searchSubject{key: "a", fields: fields("b", "a")}
+	second := &searchSubject{key: "z", fields: fields("a", "b")}
+	if ok, _, field := q.match(first); !ok || first.fields[field].relation != "a" {
+		t.Fatalf("first representative = %q (ok=%v), want a", first.fields[field].relation, ok)
+	}
+	if ok, _, field := q.match(second); !ok || second.fields[field].relation != "a" {
+		t.Fatalf("second representative = %q (ok=%v), want a", second.fields[field].relation, ok)
+	}
+
+	matches, total, _ := rankCorpus(&searchCorpus{revision: 1, subjects: []*searchSubject{first, second}}, &q, 0, 10)
+	if total != 2 || len(matches) != 2 {
+		t.Fatalf("matches = %v (total %d), want 2", searchKeys(matches), total)
+	}
+	if matches[0].Key != "a" || matches[1].Key != "z" {
+		t.Errorf("order = %v, want [a z] (key tie-break, not map order)", searchKeys(matches))
+	}
+}
+
+func TestSearchPhraseRepresentativeDeterministic(t *testing.T) {
+	value := &searchValue{text: "abbey road", norm: "abbey road", tokens: []string{"abbey", "road"}}
+	fields := func(first, second string) []searchField {
+		return []searchField{
+			{relation: first, value: value},
+			{relation: second, value: value},
+		}
+	}
+	q := prepareSearchQuery(SearchQuery{Text: "abbey road", Mode: SearchWords})
+	first := &searchSubject{key: "a", fields: fields("z", "a")}
+	second := &searchSubject{key: "z", fields: fields("a", "z")}
+	_, _, f1 := q.match(first)
+	_, _, f2 := q.match(second)
+	if first.fields[f1].relation != second.fields[f2].relation {
+		t.Errorf("phrase representatives differ: %q vs %q", first.fields[f1].relation, second.fields[f2].relation)
+	}
+}
+
 func TestPrepareSearchQuery(t *testing.T) {
 	q := prepareSearchQuery(SearchQuery{Text: "  The   BEATLES  ", Mode: SearchWords})
 	if q.raw != "the beatles" {
