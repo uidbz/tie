@@ -1,6 +1,6 @@
 ROOT    := $(CURDIR)
 DIST    := $(ROOT)/dist
-CMDS    := tie tie-triplestore tie-filehost tie-smb
+CMDS    := tie tie-triplestore tie-filehost tie-smb tie-fleet
 
 # Version embedded in the binaries. Defaults to the current git description
 # (nearest tag + commits-since), overridable with `make build VERSION=v0.4.0`.
