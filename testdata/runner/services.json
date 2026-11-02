@@ -1,0 +1,4 @@
+{
+  "transform:1.2": {"name": "transform:1.2", "status": "running", "logs": "", "task_type": "webservice"},
+  "rawtcp:1.0": {"name": "rawtcp:1.0", "status": "stopped", "external_port": 2100, "logs": "", "task_type": "job"}
+}

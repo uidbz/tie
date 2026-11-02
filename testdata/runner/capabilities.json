@@ -1,0 +1,17 @@
+{
+  "Capabilities": ["CPUv1", "GPUv1", "WebserviceV1", "TCPServiceV1"],
+  "IsAvailable": true,
+  "QueueLength": 1,
+  "ActiveJobs": 1,
+  "FreeCPU": 8,
+  "FreeRAMMB": 32768,
+  "FreeGPU": 0,
+  "TotalCPU": 16,
+  "TotalRAMMB": 65536,
+  "TotalGPU": 1,
+  "Version": "v2.4.1",
+  "GitCommit": "deadbeefcafe0123456789abcdef0123456789ab",
+  "BuildDate": "2026-10-01T12:00:00Z",
+  "CertNotAfter": "2027-01-15T09:30:00Z",
+  "DeployedImageCount": 12
+}

@@ -1,0 +1,21 @@
+{
+  "Command": "prod",
+  "Name": "transform:1.2",
+  "Owner": "alice",
+  "Description": "format transform pipeline",
+  "DocumentationLink": "https://docs.example.com/transform",
+  "DeployKey": "00112233445566778899aabbccddeeff",
+  "ProjectHash": "1029384756abcdef1029384756abcdef1029384756abcdef1029384756abcdef",
+  "TestInputHash": "",
+  "AppHash": "",
+  "TestSettingsData": null,
+  "Debug": false,
+  "NoCache": false,
+  "Production": true,
+  "JobType": "WebserviceV1",
+  "RootPath": "/service/transform:1.2",
+  "ServiceInternalPort": 8080,
+  "ServiceAutostart": true,
+  "ServiceStartOnAccess": false,
+  "ServiceInactivityTimeout": 0
+}

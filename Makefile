@@ -7,7 +7,7 @@ CMDS    := tie tie-triplestore tie-filehost tie-smb
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/uidbz/tie/version.Version=$(VERSION)
 
-.PHONY: build install install-server tls-keys check vet staticcheck govulncheck test-race push release clean
+.PHONY: build install install-server tls-keys check vet staticcheck govulncheck test-race scrub push release clean
 
 # Build all commands into dist/, embedding the version via ldflags.
 build:
@@ -41,7 +41,16 @@ tls-keys:
 # directive), so `go tool` finds them in the module's tool cache.
 # staticcheck.conf disables ST1005 (capitalized error strings) until the
 # CLI error-message cleanup (issue #68) lands.
-check: vet staticcheck govulncheck test-race
+check: scrub vet staticcheck govulncheck test-race
+
+# Open-source hygiene gate: the execution engine (runner/*, io/compose,
+# cmd/tie-*) is published from this module, so nothing under version control
+# may reference private-infrastructure names. Lines that must legitimately
+# name such a token (wire compatibility) carry a `SCRUB-ALLOW:` annotation.
+scrub:
+	@hits=$$(git grep -IniE '\b(lars|goto|danisco|gitlab|kerberos|hermes|gogs|aws)\b|brab|iff\.com' -- . ':(exclude)Makefile' \
+		| grep -v SCRUB-ALLOW || true); \
+	if [ -n "$$hits" ]; then echo "scrub: forbidden tokens found:"; echo "$$hits"; exit 1; fi
 
 vet:
 	go vet ./...

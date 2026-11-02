@@ -1,0 +1,29 @@
+{
+  "Name": "discovery",
+  "User": "alice",
+  "Debug": false,
+  "Seeds": {"raw": "20deadbeef00c0ffee10cafe00112233445566778899aabbccddeeff001122"},
+  "Steps": [
+    {
+      "Name": "prepare",
+      "Handler": "prepare:2.0",
+      "JobType": "CPUv1",
+      "AppHash": "ffeeddccbbaa0099887766554433221100ffeeddccbbaa00998877665544332211",
+      "Settings": {"mode": "strict"},
+      "Inputs": [
+        {"FromStep": "raw", "Hash": "", "Paths": ["in.dat"], "Glob": "", "As": "sample.dat", "Optional": false},
+        {"FromStep": "", "Hash": "0b8c2f4a6d9e1c3a5b7d9f0e2c4a6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c", "Paths": null, "Glob": "lookup/*.tsv", "As": "", "Optional": true}
+      ],
+      "Ordinal": 0, "Status": "", "JobID": "", "OutputHash": "", "ErrorMsg": "", "StartedUnix": 0, "FinishedUnix": 0
+    },
+    {
+      "Name": "predict",
+      "Handler": "predict:3.0",
+      "JobType": "GPUv1",
+      "AppHash": "",
+      "Settings": null,
+      "Inputs": [{"FromStep": "prepare", "Hash": "", "Paths": null, "Glob": "model/*.bin", "As": "", "Optional": false}],
+      "Ordinal": 0, "Status": "", "JobID": "", "OutputHash": "", "ErrorMsg": "", "StartedUnix": 0, "FinishedUnix": 0
+    }
+  ]
+}

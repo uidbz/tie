@@ -1,0 +1,38 @@
+{
+  "Address": "0.0.0.0:1163",
+  "TLSCert": "/etc/tie/runner/cert.pem",
+  "TLSKey": "/etc/tie/runner/key.pem",
+  "Filehost": "https://files.example.com:1162",
+  "Store": "primary",
+  "DockerRegistry": "registry.example.com:5000",
+  "Capabilities": ["CPUv1", "GPUv1", "WebserviceV1"],
+  "Backends": ["https://runner1.example.com"],
+  "BuildArgs": {"EXTRA_INDEX_URL": "https://files.example.com/index"},
+  "DeployedImages": [
+    {
+      "Name": "transform:1.2",
+      "Owner": "alice",
+      "Description": "format transform pipeline",
+      "Documentation": "https://docs.example.com/transform",
+      "DeployKey": "00112233445566778899aabbccddeeff",
+      "IsService": true,
+      "ServiceInternalPort": 8080,
+      "ServiceExternalPort": 0,
+      "ServiceAutostart": true,
+      "ServiceStartOnAccess": false,
+      "ServiceInactivityTimeout": 0,
+      "ServiceProxyRewrite": "html"
+    }
+  ],
+  "DebugLogging": false,
+  "JobDBPath": "/var/lib/tie-runner/jobs.db",
+  "DefaultJobMemoryMB": 32768,
+  "TotalCPU": 16,
+  "TotalRAMMB": 65536,
+  "TotalGPU": 1,
+  "JobTypeSpecs": {"CPUv1": {"CPU": 8, "RAMMB": 32768, "GPU": 0}, "GPUv1": {"CPU": 8, "RAMMB": 32768, "GPU": 1}},
+  "AdminToken": "admin-secret-001",
+  "FleetJoinToken": "join-secret-001",
+  "FleetSeed": "https://runner1.example.com",
+  "FileServer": {"Enabled": true, "Dir": "/var/lib/tie-runner/share", "HTTPAddress": ":8080"}
+}

@@ -1,0 +1,4 @@
+[
+  {"id": "h-aaaa0001", "name": "runner1", "url": "https://runner1.example.com", "capabilities": ["CPUv1", "GPUv1", "WebserviceV1"], "status": "active", "added": "2026-01-15T10:00:00Z", "approved": "2026-01-15T10:05:00Z"},
+  {"id": "h-bbbb0002", "name": "runner2", "url": "https://runner2.example.com:1163", "capabilities": ["CPUv1"], "status": "pending", "added": "2026-10-01T08:00:00Z"}
+]

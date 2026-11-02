@@ -1,0 +1,3 @@
+{
+  "Servers": ["https://runner1.example.com", "https://runner2.example.com"]
+}

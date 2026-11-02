@@ -1,0 +1,14 @@
+{
+  "JobType": "CPUv1",
+  "Handler": "transform:1.2",
+  "InputHash": "0b8c2f4a6d9e1c3a5b7d9f0e2c4a6b8d0e2f4a6c8e0b2d4f6a8c0e2b4d6f8a0c",
+  "AppHash": "ffeeddccbbaa0099887766554433221100ffeeddccbbaa00998877665544332211",
+  "Settings": {"tolerance": 0.005, "workers": 4},
+  "Debug": false,
+  "ForceAddToQueue": false,
+  "User": "alice",
+  "ReqCPU": 0,
+  "ReqRAMMB": 0,
+  "PipelineID": "",
+  "StepName": ""
+}

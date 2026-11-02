@@ -1,0 +1,22 @@
+{
+  "Running": 1,
+  "Queued": 2,
+  "Total": 417,
+  "Succeeded": 380,
+  "Failed": 30,
+  "Cancelled": 7,
+  "SuccessRate": 91.13,
+  "AvgRuntimeSeconds": 812.4,
+  "MaxRuntimeSeconds": 9300,
+  "AvgPeakMemMB": 711.2,
+  "MaxPeakMemMB": 30210,
+  "OOMKills": 2,
+  "ProdJobs": 400,
+  "DebugJobs": 17,
+  "MonthlyUsage": [{"Month": "2026-09", "Count": 190}, {"Month": "2026-10", "Count": 227}],
+  "JobsByUser": [{"Name": "alice", "Count": 250}, {"Name": "bob", "Count": 167}],
+  "ActiveUsersPerMonth": [{"Month": "2026-09", "Count": 3}, {"Month": "2026-10", "Count": 2}],
+  "PopularImages": [{"Name": "transform:1.2", "Count": 210}, {"Name": "predict:3.0", "Count": 95}],
+  "JobsByType": [{"Name": "CPUv1", "Count": 300}, {"Name": "GPUv1", "Count": 117}],
+  "ActiveUsers": {"2026-09": ["alice", "bob", "carol"], "2026-10": ["alice", "bob"]}
+}

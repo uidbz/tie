@@ -1,0 +1,6 @@
+{
+  "name": "runner2",
+  "url": "https://runner2.example.com:1163",
+  "capabilities": ["CPUv1", "GPUv1"],
+  "join_token": "join-secret-001"
+}
