@@ -145,6 +145,10 @@ func (m *Manager) specFor(jobType string) (executor.Spec, bool) {
 	return executor.SpecFor(jobType, nil)
 }
 
+// SpecFor exposes the job-type sizing table (dispatch and validation
+// consult it outside the scheduler).
+func (m *Manager) SpecFor(jobType string) (executor.Spec, bool) { return m.specFor(jobType) }
+
 // poke asks the scheduler to run an admit pass. Non-blocking: a pending
 // wake already covers the request.
 func (m *Manager) poke() {
@@ -194,12 +198,21 @@ func (m *Manager) tryAdmitLocked(job *Job) (executor.Spec, bool) {
 
 // runJob marks the job running, executes it, stamps the exit state,
 // finalizes, then releases its reservation and re-admits.
+//
+// Concurrency contract: the live JobStatus record is shared with HTTP
+// handlers (status/running endpoints marshal it) and with the runtime's
+// scanner/sampler goroutines. Every write to it goes through m.mu, and
+// anything handed to the store or to hooks is a snapshot copy; the
+// runtime performs its own writes only through the hooks sinks.
 func (m *Manager) runJob(job *Job, spec executor.Spec) {
+	m.mu.Lock()
 	job.IsRunning = true
 	job.Status = api.StatusRunning
 	job.started = time.Now()
 	job.StartedUnix = job.started.Unix()
-	m.cfg.Store.UpsertJob(job.JobStatus)
+	snap := job.copyLocked()
+	m.mu.Unlock()
+	m.cfg.Store.UpsertJob(snap)
 
 	if m.cfg.OnStart != nil {
 		m.cfg.OnStart(job.JobStatus)
@@ -214,6 +227,7 @@ func (m *Manager) runJob(job *Job, spec executor.Spec) {
 	info := m.cfg.Local.Run(runCtx, job.JobStatus, executor.RunOptions{
 		Spec:     spec,
 		Settings: job.Settings,
+		Hooks:    m.liveHooks(job),
 	})
 	cancelRun()
 	m.mu.Lock()
@@ -222,7 +236,9 @@ func (m *Manager) runJob(job *Job, spec executor.Spec) {
 	if m.cfg.OnEnd != nil {
 		m.cfg.OnEnd(job.JobStatus)
 	}
+	m.mu.Lock()
 	job.exitCode, job.oomKilled = info.ExitCode, info.OOMKilled
+	m.mu.Unlock()
 
 	m.finalize(job)
 
@@ -236,6 +252,43 @@ func (m *Manager) runJob(job *Job, spec executor.Spec) {
 	m.poke()
 }
 
+// liveHooks is the sink pair for one running job: the runtime routes
+// every mutation the scanner/sampler goroutines would make through
+// here, so those writes serialize against the status endpoints (see the
+// runJob concurrency contract).
+func (m *Manager) liveHooks(job *Job) executor.Hooks {
+	return executor.Hooks{
+		Log: func(line string) {
+			m.mu.Lock()
+			job.Log = executor.AddLine(job.Log, line)
+			m.mu.Unlock()
+		},
+		Err: func(line string) {
+			m.mu.Lock()
+			job.ErrorMsg = executor.AddLine(job.ErrorMsg, line)
+			m.mu.Unlock()
+		},
+		Percent: func(pct float32) {
+			m.mu.Lock()
+			job.Percent = pct
+			m.mu.Unlock()
+		},
+		Result: func(hash string) {
+			m.mu.Lock()
+			job.OutputHash = hash
+			m.mu.Unlock()
+		},
+		Mem: func(curMB int64) {
+			m.mu.Lock()
+			job.MemCurrentMB = curMB
+			if curMB > job.MemPeakMB {
+				job.MemPeakMB = curMB
+			}
+			m.mu.Unlock()
+		},
+	}
+}
+
 // finalize records the terminal state of a job exactly once. Every exit
 // path (container completion with or without early setup errors, external
 // poll, timeout) passes through here, so a job can never end unrecorded.
@@ -245,7 +298,6 @@ func (m *Manager) finalize(job *Job) {
 	m.mu.Lock()
 	cancelled := job.cancelled
 	errmsg := job.ErrorMsg
-	m.mu.Unlock()
 
 	job.IsRunning = false
 	job.Done = true
@@ -271,21 +323,24 @@ func (m *Manager) finalize(job *Job) {
 	default:
 		job.ExitReason = "ok"
 	}
+	snap := job.copyLocked()
+	m.mu.Unlock()
+
 	slog.Info("Job completed",
-		"handler", job.Handler,
-		"input_hash", job.InputHash,
-		"output_hash", job.OutputHash,
-		"running_time", job.RunningTime,
-		"status", job.Status,
+		"handler", snap.Handler,
+		"input_hash", snap.InputHash,
+		"output_hash", snap.OutputHash,
+		"running_time", snap.RunningTime,
+		"status", snap.Status,
 		"has_error", errmsg != "",
 	)
-	m.cfg.Store.UpsertJob(job.JobStatus)
+	m.cfg.Store.UpsertJob(snap)
 	// Every terminal transition passes through here, so this is the one
 	// hook a pipeline needs to learn a step finished. It must follow the
 	// UpsertJob above: advancing reads the job's outcome back from the
-	// store.
+	// store. The snapshot keeps the live record free to change.
 	if m.cfg.OnFinished != nil {
-		m.cfg.OnFinished(job.JobStatus)
+		m.cfg.OnFinished(snap)
 	}
 }
 
@@ -412,6 +467,52 @@ func (m *Manager) Submit(job *Job) {
 // backend is configured.
 var ErrNoExternalBackend = errors.New("external execution backend not enabled on this runner")
 
+// HasExternal reports whether an external execution backend is wired.
+func (m *Manager) HasExternal() bool { return m.cfg.External != nil }
+
+// QueueList snapshots the waiting queue for the queue endpoint.
+func (m *Manager) QueueList() []*api.JobStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := m.queue.List()
+	out := make([]*api.JobStatus, 0, len(items))
+	for _, j := range items {
+		out = append(out, j.copyLocked())
+	}
+	return out
+}
+
+// copyLocked snapshots the wire record. Callers must hold m.mu: that is
+// what keeps HTTP marshalling from interleaving with the executor's
+// writes to the live record. (The historic code marshalled live
+// pointers; the race was always there, just rarely armed.)
+func (j *Job) copyLocked() *api.JobStatus {
+	c := *j.JobStatus
+	return &c
+}
+
+// LiveCopy snapshots the live record for a job id (status endpoints).
+func (m *Manager) LiveCopy(jobID string) (*api.JobStatus, bool) {
+	if v, ok := m.jobs.Load(jobID); ok {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return v.(*Job).copyLocked(), true
+	}
+	return nil, false
+}
+
+// RunningStatuses snapshots the wire records of the currently running
+// jobs (the running/active endpoints).
+func (m *Manager) RunningStatuses() []*api.JobStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*api.JobStatus, 0, len(m.running))
+	for _, j := range m.running {
+		out = append(out, j.copyLocked())
+	}
+	return out
+}
+
 // SubmitExternal hands a job to the deployment's external backend. It
 // bypasses the local queue; the poller tracks it to completion. The
 // backend fills the job's ext-queue/ext-region provenance fields as part
@@ -420,16 +521,34 @@ func (m *Manager) SubmitExternal(ctx context.Context, job *Job) error {
 	if m.cfg.External == nil {
 		return ErrNoExternalBackend
 	}
-	handle, err := m.cfg.External.Submit(ctx, job.JobStatus)
+	// The backend stamps provenance fields onto the record it is given;
+	// hand it a snapshot and fold the result back under the lock, so a
+	// concurrent status read never sees a torn record.
+	m.mu.Lock()
+	backendView := job.copyLocked()
+	m.mu.Unlock()
+	handle, err := m.cfg.External.Submit(ctx, backendView)
 	if err != nil {
+		m.mu.Lock()
+		job.Queue, job.Region = backendView.Queue, backendView.Region
 		job.ErrorMsg = executor.AddLine(job.ErrorMsg, "external submit failed: "+err.Error())
-		m.cfg.Store.UpsertJob(job.JobStatus)
+		job.exitCode = 1
+		m.mu.Unlock()
+		// The job already reached a terminal state (the backend refused
+		// it), so it must finalize: store write plus the OnFinished hook,
+		// or a pipeline step waiting on it would hang forever. finalize
+		// takes the lock itself, so call it outside.
+		m.finalize(job)
 		slog.Error("Failed to submit external job", "job_id", job.JobID, "job_type", job.JobType, "error", err)
 		return err
 	}
+	m.mu.Lock()
 	job.BatchJobID = handle
 	job.Status = api.StatusQueued
-	m.cfg.Store.UpsertJob(job.JobStatus)
+	job.Queue, job.Region = backendView.Queue, backendView.Region
+	snap := job.copyLocked()
+	m.mu.Unlock()
+	m.cfg.Store.UpsertJob(snap)
 	slog.Info("Submitted external job", "job_id", job.JobID, "job_type", job.JobType, "handle", handle, "queue", job.Queue)
 	return nil
 }
@@ -451,8 +570,9 @@ func (m *Manager) Cancel(jobID string) error {
 			m.mu.Lock()
 			job.cancelled = true
 			job.ErrorMsg = executor.AddLine(job.ErrorMsg, "cancelled by user")
+			snap := job.copyLocked()
 			m.mu.Unlock()
-			m.cfg.Store.UpsertJob(job.JobStatus)
+			m.cfg.Store.UpsertJob(snap)
 			slog.Info("Cancelled external job", "job_id", jobID, "handle", job.BatchJobID)
 			return nil
 		}
@@ -461,15 +581,18 @@ func (m *Manager) Cancel(jobID string) error {
 	if m.queue.Remove(jobID) {
 		if v, ok := m.jobs.Load(jobID); ok {
 			job := v.(*Job)
+			m.mu.Lock()
 			job.cancelled = true
 			job.Status = api.StatusCancelled
 			job.ErrorMsg = executor.AddLine(job.ErrorMsg, "cancelled by user")
-			m.cfg.Store.UpsertJob(job.JobStatus)
+			snap := job.copyLocked()
+			m.mu.Unlock()
+			m.cfg.Store.UpsertJob(snap)
 			// A queued job never runs, so it never reaches finalize; tell
 			// the pipeline hook directly or the step would stay running
 			// forever.
 			if m.cfg.OnFinished != nil {
-				m.cfg.OnFinished(job.JobStatus)
+				m.cfg.OnFinished(snap)
 			}
 		}
 		slog.Info("Cancelled queued job", "job_id", jobID)

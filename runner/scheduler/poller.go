@@ -44,10 +44,13 @@ func (m *Manager) pollOnce() {
 	inflight := map[string]*Job{}
 	m.jobs.Range(func(_, v any) bool {
 		j := v.(*Job)
-		if !j.Done && j.BatchJobID != "" {
+		m.mu.Lock()
+		ext := !j.Done && j.BatchJobID != ""
+		if ext {
 			inflight[j.BatchJobID] = j
 		}
-		return true
+		m.mu.Unlock()
+		return ext
 	})
 	if len(inflight) == 0 {
 		return
@@ -105,16 +108,20 @@ func (m *Manager) pollOnce() {
 			m.mu.Unlock()
 			m.finalize(job)
 		default:
-			if job.Status != state.Status {
-				m.mu.Lock()
+			m.mu.Lock()
+			changed := job.Status != state.Status
+			if changed {
 				job.Status = state.Status
 				if state.Status == api.StatusRunning && job.started.IsZero() {
 					job.started = now
 					job.StartedUnix = now.Unix()
 					job.IsRunning = true
 				}
-				m.mu.Unlock()
-				m.cfg.Store.UpsertJob(job.JobStatus)
+			}
+			snap := job.copyLocked()
+			m.mu.Unlock()
+			if changed {
+				m.cfg.Store.UpsertJob(snap)
 			}
 		}
 	}

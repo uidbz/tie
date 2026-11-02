@@ -148,6 +148,19 @@ func (m *Manager) RunningPort(service string) (int, bool) {
 	return port, exists
 }
 
+// AllocatePersistentPort assigns a stable host port to a raw-TCP service:
+// draw from the pool and reserve it forever, so the port survives
+// restarts and is never handed to another service (the deploy that owns
+// it stores it on the image entry).
+func (m *Manager) AllocatePersistentPort() (int, error) {
+	port, err := m.cfg.Ports.Next()
+	if err != nil {
+		return 0, err
+	}
+	m.cfg.Ports.Reserve(port)
+	return port, nil
+}
+
 // List snapshots the whole registry (GET /api/services).
 func (m *Manager) List() map[string]api.TaskInfo {
 	m.mu.Lock()

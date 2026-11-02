@@ -183,7 +183,7 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 
 	extPath := d.extDir() + "/" + containerName
 	if err := os.MkdirAll(extPath, 0o755); err != nil {
-		job.ErrorMsg = AddLine(job.ErrorMsg, "failed to create job directory: "+err.Error())
+		opts.Hooks.err(job, "failed to create job directory: "+err.Error())
 		slog.Error("Failed to create job directory", "container", containerName, "error", err)
 		return ExitInfo{ExitCode: 1}
 	}
@@ -197,14 +197,14 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 	if len(opts.Settings) > 0 {
 		file, err := os.CreateTemp("", "runner-settings-*")
 		if err != nil {
-			job.ErrorMsg = AddLine(job.ErrorMsg, err.Error())
+			opts.Hooks.err(job, err.Error())
 			slog.Error("Failed to create temp settings file", "handler", job.Handler, "error", err)
 			return ExitInfo{ExitCode: 1}
 		}
 		if _, err := file.Write(opts.Settings); err != nil {
 			file.Close()
 			os.Remove(file.Name())
-			job.ErrorMsg = AddLine(job.ErrorMsg, err.Error())
+			opts.Hooks.err(job, err.Error())
 			slog.Error("Failed to write settings file", "handler", job.Handler, "error", err)
 			return ExitInfo{ExitCode: 1}
 		}
@@ -227,19 +227,19 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		job.ErrorMsg = AddLine(job.ErrorMsg, "Error creating StdoutPipe: "+err.Error())
+		opts.Hooks.err(job, "Error creating StdoutPipe: "+err.Error())
 		slog.Error("Failed to create stdout pipe", "handler", job.Handler, "error", err)
 		return ExitInfo{ExitCode: 1}
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		job.ErrorMsg = AddLine(job.ErrorMsg, "Error creating StderrPipe: "+err.Error())
+		opts.Hooks.err(job, "Error creating StderrPipe: "+err.Error())
 		slog.Error("Failed to create stderr pipe", "handler", job.Handler, "error", err)
 		return ExitInfo{ExitCode: 1}
 	}
 
 	if err := cmd.Start(); err != nil {
-		job.ErrorMsg = AddLine(job.ErrorMsg, "Error starting command: "+err.Error())
+		opts.Hooks.err(job, "Error starting command: "+err.Error())
 		slog.Error("Failed to start container command", "handler", job.Handler, "error", err)
 		return ExitInfo{ExitCode: 1}
 	}
@@ -257,10 +257,7 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 				return
 			case <-ticker.C:
 				if mb, ok := d.memoryMB(containerName); ok {
-					job.MemCurrentMB = mb
-					if mb > job.MemPeakMB {
-						job.MemPeakMB = mb
-					}
+					opts.Hooks.mem(job, mb)
 				}
 			}
 		}
@@ -272,14 +269,14 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			d.Protocol.Apply(job, scanner.Text())
+			d.Protocol.Apply(job, scanner.Text(), opts.Hooks)
 		}
 	}()
 	go func() {
 		scanner := bufio.NewScanner(stderr)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			job.Log = AddLine(job.Log, scanner.Text())
+			opts.Hooks.log(job, scanner.Text())
 		}
 	}()
 
@@ -297,7 +294,7 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 			info.ExitCode = ee.ExitCode()
 		}
 		if !cancelled {
-			job.ErrorMsg = AddLine(job.ErrorMsg, "Error waiting for command: "+waitErr.Error())
+			opts.Hooks.err(job, "Error waiting for command: "+waitErr.Error())
 		}
 		slog.Error("Container command wait failed", "handler", job.Handler, "error", waitErr, "exit_code", info.ExitCode, "oom_killed", info.OOMKilled)
 	}

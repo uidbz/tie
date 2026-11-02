@@ -32,12 +32,67 @@ type RunOptions struct {
 	Hooks    Hooks
 }
 
-// Hooks are optional observation points around the container's lifetime.
-// OnStart fires once the container name is reserved and the command has
-// started; OnEnd fires when the command has exited.
+// Hooks are optional observation points around the container's lifetime,
+// plus the sink for live updates to the job record. A runtime that
+// scans output or samples memory on background goroutines MUST route
+// every job-record mutation through the Log/Err/Percent/Result/Mem
+// sinks: the runner's implementations serialize them against the
+// status endpoints reading the same record. Sinks nil means direct
+// mutation (single-threaded callers: tests, standalone use).
 type Hooks struct {
 	OnStart func(containerName string)
 	OnEnd   func(containerName string)
+
+	Log     func(line string)
+	Err     func(line string)
+	Percent func(pct float32)
+	Result  func(hash string)
+	Mem     func(curMB int64)
+}
+
+// log/err/percent/result/mem dispatch to a sink or fall back to direct
+// mutation of the record.
+func (h Hooks) log(job *api.JobStatus, line string) {
+	if h.Log != nil {
+		h.Log(line)
+		return
+	}
+	job.Log = AddLine(job.Log, line)
+}
+
+func (h Hooks) err(job *api.JobStatus, line string) {
+	if h.Err != nil {
+		h.Err(line)
+		return
+	}
+	job.ErrorMsg = AddLine(job.ErrorMsg, line)
+}
+
+func (h Hooks) percent(job *api.JobStatus, pct float32) {
+	if h.Percent != nil {
+		h.Percent(pct)
+		return
+	}
+	job.Percent = pct
+}
+
+func (h Hooks) result(job *api.JobStatus, hash string) {
+	if h.Result != nil {
+		h.Result(hash)
+		return
+	}
+	job.OutputHash = hash
+}
+
+func (h Hooks) mem(job *api.JobStatus, curMB int64) {
+	if h.Mem != nil {
+		h.Mem(curMB)
+		return
+	}
+	job.MemCurrentMB = curMB
+	if curMB > job.MemPeakMB {
+		job.MemPeakMB = curMB
+	}
 }
 
 // ExitInfo is how a local execution ended: the container's exit code and

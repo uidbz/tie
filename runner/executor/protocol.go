@@ -101,15 +101,16 @@ func (p Protocol) Format(action, arg string) string {
 // Apply folds one stdout line into a job's live state: log always, marker
 // side effects as defined above. It is what the local runtime calls per
 // stdout line; deployments polling external backends reuse the same
-// semantics for backend-emitted logs.
-func (p Protocol) Apply(job *api.JobStatus, line string) {
-	job.Log = AddLine(job.Log, line)
+// semantics for backend-emitted logs. Mutations go through the hooks'
+// sinks when present (thread-safe), else straight into the record.
+func (p Protocol) Apply(job *api.JobStatus, line string, hooks Hooks) {
+	hooks.log(job, line)
 	cmd, marker, valid := p.Parse(line)
 	if !marker {
 		return
 	}
 	if !valid {
-		job.ErrorMsg = AddLine(job.ErrorMsg, "WARNING: Incorrect marker command (missing argument):\n>>> "+line)
+		hooks.err(job, "WARNING: Incorrect marker command (missing argument):\n>>> "+line)
 		slog.Warn("Invalid marker command", "handler", job.Handler, "line", line)
 		return
 	}
@@ -117,17 +118,17 @@ func (p Protocol) Apply(job *api.JobStatus, line string) {
 	case ActionPercent:
 		pct, err := strconv.ParseFloat(cmd.Arg, 32)
 		if err == nil {
-			job.Percent = float32(pct)
+			hooks.percent(job, float32(pct))
 			slog.Debug("Job progress update", "handler", job.Handler, "percent", pct)
 		} else {
-			job.Log = AddLine(job.Log, "Error parsing PercentDone:"+err.Error())
+			hooks.log(job, "Error parsing PercentDone:"+err.Error())
 			slog.Warn("Failed to parse PercentDone", "handler", job.Handler, "value", cmd.Arg, "error", err)
 		}
 	case ActionError:
-		job.ErrorMsg = AddLine(job.ErrorMsg, cmd.Arg)
+		hooks.err(job, cmd.Arg)
 		slog.Error("Job set error", "handler", job.Handler, "error_msg", cmd.Arg)
 	case ActionResult:
-		job.OutputHash = cmd.Arg
+		hooks.result(job, cmd.Arg)
 		slog.Info("Job set result", "handler", job.Handler, "output_hash", cmd.Arg)
 	}
 }

@@ -203,15 +203,15 @@ func TestProtocolParseAndApply(t *testing.T) {
 	}
 
 	job := &api.JobStatus{}
-	p.Apply(job, "#!TIE UnknownVerb whatever") // unknown action: logged, no state change
+	p.Apply(job, "#!TIE UnknownVerb whatever", Hooks{}) // unknown action: logged, no state change
 	if job.ErrorMsg != "" || job.OutputHash != "" || !strings.Contains(job.Log, "UnknownVerb") {
 		t.Errorf("unknown action must only log: %+v", job)
 	}
-	p.Apply(job, "#!TIE")
+	p.Apply(job, "#!TIE", Hooks{})
 	if !strings.Contains(job.ErrorMsg, "WARNING: Incorrect marker command") {
 		t.Errorf("malformed marker must add a warning error: %q", job.ErrorMsg)
 	}
-	p.Apply(job, "#!TIE PercentDone notanumber")
+	p.Apply(job, "#!TIE PercentDone notanumber", Hooks{})
 	if !strings.Contains(job.Log, "Error parsing PercentDone") {
 		t.Errorf("bad percent must be logged: %q", job.Log)
 	}
