@@ -5,6 +5,7 @@ go 1.27.3
 require (
 	github.com/go-filesystems/interface v0.5.0
 	github.com/go-filesystems/smb v0.7.0
+	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
 	github.com/hanwen/go-fuse/v2 v2.11.0
 	github.com/hirochachacha/go-smb2 v1.1.0
@@ -28,7 +29,6 @@ require (
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/go-filesystems/hostcopy v0.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
