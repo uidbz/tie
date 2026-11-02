@@ -104,6 +104,22 @@ func New(d Deps) *Server {
 // route of their own, extra mounts) wrap this in their own mux.
 func (s *Server) Handler() http.Handler { return s.mux }
 
+// SubmitJob is the engine-facing entry to the same submission path as
+// /api/run: the external-vs-local choice, the live-record snapshot. The
+// binary wires it into the pipeline sequencer's SubmitJob callback so
+// pipeline steps produce identical job records to client submissions.
+func (s *Server) SubmitJob(req api.JobRequest, deployManager string) (*api.JobStatus, error) {
+	return s.submitJob(req, deployManager)
+}
+
+// ValidateStep is the engine-facing entry to the same validation as
+// /api/run (known job type, fits capacity, image still exists). The
+// pipeline sequencer calls it at submit time so a graph the runner can
+// never finish is rejected before it starts.
+func (s *Server) ValidateStep(req api.JobRequest) error {
+	return s.validateJobRequest(req)
+}
+
 func (s *Server) routes() {
 	// Control plane: all management lives under /api so it can never be
 	// shadowed by the /service/* data-plane reverse proxy.

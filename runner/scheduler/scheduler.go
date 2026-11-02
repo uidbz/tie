@@ -370,6 +370,8 @@ func (m *Manager) SetCapacity(cpu, ramMB, gpu int) bool {
 		return false
 	}
 	m.cfg.TotalCPU, m.cfg.TotalRAMMB, m.cfg.TotalGPU = cpu, ramMB, gpu
+	// Newly available capacity should admit queued jobs immediately.
+	m.poke()
 	return true
 }
 

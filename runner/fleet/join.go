@@ -19,6 +19,14 @@ import (
 // it so the operator can report what to approve.
 var ErrJoinPending = errors.New("still pending approval")
 
+// PendingError is the typed ErrJoinPending: it wraps the sentinel
+// (errors.Is keeps working) and carries the HostID of the entry the
+// seed created.
+type PendingError struct{ HostID string }
+
+func (e *PendingError) Error() string { return ErrJoinPending.Error() }
+func (e *PendingError) Unwrap() error { return ErrJoinPending }
+
 // Join posts the registration handshake to the seed and re-posts every
 // poll interval until the host is approved (AddPending is idempotent, so
 // each post just re-reads the entry). The returned reply carries the
@@ -34,10 +42,11 @@ func Join(ctx context.Context, seed string, req api.RegisterRequest, poll, maxWa
 		return nil, err
 	}
 	deadline := time.Now().Add(maxWait)
+	var hostID string
 	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
 			if time.Now().After(deadline) {
-				return nil, ErrJoinPending
+				return &api.RegisterReply{HostID: hostID, Status: api.HostPending}, &PendingError{HostID: hostID}
 			}
 			select {
 			case <-ctx.Done():
@@ -67,6 +76,7 @@ func Join(ctx context.Context, seed string, req api.RegisterRequest, poll, maxWa
 		if err := json.Unmarshal(body, &rep); err != nil {
 			return nil, fmt.Errorf("bad seed reply: %w", err)
 		}
+		hostID = rep.HostID
 		if rep.Status == api.HostActive && len(rep.Config) > 0 {
 			return &rep, nil
 		}

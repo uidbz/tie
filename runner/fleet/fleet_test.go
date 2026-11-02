@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -123,9 +124,16 @@ func TestJoin(t *testing.T) {
 	// Always-pending seed: the wait budget must surface as pending with
 	// the host id for the operator.
 	posts.Store(-1000) // keep the server replying pending
-	_, err = Join(context.Background(), seed.URL, req, time.Millisecond, 20*time.Millisecond, nil)
-	if err != ErrJoinPending {
+	rep, err = Join(context.Background(), seed.URL, req, time.Millisecond, 20*time.Millisecond, nil)
+	if !errors.Is(err, ErrJoinPending) {
 		t.Errorf("timeout outcome: %v", err)
+	}
+	var pending *PendingError
+	if !errors.As(err, &pending) || pending.HostID == "" {
+		t.Errorf("pending error should carry the host id: %v", err)
+	}
+	if rep == nil || rep.HostID == "" || rep.Status != api.HostPending {
+		t.Errorf("pending reply should carry the host id: %+v", rep)
 	}
 }
 
