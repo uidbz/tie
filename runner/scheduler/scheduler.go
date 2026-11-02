@@ -72,10 +72,11 @@ type Config struct {
 	// when a queued job is cancelled without ever running. The pipeline
 	// sequencer uses it to advance the step graph.
 	OnFinished func(job *api.JobStatus)
-	// OnStart/OnEnd observe container lifetimes (the runner registers
-	// live services/tasks through them).
-	OnStart func(containerName string)
-	OnEnd   func(containerName string)
+	// OnStart/OnEnd observe job execution lifetimes (the runner registers
+	// live tasks through them). They fire around the local execution of a
+	// job with the live job record.
+	OnStart func(job *api.JobStatus)
+	OnEnd   func(job *api.JobStatus)
 	// ExternalTimeout bounds how long an externally executed job may stay
 	// non-terminal; 0 disables the check.
 	ExternalTimeout time.Duration
@@ -95,6 +96,10 @@ type Manager struct {
 
 	running      map[string]*Job // jobID -> admitted and running locally
 	busyHandlers map[string]bool // handler -> a job of it is running
+	// jobCancels unblocks a local execution whose container has not
+	// finished starting: docker stop cannot reach a container that does
+	// not exist yet, but cancelling the launch context can.
+	jobCancels map[string]context.CancelFunc
 
 	usedCPU   int
 	usedRAMMB int
@@ -113,6 +118,7 @@ func New(cfg Config) *Manager {
 		queue:        NewQueue(),
 		running:      make(map[string]*Job),
 		busyHandlers: make(map[string]bool),
+		jobCancels:   make(map[string]context.CancelFunc),
 		wake:         make(chan struct{}, 1),
 		stop:         make(chan struct{}),
 	}
@@ -195,16 +201,27 @@ func (m *Manager) runJob(job *Job, spec executor.Spec) {
 	job.StartedUnix = job.started.Unix()
 	m.cfg.Store.UpsertJob(job.JobStatus)
 
-	var hooks executor.Hooks
-	if m.cfg.OnStart != nil || m.cfg.OnEnd != nil {
-		hooks.OnStart = m.cfg.OnStart
-		hooks.OnEnd = m.cfg.OnEnd
+	if m.cfg.OnStart != nil {
+		m.cfg.OnStart(job.JobStatus)
 	}
-	info := m.cfg.Local.Run(context.Background(), job.JobStatus, executor.RunOptions{
+	// The launch context makes a cancel reachable before the container
+	// exists: docker stop cannot name a container that was never created,
+	// but cancelling this context unblocks the starting command.
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	m.mu.Lock()
+	m.jobCancels[job.JobID] = cancelRun
+	m.mu.Unlock()
+	info := m.cfg.Local.Run(runCtx, job.JobStatus, executor.RunOptions{
 		Spec:     spec,
 		Settings: job.Settings,
-		Hooks:    hooks,
 	})
+	cancelRun()
+	m.mu.Lock()
+	delete(m.jobCancels, job.JobID)
+	m.mu.Unlock()
+	if m.cfg.OnEnd != nil {
+		m.cfg.OnEnd(job.JobStatus)
+	}
 	job.exitCode, job.oomKilled = info.ExitCode, info.OOMKilled
 
 	m.finalize(job)
@@ -461,6 +478,7 @@ func (m *Manager) Cancel(jobID string) error {
 
 	m.mu.Lock()
 	cur := m.running[jobID]
+	cancelRun := m.jobCancels[jobID]
 	if cur != nil {
 		cur.cancelled = true
 	}
@@ -472,7 +490,20 @@ func (m *Manager) Cancel(jobID string) error {
 		containerName := executor.ContainerName(cur.Handler)
 		slog.Info("Cancelling running job", "job_id", jobID, "container", containerName)
 		if err := m.cfg.Local.Stop(containerName); err != nil {
-			return fmt.Errorf("failed to stop running job container: %w", err)
+			// The container may not exist yet (the run command is still
+			// launching). Unblocking the launch is the reliable cancel
+			// path there; the local runtime is required to honor ctx, so
+			// Run returns and finalizes as cancelled either way. Retry
+			// the stop best-effort in case the container came up between
+			// the first attempt and the launch cancel.
+			if cancelRun == nil {
+				return fmt.Errorf("failed to stop running job container: %w", err)
+			}
+			cancelRun()
+			if err2 := m.cfg.Local.Stop(containerName); err2 != nil {
+				slog.Info("Container stop after launch cancel found no container; launch aborted",
+					"job_id", jobID, "container", containerName)
+			}
 		}
 		return nil
 	}

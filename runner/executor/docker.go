@@ -134,12 +134,12 @@ func (d *Docker) runArgs(job *api.JobStatus, spec Spec, containerName, settingsP
 	return args
 }
 
-// symlinkTargets returns the target path (as stored in the symlink) for
+// SymlinkTargets returns the target path (as stored in the symlink) for
 // each symlink directly inside dir (non-recursive). The filehost layer
-// drops symlinks in a job's directory pointing at large blobs on the
-// host; the container must see those paths, so each target is bind-mounted
-// at its own path.
-func symlinkTargets(dir string) ([]string, error) {
+// drops symlinks in a job's or service's directory pointing at large
+// blobs on the host; the container must see those paths, so each target
+// is bind-mounted at its own path.
+func SymlinkTargets(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -188,9 +188,9 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 		return ExitInfo{ExitCode: 1}
 	}
 
-	var symlinkMounts []string
-	if mounts, err := symlinkTargets(extPath); err == nil {
-		symlinkMounts = mounts
+	var mounts []string
+	if m, err := SymlinkTargets(extPath); err == nil {
+		mounts = m
 	}
 
 	settingsPath := ""
@@ -213,7 +213,7 @@ func (d *Docker) Run(ctx context.Context, job *api.JobStatus, opts RunOptions) E
 		defer os.Remove(settingsPath)
 	}
 
-	args := d.runArgs(job, opts.Spec, containerName, settingsPath, symlinkMounts)
+	args := d.runArgs(job, opts.Spec, containerName, settingsPath, mounts)
 	slog.Info("Starting container job",
 		"handler", job.Handler,
 		"input_hash", job.InputHash,

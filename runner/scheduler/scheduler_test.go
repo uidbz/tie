@@ -2,7 +2,9 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,26 +17,34 @@ import (
 // until Stop closes the container's gate; a runFn override lets tests
 // finish immediately or control the outcome.
 type fakeLocal struct {
-	mu    sync.Mutex
-	gates map[string]chan struct{}
-	stops []string
-	runFn func(job *api.JobStatus) executor.ExitInfo
+	mu      sync.Mutex
+	gates   map[string]chan struct{}
+	stopped map[string]bool
+	stops   []string
+	runFn   func(job *api.JobStatus) executor.ExitInfo
 }
 
 func newFakeLocal() *fakeLocal {
-	return &fakeLocal{gates: map[string]chan struct{}{}}
+	return &fakeLocal{gates: map[string]chan struct{}{}, stopped: map[string]bool{}}
 }
 
-func (f *fakeLocal) Run(_ context.Context, job *api.JobStatus, _ executor.RunOptions) executor.ExitInfo {
+func (f *fakeLocal) Run(ctx context.Context, job *api.JobStatus, _ executor.RunOptions) executor.ExitInfo {
 	if f.runFn != nil {
 		return f.runFn(job)
 	}
 	name := executor.ContainerName(job.Handler)
 	ch := make(chan struct{})
 	f.mu.Lock()
+	if f.stopped[name] { // stopped before the container came up
+		f.mu.Unlock()
+		return executor.ExitInfo{}
+	}
 	f.gates[name] = ch
 	f.mu.Unlock()
-	<-ch
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
 	return executor.ExitInfo{}
 }
 
@@ -45,6 +55,8 @@ func (f *fakeLocal) Stop(name string) error {
 	if ch, ok := f.gates[name]; ok {
 		close(ch)
 		delete(f.gates, name)
+	} else {
+		f.stopped[name] = true
 	}
 	return nil
 }
@@ -297,20 +309,25 @@ func TestHandlerSerialization(t *testing.T) {
 	if s := env.m.Snapshot(); s.QueueLength != 1 {
 		t.Fatalf("second job with same handler must queue: %+v", s)
 	}
-	close(release)
-	env.waitFinished(t)
-	waitUntil(t, "second running", func() bool {
-		for _, j := range env.m.RunningJobs() {
-			if j.JobID == second.JobID {
-				return true
-			}
-		}
-		return false
-	})
-	if first.JobID == second.JobID {
-		t.Fatal("sanity")
+	// Capacity exists (spec 1 of 8); the handler gate alone holds it back.
+	if !env.m.CanFit(specs["CPUv1"]) {
+		t.Error("capacity is free; only the handler gate may block")
 	}
-	env.m.Cancel(second.JobID)
+
+	close(release)
+	fin := env.waitFinished(t)
+	if fin.JobID != first.JobID {
+		t.Fatalf("first finished %q, want %q", fin.JobID, first.JobID)
+	}
+	// The second finishes strictly after the first's OnFinished (the
+	// handler gate releases only post-finalize), proving serialization.
+	fin = env.waitFinished(t)
+	if fin.JobID != second.JobID {
+		t.Fatalf("second finished %q, want %q", fin.JobID, second.JobID)
+	}
+	if s := env.m.Snapshot(); s.Running != 0 || s.QueueLength != 0 {
+		t.Errorf("after both done: %+v", s)
+	}
 }
 
 func TestCancelQueuedJob(t *testing.T) {
@@ -361,6 +378,56 @@ func TestCancelUnknown(t *testing.T) {
 	env := newTestEnv(t, nil, nil)
 	if err := env.m.Cancel("nope"); err == nil {
 		t.Error("cancel of unknown job must error")
+	}
+}
+
+// stuckLaunchLocal models a runtime still inside the container launch:
+// stop keeps failing because the container does not exist yet, and only
+// the launch context can unblock the run.
+type stuckLaunchLocal struct{ stops atomic.Int32 }
+
+func (s *stuckLaunchLocal) Run(ctx context.Context, _ *api.JobStatus, _ executor.RunOptions) executor.ExitInfo {
+	<-ctx.Done()
+	return executor.ExitInfo{}
+}
+
+func (s *stuckLaunchLocal) Stop(string) error {
+	s.stops.Add(1)
+	return fmt.Errorf("no such container")
+}
+
+func TestCancelDuringContainerLaunch(t *testing.T) {
+	st := store.NewFake()
+	finished := make(chan *api.JobStatus, 8)
+	sl := &stuckLaunchLocal{}
+	m := New(Config{
+		Local:       sl,
+		Store:       st,
+		TotalCPU:    8,
+		TotalRAMMB:  1 << 20,
+		ResolveSpec: func(string) (executor.Spec, bool) { return executor.Spec{CPU: 1}, true },
+		OnFinished:  func(j *api.JobStatus) { finished <- j },
+	})
+	t.Cleanup(m.Stop)
+
+	job := m.NewJob(api.JobRequest{JobType: "CPUv1", Handler: "tool:v2", InputHash: "in"}, false, "")
+	m.Submit(job)
+	waitUntil(t, "job running", func() bool { return len(m.RunningJobs()) == 1 })
+
+	if err := m.Cancel(job.JobID); err != nil {
+		t.Fatal(err)
+	}
+	if got := sl.stops.Load(); got < 2 {
+		t.Errorf("stop attempts = %d, want a retry after the launch-context cancel", got)
+	}
+	select {
+	case <-finished:
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled launch never finalized")
+	}
+	rec, _ := st.GetJob(job.JobID)
+	if rec.Status != api.StatusCancelled || rec.ExitReason != "cancelled" {
+		t.Errorf("launch-window cancel outcome: %q/%q", rec.Status, rec.ExitReason)
 	}
 }
 

@@ -273,7 +273,7 @@ func TestSymlinkTargets(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
-	got, err := symlinkTargets(dir)
+	got, err := SymlinkTargets(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

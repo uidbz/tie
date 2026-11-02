@@ -9,9 +9,12 @@ import (
 
 // Local runs jobs on this machine. Run blocks for the whole execution,
 // updating job (log, percent, result, error, memory) as the container
-// reports, and returns the exit state. It never finalizes the job — the
-// caller owns the terminal transition (status, exit reason, persistence)
-// because that is where the store and pipeline machinery live.
+// reports, and returns the exit state. It must honor ctx: cancelling
+// ctx aborts the execution even before the container exists, which is
+// how the scheduler cancels a job whose launch has not completed. Run
+// never finalizes the job — the caller owns the terminal transition
+// (status, exit reason, persistence) because that is where the store and
+// pipeline machinery live.
 type Local interface {
 	Run(ctx context.Context, job *api.JobStatus, opts RunOptions) ExitInfo
 	// Stop asks a running container to terminate; Run then returns. Used
