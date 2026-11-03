@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [0.8.5] - 2026-11-03
+
+### Changed
+
+- **Minimum Go is 1.27.2 again** (was 1.27.3), so `GOTOOLCHAIN=local` with a
+  1.27.2 toolchain builds the module and its clients. A newer toolchain is
+  still recommended: 1.27.3 carries stdlib security fixes, and `govulncheck`
+  will flag 1.27.2.
+
 ## [v0.8.4] - 2026-11-03
 
 ### Fixed
