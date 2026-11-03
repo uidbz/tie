@@ -528,7 +528,7 @@ func (m *Manager) SubmitExternal(ctx context.Context, job *Job) error {
 	m.mu.Lock()
 	backendView := job.copyLocked()
 	m.mu.Unlock()
-	handle, err := m.cfg.External.Submit(ctx, backendView)
+	handle, err := m.cfg.External.Submit(ctx, backendView, job.Settings)
 	if err != nil {
 		m.mu.Lock()
 		job.Queue, job.Region = backendView.Queue, backendView.Region

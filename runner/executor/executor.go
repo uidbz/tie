@@ -113,8 +113,13 @@ type ExitInfo struct {
 // reconciles in-flight handles: mapped non-terminal states update the
 // job record, terminal states finalize it, and a configured timeout
 // cancels the handle through this same interface.
+//
+// Submit also receives the job's settings document: it is deliberately
+// not part of the wire record or the store (local runs get it as
+// /settings.json), but a remote backend's container needs it just the
+// same, so the seam passes it alongside the record.
 type External interface {
-	Submit(ctx context.Context, job *api.JobStatus) (handle string, err error)
+	Submit(ctx context.Context, job *api.JobStatus, settings json.RawMessage) (handle string, err error)
 	Status(ctx context.Context, handles []string) (map[string]HandleState, error)
 	Cancel(ctx context.Context, handle, reason string) error
 }

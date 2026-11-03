@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -69,17 +70,19 @@ func (f *fakeLocal) stopCalls() []string {
 
 // fakeExternal stands in for a remote backend seam.
 type fakeExternal struct {
-	mu        sync.Mutex
-	handle    string
-	states    map[string]executor.HandleState
-	submitted []*api.JobStatus
-	cancels   []string
+	mu          sync.Mutex
+	handle      string
+	states      map[string]executor.HandleState
+	submitted   []*api.JobStatus
+	gotSettings []json.RawMessage
+	cancels     []string
 }
 
-func (f *fakeExternal) Submit(_ context.Context, job *api.JobStatus) (string, error) {
+func (f *fakeExternal) Submit(_ context.Context, job *api.JobStatus, settings json.RawMessage) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.submitted = append(f.submitted, job)
+	f.gotSettings = append(f.gotSettings, settings)
 	job.Queue = "extq"
 	job.Region = "extr"
 	return f.handle, nil
@@ -455,9 +458,18 @@ func TestCapacityManagement(t *testing.T) {
 
 func TestExternalLifecycle(t *testing.T) {
 	env := newTestEnv(t, nil, nil) // no local spec for ext types
-	job := env.m.NewJob(api.JobRequest{JobType: "ext.big", Handler: "t", InputHash: "in"}, false, "dm")
+	settings := json.RawMessage(`{"tolerance":0.005}`)
+	job := env.m.NewJob(api.JobRequest{JobType: "ext.big", Handler: "t", InputHash: "in", Settings: settings}, false, "dm")
 	if err := env.m.SubmitExternal(context.Background(), job); err != nil {
 		t.Fatal(err)
+	}
+	// Settings never ride the wire record or the store, but the backend
+	// seam must still receive them -- its container needs them.
+	env.ext.mu.Lock()
+	captured := env.ext.gotSettings
+	env.ext.mu.Unlock()
+	if len(captured) != 1 || string(captured[0]) != string(settings) {
+		t.Errorf("settings not passed to the external seam: %v", captured)
 	}
 	rec, _ := env.st.GetJob(job.JobID)
 	if rec.BatchJobID != "h1" || rec.Queue != "extq" || rec.Region != "extr" {

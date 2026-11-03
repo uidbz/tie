@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **`executor.External.Submit` also receives the job's settings.** The
+  seam handed remote backends only the wire `JobStatus` record, but
+  settings deliberately never live on that record (local runs get them
+  as `/settings.json`), so a Batch-style backend could not hand its
+  container the job settings. `Submit(ctx, job, settings)` passes them
+  alongside the record. The interface shipped in v0.8.0 with no
+  implementations outside the engine's own tests, so the signature
+  change affects nobody mid-flight.
+
 ## [v0.8.1] - 2026-11-03
 
 ### Added
