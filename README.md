@@ -27,8 +27,8 @@ combinations, and linking media together — see
 Triple stores are not new (RDF, SPARQL, Datomic have used the
 `(subject, predicate, object)` shape for decades), and content-addressed storage
 is not new either. What tie combines is the interesting part: **a
-content-addressed blob store and a live, tag-derived FUSE filesystem, joined by
-the content hash.**
+content-addressed blob store and a live, tag-derived filesystem, joined by
+the content hash — and neither of them requires a server to exist.**
 
 - **Content is the key.** A file's highwayhash is its address in the blob store
   *and* the `key` of every triple that describes it. Metadata and bytes are
@@ -38,6 +38,12 @@ the content hash.**
   a browsable, writable directory tree: a path *is* a query, `mkdir`/rename edits
   tags, and the tree updates as the store does. You navigate your data by
   combining tags instead of by remembering where you filed something.
+- **The store is a file.** A collection is one `.tie` file. `tie -f <path.tie>`
+  runs every command — queries, tagging, dump/restore, even the live mount and
+  the SMB server — directly against that file, in-process, with no
+  `tie-triplestore` and no network; the same request handlers serve both paths.
+  A personal library can be a directory of files you back up with `rsync`, and
+  the identical CLI/library code talks to a server when you grow one.
 - **Open, multi-valued schema.** Because everything is a triple, a new relation
   (a tag you invent today, a new media attribute) needs no migration, and a key
   naturally holds many values under one relation — the common case for tagging.
@@ -79,25 +85,11 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | `runner/*`    | The engine behind `tie-runner`: durable store (on `tiedb`), scheduler, container executor, pipeline sequencer, service runtime, image registry, fleet machinery, dispatch, deploy, proxy, and the assembled HTTP surface. |
 | `runclient`   | Client library for one runner or a fleet (jobs, pipelines, services, uploads, fan-out listings). |
 
-### Timeouts and cancellation
+### Contexts and deadlines
 
-Two bounds apply to a request, and an embedder can set both:
-
-- **Triplestore requests** carry a deadline (60 s by default). `TieClient.SetTimeout(d)`
-  sets it; a negative `d` means no timeout.
-- **Every call has a `…Context` variant** — `GetContext`, `QueryContext`,
-  `ReadTieDirContext`, `AddContext`, `SetContext`, `DeleteContext`, `BatchContext`,
-  `DownloadContext`, `UploadContext` (and `UploadOptions.Context`) — which abandons
-  work the caller no longer wants instead of running it to completion and throwing
-  the answer away. Cancelling is not a rollback: what the server already applied
-  stays applied.
-- **Filehost requests** are bounded by a response-header deadline (30 s by default,
-  `client.FileHostResponseHeaderTimeout`), so a host that accepts the connection and
-  then never answers — a half-dead `tie-filehost`, a captive portal, an NFS-backed
-  store on a sleeping server — surfaces as an error rather than a parked goroutine.
-  The timer is abandoned once headers arrive, so a 4 KB thumbnail and a 4 GB blob are
-  both unaffected. The filehost layer carries the caller's context the same way
-  (`fhclient.StatContext`, `GetContext`, `PutContext`; `getlib.DownloadFileContext`).
+Every client call has a `…Context` variant, and both the triplestore and the
+filehost layer carry built-in deadlines. What they are and what cancellation
+does *not* do is spelled out in [docs/client.md](docs/client.md).
 
 ## The data model
 
@@ -509,7 +501,7 @@ flushed on-disk state.
 go build ./...
 ```
 
-Requires Go 1.25+. Mounting additionally requires FUSE (`/dev/fuse`,
+Requires Go 1.27.3+. Mounting additionally requires FUSE (`/dev/fuse`,
 `fusermount`).
 
 ### Makefile
@@ -521,6 +513,8 @@ Common tasks are wrapped in a `Makefile`:
 | `make build` | Build all commands into `dist/`. |
 | `make install` | Install just the `tie` client into `GOBIN` (rootless). |
 | `make install-server` | Install the client, `tie-triplestore`, and `tie-filehost` as system services (systemd/OpenRC). Run as `sudo make install-server`. See [Running as system services](#running-as-system-services). |
+| `make check` | The full gate: `scrub`, `vet`, `staticcheck`, `govulncheck`, and race-enabled tests. |
+| `make scrub` | Fail if closed-ecosystem tokens leaked into open source (run before pushing). |
 | `make clean` | Remove `dist/`. |
 | `make tls-keys` | Generate a self-signed `localhost.crt`/`localhost.key` for `tie-triplestore` / `tie-filehost`. |
 | `make push MSG="message"` | `go get -u . && go mod tidy`, then commit everything and push. |
@@ -536,7 +530,13 @@ Release notes are kept in [CHANGELOG.md](CHANGELOG.md).
 ## Deployment
 
 `tie-triplestore` (triple store, port 1161) and `tie-filehost` (blob store, port
-1162) are two separate services. They default to plain HTTP (`Insecure = true`)
+1162) are two separate services. `tie-runner` (compute plane, port 1163) is an
+optional third one: it needs both of the others, plus a container runtime, and
+its deployment surface — deploys, fleet membership, the `/service/*` proxy — is
+documented in [docs/runner-api.md](docs/runner-api.md). The rest of this section
+covers the data-plane pair.
+
+They default to plain HTTP (`Insecure = true`)
 with `ListenOn = ":116x"`, which binds **all interfaces** (`0.0.0.0`) — every
 host on your LAN can reach them, unencrypted, over HTTP basic auth. This is
 intended for a personal library on a trusted home network. Bind `ListenOn` to
@@ -552,7 +552,7 @@ at the access level of a read request:
 
 ```
 $ curl -s http://localhost:1161/-/version
-{"server":"tie-triplestore","build":{"version":"v0.7.3","commit":"…","date":"…","goVersion":"go1.27.2"}}
+{"server":"tie-triplestore","build":{"version":"v0.8.4","commit":"…","date":"…","goVersion":"go1.27.3"}}
 ```
 
 so you can tell what a box is actually running without a protocol client. The
