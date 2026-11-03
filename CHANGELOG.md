@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **`fleetcmd`: fleet administration is now an importable package.**
+  Everything cmd/tie-fleet did lives in `github.com/uidbz/tie/fleetcmd`
+  behind `Run(Brand, argv)`; the binary is a three-line main. A Brand
+  (CLI name, runner name, auth user, ssh user) rebrands the whole tool:
+  the config search paths (`~/.config/<cli>/`, `/etc/<cli>/`,
+  `<cli>.toml`), the env namespace (`<CLI>_ADMIN_TOKEN`,
+  `<CLI>_INSECURE`), every host-side path rollout and restart touch
+  (`<runner>-config.toml`, `/usr/local/bin/<runner>`, the service unit,
+  the pid file), and all usage/error text. Distributions that ship this
+  tool under their own name no longer fork it; they pin a Brand.
+
 ## [v0.8.2] - 2026-11-03
 
 ### Changed

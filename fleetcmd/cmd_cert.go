@@ -3,11 +3,12 @@
 // /api/capabilities and flags expiries inside certWarnDays. `cert push`
 // uploads a fresh PEM pair via POST /api/cert (AdminToken auth); the runner
 // hot-swaps it without a restart, so service containers keep running.
-package main
+package fleetcmd
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -60,7 +61,7 @@ func (cl *api) certPush(apiBase, token, certPEM, keyPEM string) error {
 
 func runCert(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: tie-fleet cert status | cert push --only H --crt FILE --key FILE")
+		return errors.New(bt("usage: tie-fleet cert status | cert push --only H --crt FILE --key FILE"))
 	}
 	var cf commonFlags
 	var only, crtFile, keyFile, token string
@@ -69,7 +70,7 @@ func runCert(args []string) error {
 	fs.StringVar(&only, "only", "", "restrict to one host")
 	fs.StringVar(&crtFile, "crt", "", "PEM certificate file (push)")
 	fs.StringVar(&keyFile, "key", "", "PEM key file (push)")
-	fs.StringVar(&token, "token", "", "AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)")
+	fs.StringVar(&token, "token", "", bt("AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)"))
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -113,13 +114,13 @@ func runCert(args []string) error {
 		for _, h := range hosts {
 			tok := token
 			if tok == "" {
-				tok = os.Getenv("TIE_FLEET_ADMIN_TOKEN")
+				tok = os.Getenv(adminTokenEnv())
 			}
 			if tok == "" {
 				tok = h.Token
 			}
 			if tok == "" {
-				return fmt.Errorf("%s: no AdminToken (pass --token, set TIE_FLEET_ADMIN_TOKEN, or add Token to its [[Hosts]] entry)", h.Name)
+				return fmt.Errorf(bt("%s: no AdminToken (pass --token, set TIE_FLEET_ADMIN_TOKEN, or add Token to its [[Hosts]] entry)"), h.Name)
 			}
 			fmt.Printf("%s: pushing cert ...\n", h.Name)
 			if err := cl.certPush(h.API, tok, string(certPEM), string(keyPEM)); err != nil {
@@ -128,6 +129,6 @@ func runCert(args []string) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("usage: tie-fleet cert status | cert push --only H --crt FILE --key FILE")
+		return errors.New(bt("usage: tie-fleet cert status | cert push --only H --crt FILE --key FILE"))
 	}
 }

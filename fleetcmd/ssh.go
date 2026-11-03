@@ -2,7 +2,7 @@
 // an SSH library: the operator's keys, known_hosts, and sudoers setup keep
 // working unchanged, and BatchMode=yes preserves the "fail fast, no prompts"
 // behavior.
-package main
+package fleetcmd
 
 import (
 	"fmt"

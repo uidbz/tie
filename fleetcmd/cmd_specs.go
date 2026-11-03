@@ -2,9 +2,10 @@
 // idempotent, and always back up the file before writing. With --host the
 // remote runner config (remote_config key) is fetched, edited locally, diffed, and
 // pushed back; without it, a local FILE is edited.
-package main
+package fleetcmd
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -19,7 +20,7 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
 func runSpecs(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: tie-fleet specs show | specs edit FILE [--set name:cpu:rammb:gpu]... [--drop name]... [--add-cap name] [--host H] [--dry-run]")
+		return errors.New(bt("usage: tie-fleet specs show | specs edit FILE [--set name:cpu:rammb:gpu]... [--drop name]... [--add-cap name] [--host H] [--dry-run]"))
 	}
 	switch args[0] {
 	case "show":
@@ -180,7 +181,7 @@ func specsEditRemote(host string, cf commonFlags, sets []SpecEdit, drops []strin
 
 func runAutostart(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: tie-fleet autostart list [--host H] | autostart set NAME... [--host H]")
+		return errors.New(bt("usage: tie-fleet autostart list [--host H] | autostart set NAME... [--host H]"))
 	}
 	var cf commonFlags
 	var host string

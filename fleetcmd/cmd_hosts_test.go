@@ -1,4 +1,4 @@
-package main
+package fleetcmd
 
 import (
 	"encoding/json"
@@ -39,7 +39,7 @@ Init = "openrc"
 }
 
 func TestServiceCmd(t *testing.T) {
-	svc, pid := defaultServiceName, defaultPidFile
+	svc, pid := serviceName(), pidFile()
 	cases := []struct{ init, action, want string }{
 		{"", "restart", "sudo systemctl restart tie-runner"},
 		{"systemd", "reload", "sudo systemctl reload tie-runner"},
@@ -57,7 +57,7 @@ func TestServiceCmd(t *testing.T) {
 func TestRegistryListAndApprove(t *testing.T) {
 	seed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
-		if !ok || u != defaultAuthUser || p != "adm" {
+		if !ok || u != brand.AuthUser || p != "adm" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -75,7 +75,7 @@ func TestRegistryListAndApprove(t *testing.T) {
 	}))
 	defer seed.Close()
 
-	cl, err := newAPI("", defaultAuthUser)
+	cl, err := newAPI("", brand.AuthUser)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestCertPushClient(t *testing.T) {
 			return
 		}
 		u, p, ok := r.BasicAuth()
-		if !ok || u != defaultAuthUser || p != "adm" {
+		if !ok || u != brand.AuthUser || p != "adm" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -159,7 +159,7 @@ func TestCertPushClient(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "installed", "cert_not_after": "2027-01-01"})
 	}))
 	defer srv.Close()
-	cl, _ := newAPI("", defaultAuthUser)
+	cl, _ := newAPI("", brand.AuthUser)
 	if err := cl.certPush(srv.URL, "adm", "PEMCERT", "PEMKEY"); err != nil {
 		t.Fatal(err)
 	}

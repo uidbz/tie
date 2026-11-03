@@ -1,5 +1,5 @@
 // Subcommands: status, specs show, restart.
-package main
+package fleetcmd
 
 import (
 	"flag"

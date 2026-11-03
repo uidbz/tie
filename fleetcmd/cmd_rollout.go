@@ -6,7 +6,7 @@
 //
 // BuildHost and RepoURL come from the fleet config's [Rollout] table:
 // where the build happens and what gets built are deployment decisions.
-package main
+package fleetcmd
 
 import (
 	"crypto/sha256"

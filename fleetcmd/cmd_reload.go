@@ -6,7 +6,7 @@
 //
 // AdminToken resolution: --token flag > TIE_FLEET_ADMIN_TOKEN env > the
 // optional `token` key on the [[Hosts]] entry in the fleet config.
-package main
+package fleetcmd
 
 import (
 	"bytes"
@@ -27,7 +27,7 @@ func runReload(args []string) error {
 	fs := flag.NewFlagSet("reload", flag.ExitOnError)
 	cf.register(fs)
 	fs.StringVar(&only, "only", "", "restrict to one host")
-	fs.StringVar(&token, "token", "", "AdminToken for POST /api/reload (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)")
+	fs.StringVar(&token, "token", "", bt("AdminToken for POST /api/reload (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)"))
 	fs.BoolVar(&forceRestart, "restart", false, "skip HTTP and use sudo systemctl restart (kills service containers on pre-v1.6.0 runners; the pre-v1.2.0 escape hatch)")
 	fs.Parse(args)
 
@@ -44,7 +44,7 @@ func runReload(args []string) error {
 		return err
 	}
 	ssh := sshRunner{user: cf.sshUser}
-	envToken := os.Getenv("TIE_FLEET_ADMIN_TOKEN")
+	envToken := os.Getenv(adminTokenEnv())
 
 	for _, h := range hosts {
 		caps, err := cl.capabilities(h.API)
@@ -52,7 +52,7 @@ func runReload(args []string) error {
 			return fmt.Errorf("%s: API unreachable, refusing to reload blind: %w", h.Name, err)
 		}
 		if !supportsReload(caps) {
-			return fmt.Errorf("%s: build %s/%s predates hot config reload — SIGHUP would KILL the runner and its service containers; use 'tie-fleet restart --only %s' or roll it out first", h.Name, caps.Version, caps.GitCommit, h.Name)
+			return fmt.Errorf(bt("%s: build %s/%s predates hot config reload — SIGHUP would KILL the runner and its service containers; use 'tie-fleet restart --only %s' or roll it out first"), h.Name, caps.Version, caps.GitCommit, h.Name)
 		}
 		if forceRestart {
 			fmt.Printf("%s: forced restart ...\n", h.Name)
@@ -80,7 +80,7 @@ func runReload(args []string) error {
 		// (checked above). Needs a sudoers rule for `systemctl reload`.
 		out, err := ssh.run(h.Name, serviceCmd(h.Init, "reload", cfg.Rollout.ServiceName, cfg.Rollout.PidFile))
 		if err != nil {
-			return fmt.Errorf("%s: service reload failed (%v)\n  add a NOPASSWD sudoers rule for '%s' on %s,\n  or set AdminToken in the runner config and pass --token / TIE_FLEET_ADMIN_TOKEN for HTTP reload",
+			return fmt.Errorf(bt("%s: service reload failed (%v)\n  add a NOPASSWD sudoers rule for '%s' on %s,\n  or set AdminToken in the runner config and pass --token / TIE_FLEET_ADMIN_TOKEN for HTTP reload"),
 				h.Name, strings.TrimSpace(out),
 				strings.TrimPrefix(serviceCmd(h.Init, "reload", cfg.Rollout.ServiceName, cfg.Rollout.PidFile), "sudo "), h.Name)
 		}

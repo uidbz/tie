@@ -3,7 +3,7 @@
 // [[DeployedImages]]), and a round-trip would eat the operator's comments and
 // reformat secrets. These edits preserve everything they do not touch, are
 // idempotent, and are unit-tested (configedit_test.go).
-package main
+package fleetcmd
 
 import (
 	"fmt"

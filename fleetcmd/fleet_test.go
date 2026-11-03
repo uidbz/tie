@@ -1,4 +1,4 @@
-package main
+package fleetcmd
 
 import (
 	"os"
@@ -52,7 +52,7 @@ func TestLoadFleetSearchFindsCurrentDir(t *testing.T) {
 	}
 	defer os.Chdir(old)
 	src := "[[Hosts]]\nName = \"h\"\nAPI = \"https://h\"\n"
-	if err := os.WriteFile(filepath.Join(dir, configFile), []byte(src), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, configFile()), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	hosts, err := loadFleet("")
@@ -66,7 +66,7 @@ func TestLoadFleetSearchFindsCurrentDir(t *testing.T) {
 
 func TestDefaultFleetValid(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, configFile)
+	path := filepath.Join(dir, configFile())
 	if err := os.WriteFile(path, []byte("[[Hosts]]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

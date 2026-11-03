@@ -2,11 +2,12 @@
 // the seed runner's /api/fleet/* endpoints (AdminToken auth), so new runners
 // that joined via the runner's own register mode can be managed without SSH.
 // The seed URL comes from the `seed` key in tie-fleet.toml.
-package main
+package fleetcmd
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -23,7 +24,7 @@ import (
 // by API prefix against the seed URL).
 func fleetAdminToken(token string, hosts []Host, seed string) (string, error) {
 	if token == "" {
-		token = os.Getenv("TIE_FLEET_ADMIN_TOKEN")
+		token = os.Getenv(adminTokenEnv())
 	}
 	if token == "" {
 		for _, h := range hosts {
@@ -34,7 +35,7 @@ func fleetAdminToken(token string, hosts []Host, seed string) (string, error) {
 		}
 	}
 	if token == "" {
-		return "", fmt.Errorf("no AdminToken for seed %s: pass --token, set TIE_FLEET_ADMIN_TOKEN, or add Token to its [[Hosts]] entry", seed)
+		return "", fmt.Errorf(bt("no AdminToken for seed %s: pass --token, set TIE_FLEET_ADMIN_TOKEN, or add Token to its [[Hosts]] entry"), seed)
 	}
 	return token, nil
 }
@@ -105,13 +106,13 @@ func formatHostsTable(hosts []runnerapi.FleetHost) string {
 
 func runHosts(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: tie-fleet hosts list | approve <id> | remove <id>")
+		return errors.New(bt("usage: tie-fleet hosts list | approve <id> | remove <id>"))
 	}
 	var cf commonFlags
 	var token string
 	fs := flag.NewFlagSet("hosts", flag.ExitOnError)
 	cf.register(fs)
-	fs.StringVar(&token, "token", "", "seed AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the seed [[Hosts]] Token key)")
+	fs.StringVar(&token, "token", "", bt("seed AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the seed [[Hosts]] Token key)"))
 	sub := args[0]
 	rest := args[1:]
 	// Allow flags before or after the subcommand.
@@ -125,7 +126,7 @@ func runHosts(args []string) error {
 		return err
 	}
 	if cfg.Seed == "" {
-		return fmt.Errorf("no 'seed' key in the fleet config: set seed = \"https://<seed-runner>\" in tie-fleet.toml")
+		return errors.New(bt("no 'seed' key in the fleet config: set seed = \"https://<seed-runner>\" in tie-fleet.toml"))
 	}
 	tok, err := fleetAdminToken(token, cfg.Hosts, cfg.Seed)
 	if err != nil {
@@ -145,16 +146,16 @@ func runHosts(args []string) error {
 		fmt.Print(formatHostsTable(hosts))
 	case "approve":
 		if len(rest) != 1 {
-			return fmt.Errorf("usage: tie-fleet hosts approve <id>")
+			return errors.New(bt("usage: tie-fleet hosts approve <id>"))
 		}
 		return cl.fleetApprove(cfg.Seed, tok, rest[0])
 	case "remove":
 		if len(rest) != 1 {
-			return fmt.Errorf("usage: tie-fleet hosts remove <id>")
+			return errors.New(bt("usage: tie-fleet hosts remove <id>"))
 		}
 		return cl.fleetRemove(cfg.Seed, tok, rest[0])
 	default:
-		return fmt.Errorf("usage: tie-fleet hosts list | approve <id> | remove <id>")
+		return errors.New(bt("usage: tie-fleet hosts list | approve <id> | remove <id>"))
 	}
 	return nil
 }

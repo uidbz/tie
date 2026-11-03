@@ -4,12 +4,13 @@
 // every command finds it again via conf.LoadConfig, which searches the
 // current dir, then the user config dir, then /etc/tie-fleet. --conf <path>
 // overrides with an explicit file.
-package main
+package fleetcmd
 
 import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -20,16 +21,52 @@ import (
 	runnerapi "github.com/uidbz/tie/runner/api"
 )
 
-const (
-	appName    = "tie-fleet"
-	configFile = "tie-fleet.toml"
+// Brand names the fleet tool's deployment face. The tool logic is
+// brand-free; branded shells (a downstream distribution that ships this
+// tool under its own name) inject their own values once via Run.
+// RunnerName drives every host-side path the rollout/restart commands
+// touch: the runner config file (<RunnerName>-config.toml), the
+// installed binary (/usr/local/bin/<RunnerName>), the service unit, and
+// the pid file.
+type Brand struct {
+	CLIName    string // this tool's command name: "tie-fleet"
+	RunnerName string // the runner binary/service name: "tie-runner"
+	AuthUser   string // default Basic Auth user fleet management expects
+	SSHUser    string // default SSH user on runner hosts
+}
 
-	defaultAuthUser     = "tie"
-	defaultRemoteConfig = "tie-runner-config.toml"
-	defaultRemoteBin    = "/usr/local/bin/tie-runner"
-	defaultServiceName  = "tie-runner"
-	defaultPidFile      = "/run/tie-runner.pid"
-)
+// TieBrand is the open-source default every tie user gets.
+var TieBrand = Brand{CLIName: "tie-fleet", RunnerName: "tie-runner", AuthUser: "tie", SSHUser: "tie"}
+
+// brand is the active deployment face. Single-process CLI: Run installs
+// it before dispatching; the tie defaults keep library use and tests
+// behaving without an explicit Brand.
+var brand = TieBrand
+
+// bt rewrites the tie spellings inside user-facing text for the active
+// brand. Templates are written with the tie names (they are the upstream
+// text) and wrapped at construction time.
+func bt(s string) string {
+	s = strings.ReplaceAll(s, "TIE_FLEET", envPrefix())
+	s = strings.ReplaceAll(s, "tie-fleet", brand.CLIName)
+	return strings.ReplaceAll(s, "tie-runner", brand.RunnerName)
+}
+
+// envPrefix is the brand's environment namespace, derived from CLIName:
+// CLI "tie-fleet" reads TIE_FLEET_* variables.
+func envPrefix() string {
+	return strings.ToUpper(strings.ReplaceAll(brand.CLIName, "-", "_"))
+}
+
+// adminTokenEnv is the AdminToken fallback variable name.
+func adminTokenEnv() string { return envPrefix() + "_ADMIN_TOKEN" }
+
+// Host-side names derived from the brand's runner name.
+func configFile() string   { return brand.CLIName + ".toml" }
+func remoteConfig() string { return brand.RunnerName + "-config.toml" }
+func remoteBin() string    { return "/usr/local/bin/" + brand.RunnerName }
+func serviceName() string  { return brand.RunnerName }
+func pidFile() string      { return "/run/" + brand.RunnerName + ".pid" }
 
 // Host is one fleet member: short name + runner API base. Token is the
 // optional AdminToken for POST /api/reload (reload command); it may also
@@ -85,19 +122,19 @@ func defaultFleet() FleetConfig {
 // operator's, so defaults live in code, not in what gets written.
 func (c *FleetConfig) applyDefaults() {
 	if c.AuthUser == "" {
-		c.AuthUser = defaultAuthUser
+		c.AuthUser = brand.AuthUser
 	}
 	if c.RemoteConfig == "" {
-		c.RemoteConfig = defaultRemoteConfig
+		c.RemoteConfig = remoteConfig()
 	}
 	if c.Rollout.RemoteBin == "" {
-		c.Rollout.RemoteBin = defaultRemoteBin
+		c.Rollout.RemoteBin = remoteBin()
 	}
 	if c.Rollout.ServiceName == "" {
-		c.Rollout.ServiceName = defaultServiceName
+		c.Rollout.ServiceName = serviceName()
 	}
 	if c.Rollout.PidFile == "" {
-		c.Rollout.PidFile = defaultPidFile
+		c.Rollout.PidFile = pidFile()
 	}
 }
 
@@ -113,9 +150,9 @@ func loadFleetConfig(explicit string) (FleetConfig, error) {
 		}
 	} else {
 		var err error
-		path, err = conf.LoadConfig(appName, configFile, &cfg)
+		path, err = conf.LoadConfig(brand.CLIName, configFile(), &cfg)
 		if err != nil {
-			return cfg, fmt.Errorf("no fleet config found (searched current dir, user config dir, /etc): %w\nrun 'tie-fleet init' to create one in the user config dir, or pass --conf PATH", err)
+			return cfg, fmt.Errorf(bt("no fleet config found (searched current dir, user config dir, /etc): %w\nrun 'tie-fleet init' to create one in the user config dir, or pass --conf PATH"), err)
 		}
 	}
 	cfg.Seed = strings.TrimRight(cfg.Seed, "/")
@@ -143,14 +180,14 @@ func loadFleet(explicit string) ([]Host, error) {
 
 // runInit writes the default fleet config to the user config dir.
 func runInit(args []string) error {
-	if _, err := conf.LoadConfig(appName, configFile, &FleetConfig{}); err == nil {
-		return fmt.Errorf("a tie-fleet.toml is already found; not overwriting")
+	if _, err := conf.LoadConfig(brand.CLIName, configFile(), &FleetConfig{}); err == nil {
+		return errors.New(bt("a tie-fleet.toml is already found; not overwriting"))
 	}
-	path, err := conf.PathUserConfigDir(appName, configFile)
+	path, err := conf.PathUserConfigDir(brand.CLIName, configFile())
 	if err != nil {
 		return err
 	}
-	if err := conf.SaveToUserConfigDir(appName, configFile, defaultFleet()); err != nil {
+	if err := conf.SaveToUserConfigDir(brand.CLIName, configFile(), defaultFleet()); err != nil {
 		return err
 	}
 	fmt.Printf("wrote default fleet config to %s\n", path)
@@ -187,7 +224,7 @@ type api struct {
 func newAPI(caPath, authUser string) (*api, error) {
 	tr := &http.Transport{}
 	tlsCfg := &tls.Config{}
-	if os.Getenv("TIE_FLEET_INSECURE") == "1" {
+	if os.Getenv(envPrefix()+"_INSECURE") == "1" {
 		tlsCfg.InsecureSkipVerify = true
 	}
 	if caPath != "" {
