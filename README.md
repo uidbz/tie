@@ -9,6 +9,14 @@ The store itself stays general — it holds arbitrary `(key, value1, value2)`
 triples — but the tooling is oriented toward tagging files and browsing them as
 a virtual filesystem.
 
+On top of that data plane sits a **compute plane**: `tie-runner` runs
+containerized jobs over content-addressed trees (input hash in, output hash
+out), chains them into pipelines, hosts long-running services, and clusters
+with peer runners; its wire protocol is formalized in
+[docs/runner-api.md](docs/runner-api.md). A job is itself tie data: its
+input and output are filehost addresses, so the same content hash names
+bytes, meaning, and the work that produced the bytes.
+
 For an end-to-end walkthrough of running tie as a personal media library —
 importing a filesystem, tagging albums/series/galleries, querying media by tag
 combinations, and linking media together — see
@@ -47,6 +55,10 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | `tie`          | CLI client for a `tie-triplestore`: add/get/delete triples, import & tag files, upload/download, dump/restore, and mount. |
 | `tie-filehost` | Content-addressed file server. Stores file bytes and immutable directory (`tiedir`) blobs, addressed by highwayhash. |
 | `tie-smb`    | SMB2/3 server exposing the live `tie mount --db` filesystem (`/query`, `/files`, `/tags`) as one share. See [docs/smb.md](docs/smb.md). |
+| `tie-runner` | Execution daemon: jobs, pipelines, deployed services, deploys, fleet membership, and the `/service/*` reverse proxy. See [docs/runner-api.md](docs/runner-api.md). |
+| `tie-run`    | Execution client: submit and watch jobs and pipelines, manage services and deploys, query capacity. |
+| `tie-exec`   | Container entrypoint: receives the job contract, reports progress (`#!TIE` markers), uploads the output tree. |
+| `tie-fleet`  | Fleet administration: status, rollout, host approval, image/cert pushes, config reload. |
 
 ## Packages
 
@@ -62,6 +74,10 @@ discussed honestly in [docs/internals.md](docs/internals.md#why-triples-and-why-
 | `io/fuselib`  | Mount tie directories as a FUSE filesystem (the live `--db` mount is read-write: rename, `mkdir`, and tag editing). See [docs/mount.md](docs/mount.md). |
 | `io/tiefs`    | The transport-agnostic live tree both mounts serve: tag queries, path navigation, staged writes, tag/type meta files, blob cache. |
 | `io/smbfs`    | The `io/tiefs` tree as a go-filesystems `Filesystem` for `tie-smb` (path model, name escaping, staged writes). See [docs/smb.md](docs/smb.md). |
+| `io/compose`  | Input selection and zero-copy tree composition over content-addressed trees (what a job/pipeline step's input tree is built from). |
+| `runner/api`  | The runner wire protocol as one source of truth: DTOs, route table, golden fixtures. See [docs/runner-api.md](docs/runner-api.md). |
+| `runner/*`    | The engine behind `tie-runner`: durable store (on `tiedb`), scheduler, container executor, pipeline sequencer, service runtime, image registry, fleet machinery, dispatch, deploy, proxy, and the assembled HTTP surface. |
+| `runclient`   | Client library for one runner or a fleet (jobs, pipelines, services, uploads, fan-out listings). |
 
 ### Timeouts and cancellation
 
@@ -219,6 +235,33 @@ so upload hashing and download verification cannot drift apart.
 - **Traversal is bounded.** Content addressing makes honest cycles impossible,
   and a malicious self-referential manifest fails verification; as a further
   backstop, eager directory recursion in `getlib` is capped at a fixed depth.
+
+## The compute plane
+
+A **job** is a container run against a filehost input tree: the handler
+image gets the tree at `/input`, and its output comes back as a content
+address. A **pipeline** chains such steps, each step's input a *selection*
+over earlier steps' outputs composed into a fresh manifest — bytes are
+never re-uploaded; composition moves manifests only (the `io/compose`
+grammar). A **service** is a deployed image with a long-running container
+published under `/service/<name>`. A **fleet** of runners advertises
+capabilities, forwards jobs to the right host, and replicates images and
+certs between peers.
+
+```sh
+export TIE_RUNNER=https://runner.example:1163
+tie-run deploy --prod ./proj     # build the project on the runner, publish the image
+tie-run run tool:v2 ./in ./out   # upload in/, run the job, download out/
+tie-run jobs --since 24h
+tie-fleet status
+```
+
+Everything speaks one documented protocol — [docs/runner-api.md](docs/runner-api.md):
+the frozen route table, golden wire fixtures (`testdata/runner/`), the
+container contract (the `tie-exec` flag set and the `#!TIE` stdout
+markers), and compatibility rules. `runner/protocoltest` exercises the
+assembled server and the `runclient` library against each other over
+real HTTP, so the two halves cannot drift apart.
 
 ## The `tie` CLI
 

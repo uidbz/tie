@@ -49,6 +49,30 @@ to follow semantic versioning.
 - **tie-smb `TripleStoreFile` / `ReadOnly`**: the SMB server can serve a local
   `.tie` file directly; `ReadOnly` opens a snapshot and downgrades every user to
   read-only.
+- **The compute plane: the tie runner engine.** `runner/api` formalizes the
+  runner wire protocol as one source of truth — DTOs, a 33-route table with a
+  generated manifest and golden fixtures pinning every response shape — and
+  [`docs/runner-api.md`](docs/runner-api.md) is the normative spec. On top of
+  it: `runner/store` (durable job and pipeline history on the embedded tiedb
+  engine, retention reaper included), `runner/scheduler` (resource-pool
+  admission, queue, external-backend polling seam), `runner/executor`
+  (container execution, the `#!TIE` stdout marker protocol, and the seam for
+  remote batch backends), `runner/pipeline` (step-graph sequencing over
+  composed inputs), `runner/service` + `runner/images` (deployed services,
+  persistent ports, the deployed-image registry), `runner/fleet` + `runner/sec`
+  + `runner/dispatch` + `runner/imagecheck` (multi-runner fleets: registry
+  with join/approval, image replication, cert push, capability routing),
+  `runner/deploy` (build-from-project deployments via the container CLI) and
+  `runner/server` (the assembled HTTP surface). New binaries: **`tie-runner`**
+  (the daemon — jobs, pipelines, services, deploys, fleet membership and the
+  `/service/*` reverse proxy; config hot reload, TLS hot swap, graceful
+  shutdown), **`tie-run`** (the execution client — run/status/logs/jobs/queue/
+  capacity/cancel/services/deploy/pipeline/version), **`tie-exec`** (the
+  container entrypoint) and **`tie-fleet`** (fleet admin — status/rollout/
+  hosts/cert/reload). `io/compose` lifts the input-selection and tree-
+  composition primitive into the shared io layer, and `runclient` is the
+  client library the CLI — and any embedder — drives. The only new module
+  dependency is `google/uuid`.
 
 ### Changed
 
