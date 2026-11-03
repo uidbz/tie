@@ -73,3 +73,47 @@ func TestReadOnlyMissingFileCreatesNothing(t *testing.T) {
 		t.Errorf("read-only open created the database: %v", err)
 	}
 }
+
+// TestReadOnlyEveryWritePathRefuses pins #154: Apply, Update, UpdateAdd,
+// SimpleUpdate and SetValues swallowed the helpers' ErrReadOnly and answered
+// success (or (message, true)) while leaving the index untouched. The engine
+// guarantee "writes return ErrReadOnly" has to hold on every public path.
+func TestReadOnlyEveryWritePathRefuses(t *testing.T) {
+	dir := t.TempDir()
+	key := CollectionKey{Database: dir, Collection: "honest"}
+
+	rw := NewDB(true)
+	col := rw.GetCollection(key)
+	if err := col.Add("k", "tag", "v"); err != nil {
+		t.Fatal(err)
+	}
+	col.Sync()
+	rw.Close()
+
+	ro := NewDB(true)
+	ro.SetReadOnly(true)
+	defer ro.Close()
+	rc, err := ro.TryGetCollection(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if n, err := rc.Apply([]Op{{Kind: OpAdd, Key: "k", Relation: "tag", Values: []string{"v2"}}}); !errors.Is(err, ErrReadOnly) || n != 0 {
+		t.Errorf("Apply = %d, %v; want 0, ErrReadOnly", n, err)
+	}
+	if msg, ok := rc.Update("k", "tag", "v", "v2"); ok {
+		t.Errorf("Update = %q, true; want false", msg)
+	}
+	if msg, ok := rc.UpdateAdd("k", "tag", "v", "v2"); ok {
+		t.Errorf("UpdateAdd = %q, true; want false", msg)
+	}
+	if msg, ok := rc.SimpleUpdate("k", "tag", "v2", true); ok {
+		t.Errorf("SimpleUpdate = %q, true; want false", msg)
+	}
+	rc.SetValues("k", "tag", []string{"w1", "w2"})
+
+	// Nothing changed: the index still holds exactly the original triple.
+	if got, ok := rc.Get("k", "tag"); !ok || len(got) != 1 || got[0] != "v" {
+		t.Errorf("index after refused writes = %v, %v; want exactly [v]", got, ok)
+	}
+}

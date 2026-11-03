@@ -50,6 +50,14 @@ func (ic *Collection) Apply(ops []Op) (applied int, err error) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
 
+	// A read-only collection refuses the whole batch before anything else:
+	// validation and the helpers below silently tolerate the read-only errors
+	// of delete/set, which used to let a batch answer applied=len(ops), nil
+	// while nothing was written (#154).
+	if ic.readOnly {
+		return 0, ErrReadOnly
+	}
+
 	if err := ic.Err(); err != nil {
 		return 0, err
 	}

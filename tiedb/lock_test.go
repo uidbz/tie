@@ -3,6 +3,8 @@
 package tiedb
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,4 +68,26 @@ func TestLockingOffByDefault(t *testing.T) {
 		t.Fatalf("second open with locking off: %v", err)
 	}
 	second.Close()
+}
+
+// TestNewCollectionFileIsPrivate pins #146: taking the lock creates the file
+// when the collection is new, so the lock's create mode IS the file's mode.
+// It must match openDB's 0600; the old 0666 left every fresh collection
+// readable by group and other.
+func TestNewCollectionFileIsPrivate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.tie")
+	f, err := lockCollectionFile(path)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if f != nil {
+		_ = f.Close()
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		t.Errorf("new collection mode = %v, want no group/other bits", fi.Mode().Perm())
+	}
 }

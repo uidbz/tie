@@ -23,7 +23,10 @@ var lockUnsupportedOnce sync.Once
 // tiedb-backed server and a direct `tie -f` open). It cannot stop an unrelated
 // program from writing the file.
 func lockCollectionFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o666)
+	// 0600, matching openDB: the lock runs first when a collection is new, so
+	// this mode IS the file's mode — 0666 left every fresh collection
+	// group/other-readable despite the writer asking for private files (#146).
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
