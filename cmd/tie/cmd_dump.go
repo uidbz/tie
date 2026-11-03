@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/uidbz/tie/client"
-	"github.com/uidbz/tie/metadata"
 	"github.com/uidbz/tie/tiedb"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/term"
@@ -25,7 +23,7 @@ func cmdDump(a *app) *cli.Command {
 			&cli.StringFlag{
 				Name:    "file",
 				Aliases: []string{"f"},
-				Usage:   "Read triples directly from a local .tie file instead of the server (offline export; takes the collection lock, so stop a running server first)",
+				Usage:   "Read triples directly from a local .tie file instead of the server (offline export; takes the collection lock, so stop a running server first — unless the global --read-only is set, which exports beside it)",
 			},
 		},
 		Action: func(_ context.Context, ctx *cli.Command) error {
@@ -68,8 +66,13 @@ func cmdDump(a *app) *cli.Command {
 				}
 			}
 
-			if path := ctx.String("file"); path != "" {
-				if err := dumpLocalFile(path, write); err != nil {
+			if path := ctx.String("file"); path != "" || fileFlagSpelled(ctx) {
+				if path == "" {
+					// `dump --file=` is a usage error, not a fall-through to a
+					// client that may not exist (#148).
+					return exitError{code: exitUsage, msg: "--file needs a .tie file to dump"}
+				}
+				if err := client.DumpLocalFile(path, ctx.Bool("read-only"), write); err != nil {
 					return operationalError("dump: %v", err)
 				}
 			} else {
@@ -87,38 +90,18 @@ func cmdDump(a *app) *cli.Command {
 	}
 }
 
-// dumpLocalFile reads every forward triple straight from an on-disk .tie file,
-// bypassing the server, and streams each as a TSV record to w (no in-memory
-// buffering of the whole collection). It reflects flushed on-disk state only,
-// so it is meant for offline export when no server holds the file open.
-func dumpLocalFile(path string, write func(tiedb.StringTriple) error) error {
-	if !strings.HasSuffix(path, ".tie") {
-		return fmt.Errorf("not a .tie file: %q", path)
-	}
-	if _, err := os.Stat(path); err != nil {
-		return err
-	}
-	dir := filepath.Dir(path)
-	name := strings.TrimSuffix(filepath.Base(path), ".tie")
-	db := tiedb.NewDB(true)
-	// Share the same safety rails as a full direct open: the hash blob policy is
-	// mandatory to load server-written records, and the lock keeps a running
-	// server (or another tie invocation) from changing the file under the dump.
-	db.SetLocking(true)
-	db.SetBlobPolicy(tiedb.HexHashBlobPolicy(metadata.IsHexHash))
-	defer db.Close()
-	col := db.GetCollection(tiedb.CollectionKey{Database: dir, Collection: name})
-	if err := col.Err(); err != nil {
-		return err
-	}
-	var writeErr error
-	col.ForEachTriple(func(t tiedb.StringTriple) {
-		if writeErr != nil {
-			return
+// fileFlagSpelled reports whether the dump command's own --file was given,
+// even with an empty value — the case `dump --file=` that used to fall
+// through to the (possibly nil) server client (#148).
+func fileFlagSpelled(ctx *cli.Command) bool {
+	for _, f := range ctx.Flags {
+		for _, n := range f.Names() {
+			if n == "file" && f.IsSet() {
+				return true
+			}
 		}
-		writeErr = write(t)
-	})
-	return writeErr
+	}
+	return false
 }
 
 func cmdRestore(a *app) *cli.Command {

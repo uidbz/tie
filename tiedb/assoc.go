@@ -174,8 +174,13 @@ func (ic *Collection) deleteLocked(key string, value1 string, value2 string) (st
 func (ic *Collection) Update(key string, value1 string, value2 string, newValue2 string) (string, bool) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	if ic.readOnly {
+		return ErrReadOnly.Error(), false
+	}
 	if msg, ok := ic.deleteLocked(key, value1, value2); ok {
-		ic.addLocked(key, value1, newValue2)
+		if err := ic.addLocked(key, value1, newValue2); err != nil {
+			return err.Error(), false
+		}
 		return "", true
 	} else {
 		return msg, false
@@ -188,11 +193,21 @@ func (ic *Collection) Update(key string, value1 string, value2 string, newValue2
 func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newValue2 string) (string, bool) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	// "It always succeeds" is only true for a writable collection: swallowing
+	// addLocked's ErrReadOnly used to answer (.., true) while adding nothing
+	// (#154).
+	if ic.readOnly {
+		return ErrReadOnly.Error(), false
+	}
 	if msg, ok := ic.deleteLocked(key, value1, value2); ok {
-		ic.addLocked(key, value1, newValue2)
+		if err := ic.addLocked(key, value1, newValue2); err != nil {
+			return err.Error(), false
+		}
 		return "", true
 	} else {
-		ic.addLocked(key, value1, newValue2)
+		if err := ic.addLocked(key, value1, newValue2); err != nil {
+			return err.Error(), false
+		}
 		return msg + ": could not update; adding new value as requested.", true
 	}
 }
@@ -204,10 +219,18 @@ func (ic *Collection) UpdateAdd(key string, value1 string, value2 string, newVal
 func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, addOnFail bool) (string, bool) {
 	ic.changeMutex.Lock()
 	defer ic.changeMutex.Unlock()
+	// Guard up front: the add/delete errors below are swallowed, so a
+	// read-only collection used to be told "(message, true)" while nothing
+	// changed (#154).
+	if ic.readOnly {
+		return ErrReadOnly.Error(), false
+	}
 	existing, found := ic.Get(key, value1)
 	if !found {
 		if addOnFail {
-			ic.addLocked(key, value1, newValue2)
+			if err := ic.addLocked(key, value1, newValue2); err != nil {
+				return err.Error(), false
+			}
 			return "", true
 		}
 		return "'" + key + "' with value1: '" + value1 + "' does not exist.", false
@@ -215,7 +238,9 @@ func (ic *Collection) SimpleUpdate(key string, value1 string, newValue2 string, 
 	for _, value2 := range existing {
 		ic.deleteLocked(key, value1, value2)
 	}
-	ic.addLocked(key, value1, newValue2)
+	if err := ic.addLocked(key, value1, newValue2); err != nil {
+		return err.Error(), false
+	}
 	return "", true
 }
 
@@ -424,8 +449,14 @@ func (ic *Collection) SetValues(key string, value1 string, values []string) {
 	ic.setValuesLocked(key, value1, values)
 }
 
-// setValuesLocked is SetValues' body; the caller must hold changeMutex.
+// setValuesLocked is SetValues' body; the caller must hold changeMutex. The
+// add/delete errors inside are deliberately tolerated (replace is best-effort
+// per value), so the read-only refusal has to come first: without it a
+// read-only collection reported a successful replace (#154).
 func (ic *Collection) setValuesLocked(key string, value1 string, values []string) {
+	if ic.readOnly {
+		return
+	}
 	if existing, found := ic.Get(key, value1); found {
 		for _, value2 := range existing {
 			ic.deleteLocked(key, value1, value2)

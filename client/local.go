@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/uidbz/tie/api"
+	"github.com/uidbz/tie/metadata"
+	"github.com/uidbz/tie/tiedb"
 	"github.com/uidbz/tie/webservice"
 )
 
@@ -20,34 +23,62 @@ import (
 // serves it, the transport the client talks through, and the exclusive
 // per-collection locks the engine takes while a collection is loaded.
 type localBackend struct {
-	dir       string
-	readOnly  bool
+	dir      string
+	readOnly bool
+	// snapshot is a private copy of dir's .tie files taken at open when the
+	// backend is read-only (#147). Reads are served from it, so a live
+	// writer cannot change the answer under the reader; Close removes it.
+	// dir keeps the real location for sibling scoping.
+	snapshot  string
 	transport *localTransport
 	closeOnce sync.Once
 }
 
-// openLocalBackend validates the collection file's directory and starts the
-// in-process service. The file itself may be absent: a sibling collection
-// (e.g. -c Other or the <name>_prev history collection) is created on its first
-// write, exactly as it is on a server. reverse is the direct-mode reverse-index
-// subset (empty = all); readOnly opens without a writer or lock.
+// openLocalBackend validates the collection file and starts the in-process
+// service. The file itself may be absent: a sibling collection (e.g. -c Other
+// or the <name>_prev history collection) is created on its first write, exactly
+// as it is on a server — but when it exists it must be a regular file, so a
+// directory or FIFO named X.tie is rejected rather than opened or hung on
+// (#152). reverse is the direct-mode reverse-index subset (empty = all);
+// readOnly opens without a writer or lock, served from a load-time snapshot of
+// the directory (#147).
 func openLocalBackend(file string, reverse []string, readOnly bool) (*localBackend, error) {
-	dir, err := localCollectionDir(file)
+	dir, exists, err := collectionFileDir(file)
 	if err != nil {
 		return nil, err
 	}
-	return &localBackend{dir: dir, readOnly: readOnly, transport: newLocalTransport(dir, reverse, readOnly)}, nil
+	b := &localBackend{dir: dir, readOnly: readOnly}
+	if readOnly && exists {
+		snap, serr := snapshotCollectionDir(dir)
+		if serr != nil {
+			return nil, fmt.Errorf("read-only snapshot of %s: %w", dir, serr)
+		}
+		b.snapshot = snap
+	}
+	serve := dir
+	if b.snapshot != "" {
+		serve = b.snapshot
+	}
+	b.transport = newLocalTransport(serve, reverse, readOnly)
+	return b, nil
 }
 
-// Close flushes every loaded collection and releases its lock. Safe to call
-// repeatedly.
+// Close flushes every loaded collection, releases its lock, and removes the
+// read-only snapshot if there was one. Safe to call repeatedly.
 func (b *localBackend) Close() {
-	b.closeOnce.Do(func() { b.transport.Close() })
+	b.closeOnce.Do(func() {
+		b.transport.Close()
+		if b.snapshot != "" {
+			_ = os.RemoveAll(b.snapshot)
+		}
+	})
 }
 
 // ConfigForFile returns a config that opens path directly, with no config file
 // required. Filehosts and import templates can still be merged in by the
-// caller (the CLI does).
+// caller (the CLI does). An offline open gets NO filehosts: contacting an
+// implicit localhost host instead of failing "no filehost configured" would
+// contradict the README and surprise the user (#151).
 func ConfigForFile(path string) (Config, error) {
 	abs, err := existingTieFile(path)
 	if err != nil {
@@ -60,68 +91,106 @@ func ConfigForFile(path string) (Config, error) {
 	c.Collection = strings.TrimSuffix(filepath.Base(abs), ".tie")
 	c.DefaultCollection = c.Collection
 	c.Collections = nil
-	// defaultConfig's FileHosts is a package-level map; copy it so a caller that
-	// edits this config cannot mutate the default for every later client.
-	c.FileHosts = make(map[string]FileHost, len(defaultConfig.FileHosts))
-	for name, host := range defaultConfig.FileHosts {
-		c.FileHosts[name] = host
-	}
+	c.FileHosts = map[string]FileHost{}
+	c.DefaultFileHosts = nil
 	return c, nil
 }
 
-// existingTieFile canonicalizes and validates the database file a `-f` open
-// names. A missing file is an error rather than an empty new database: a
-// mistyped -f must not look like it worked.
-func existingTieFile(path string) (string, error) {
-	if !strings.HasSuffix(path, ".tie") {
-		return "", fmt.Errorf("%q is not a .tie database file", path)
+// checkCollectionShape validates the NAME of a direct-mode collection file:
+// the .tie suffix and a collection-safe basename (#152).
+func checkCollectionShape(file string) error {
+	if !strings.HasSuffix(file, ".tie") {
+		return fmt.Errorf("%q is not a .tie database file", file)
 	}
-	abs, err := filepath.Abs(path)
+	if base := strings.TrimSuffix(filepath.Base(file), ".tie"); !webservice.ValidCollectionName(base) {
+		return fmt.Errorf("%q is not a valid collection file name", file)
+	}
+	return nil
+}
+
+// canonicalCollectionFile is the one collection-file validator shared by every
+// direct open path (#152): name shape, absolute path, and — when the file
+// already exists — symlink resolution to the target's identity plus a regular
+// file check. A missing sibling is allowed (exists=false); an existing
+// directory, FIFO or other non-regular path is rejected. Canonicalizing an
+// existing primary here is what makes a symlinked TripleStoreFile keep the
+// TARGET's basename and put <name>_prev beside the target, not beside the
+// link (#151).
+func canonicalCollectionFile(file string) (abs string, exists bool, err error) {
+	if err = checkCollectionShape(file); err != nil {
+		return "", false, err
+	}
+	abs, err = filepath.Abs(file)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	if real, rerr := filepath.EvalSymlinks(abs); rerr == nil {
 		abs = real
+		exists = true
+	} else if !errors.Is(rerr, os.ErrNotExist) {
+		return "", false, rerr
 	}
-	fi, err := os.Stat(abs)
-	if err != nil {
-		return "", err
+	if exists {
+		fi, serr := os.Stat(abs)
+		if serr != nil {
+			return "", false, serr
+		}
+		if !fi.Mode().IsRegular() {
+			return "", false, fmt.Errorf("%q is not a regular file", abs)
+		}
 	}
-	if !fi.Mode().IsRegular() {
-		return "", fmt.Errorf("%q is not a regular file", abs)
-	}
-	if base := strings.TrimSuffix(filepath.Base(abs), ".tie"); !webservice.ValidCollectionName(base) {
-		return "", fmt.Errorf("%q is not a valid collection file name", abs)
-	}
-	return abs, nil
+	return abs, exists, nil
 }
 
-// localCollectionDir resolves the directory a direct-mode collection lives in.
-// The collection file itself may not exist yet, so only the directory is
-// checked.
-func localCollectionDir(file string) (string, error) {
-	if !strings.HasSuffix(file, ".tie") {
-		return "", fmt.Errorf("%q is not a .tie database file", file)
-	}
-	if base := strings.TrimSuffix(filepath.Base(file), ".tie"); !webservice.ValidCollectionName(base) {
-		return "", fmt.Errorf("%q is not a valid collection file name", file)
-	}
-	abs, err := filepath.Abs(file)
+// ValidateCollectionFile is the exported form of the shared validator, used
+// by embedders that construct a direct-mode config themselves (tie-smb).
+// It returns the canonical path and whether the file already exists.
+func ValidateCollectionFile(path string) (string, bool, error) {
+	return canonicalCollectionFile(path)
+}
+
+// collectionFileParts is the full decomposition of a direct-mode file: the
+// canonical file path (#152 rules), the directory collections resolve
+// against, and whether the file exists yet.
+func collectionFileParts(file string) (abs, dir string, exists bool, err error) {
+	abs, exists, err = canonicalCollectionFile(file)
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
-	dir := filepath.Dir(abs)
+	dir = filepath.Dir(abs)
 	if real, rerr := filepath.EvalSymlinks(dir); rerr == nil {
 		dir = real
 	}
 	fi, err := os.Stat(dir)
 	if err != nil {
-		return "", err
+		return "", "", false, err
 	}
 	if !fi.IsDir() {
-		return "", fmt.Errorf("%q is not a directory", dir)
+		return "", "", false, fmt.Errorf("%q is not a directory", dir)
 	}
-	return dir, nil
+	return abs, dir, exists, nil
+}
+
+// collectionFileDir validates the file with the shared rules and resolves the
+// directory it lives in. The file may be absent (a sibling created on first
+// write); the directory must exist.
+func collectionFileDir(file string) (dir string, exists bool, err error) {
+	_, dir, exists, err = collectionFileParts(file)
+	return dir, exists, err
+}
+
+// existingTieFile validates the database file a `-f` open names. A missing
+// file is an error rather than an empty new database: a mistyped -f must not
+// look like it worked.
+func existingTieFile(path string) (string, error) {
+	abs, exists, err := canonicalCollectionFile(path)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("stat %s: %w", abs, os.ErrNotExist)
+	}
+	return abs, nil
 }
 
 // localDirFor is the comparison form of localCollectionDir: two collections are
@@ -132,6 +201,44 @@ func localDirFor(file string) string {
 		return real
 	}
 	return dir
+}
+
+// DumpLocalFile streams every forward triple of the on-disk collection at
+// path without a server. It is the one local-file reader shared with the
+// direct-mode client (#155): the same validation every direct open runs
+// (#152), the mandatory hash-blob policy, and — because a dump only walks
+// forward triples — NO reverse index, which halves load time on a large
+// database and is what docs/internals.md promises for `dump --file` (#148).
+// readOnly opens without the exclusive lock, so the export can run beside a
+// live server; otherwise the lock makes "stop the server first" a hard error
+// rather than advice.
+func DumpLocalFile(path string, readOnly bool, write func(tiedb.StringTriple) error) error {
+	abs, dir, exists, err := collectionFileParts(path)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("stat %s: %w", abs, os.ErrNotExist)
+	}
+	name := strings.TrimSuffix(filepath.Base(abs), ".tie")
+	db := tiedb.NewDB(true)
+	db.SetLocking(!readOnly)
+	db.SetReadOnly(readOnly)
+	db.SetDefaultReverseRelations([]string{}) // explicit empty = none, not "all"
+	db.SetBlobPolicy(tiedb.HexHashBlobPolicy(metadata.IsHexHash))
+	defer db.Close()
+	col := db.GetCollection(tiedb.CollectionKey{Database: dir, Collection: name})
+	if err := col.Err(); err != nil {
+		return err
+	}
+	var writeErr error
+	col.ForEachTriple(func(t tiedb.StringTriple) {
+		if writeErr != nil {
+			return
+		}
+		writeErr = write(t)
+	})
+	return writeErr
 }
 
 // localTransport serves the tie protocol from an in-process Webservice backed
@@ -147,8 +254,14 @@ type localTransport struct {
 
 // newLocalTransport opens the in-process service for dir. Collections resolve
 // to <dir>/<id>.tie, so the primary collection, the <name>_prev history
-// collection and any sibling collection all work.
+// collection and any sibling collection all work. An empty reverse list means
+// "index everything": TOML decodes `ReverseRelations = []` as a non-nil empty
+// slice, which tiedb would read as an empty index; nil is the "all" signal, so
+// normalize here, the one constructor every direct open passes through (#151).
 func newLocalTransport(dir string, reverse []string, readOnly bool) *localTransport {
+	if len(reverse) == 0 {
+		reverse = nil
+	}
 	ws := webservice.NewWebservice(webservice.WebserviceConfig{
 		LocalDir:         dir,
 		ReverseRelations: reverse,
@@ -164,6 +277,13 @@ func (t *localTransport) Do(ctx context.Context, id string, body []byte) ([]byte
 	}
 	var buf bytes.Buffer
 	status := t.ws.Dispatch(id, body, &buf)
+	// A handler already running cannot be interrupted mid-call — tiedb's
+	// walks are not interruptible — but HTTP at least discards the reply when
+	// the request's context is done. Report cancellation after the fact too,
+	// so a timeout really bounds the caller (#149).
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if status < 200 || status >= 300 {
 		return nil, localStatusError(id, status, buf.Bytes())
 	}

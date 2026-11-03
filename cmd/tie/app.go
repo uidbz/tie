@@ -45,6 +45,22 @@ func configExempt(name string) bool {
 // of the same three lines. A config that failed to load is an environment
 // failure rather than a failed operation, so it exits 2.
 func (a *app) before(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+	// Construction globals spelled after the subcommand are refused before
+	// anything runs: the client was built before them and they would be
+	// silently ignored (#143).
+	if err := lateGlobalFlagErr(cmd, cmd.Args().Slice()); err != nil {
+		return ctx, err
+	}
+	// `tie dump --file x.tie` is an offline export and needs no config. This
+	// runs ahead of the client checks: a broken TripleStoreURL elsewhere in the
+	// config must not stop an offline dump (#148), and a trailing --read-only
+	// was already refused by the guard above.
+	if offlineDump(cmd) {
+		if a.tie == nil {
+			slog.SetDefault(engineLogger(cmd))
+		}
+		return ctx, nil
+	}
 	// The hook runs on the root command, so the command about to execute is the
 	// first positional argument, not cmd.Name.
 	if a.tie != nil {
@@ -62,14 +78,6 @@ func (a *app) before(ctx context.Context, cmd *cli.Command) (context.Context, er
 		}
 	}
 	if configExempt(cmd.Args().First()) {
-		return ctx, nil
-	}
-	// `tie dump --file x.tie` is an offline export and needs no config. The
-	// global -f spelling already set a.tie; this is the subcommand flag.
-	if offlineDump(cmd) {
-		if a.tie == nil {
-			slog.SetDefault(engineLogger(cmd))
-		}
 		return ctx, nil
 	}
 	if a.tie == nil {
