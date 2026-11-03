@@ -1,6 +1,7 @@
 package webservice
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"syscall"
 
 	"github.com/uidbz/tie/auth"
@@ -141,8 +143,15 @@ func NewWebservice(config WebserviceConfig) *Webservice {
 	if len(config.CollectionReverseRelations) > 0 {
 		overrides := make(map[tiedb.CollectionKey][]string, len(config.CollectionReverseRelations))
 		for _, o := range config.CollectionReverseRelations {
-			key := tiedb.CollectionKey{Database: ws.DbPath(o.Namespace), Collection: o.Collection}
-			overrides[key] = o.Relations
+			// The key must equal what collectionKey resolves when the
+			// collection is opened. In LocalDir mode the namespace is
+			// ignored and the database IS the directory, so a key built from
+			// DbPath(namespace) could never match a local collection (#157).
+			dir := ws.DbPath(o.Namespace)
+			if config.LocalDir != "" {
+				dir = config.LocalDir
+			}
+			overrides[tiedb.CollectionKey{Database: dir, Collection: o.Collection}] = o.Relations
 		}
 		ws.db.SetReverseRelationsOverrides(overrides)
 	}
@@ -395,7 +404,7 @@ func (ws *Webservice) RequestHandler(w http.ResponseWriter, r *http.Request) {
 
 	reg, known := ws.handlers[reqName]
 	if known {
-		if ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw_data) {
+		if ws.readOnlyRefused(reg, raw_data) {
 			answerError(w, http.StatusForbidden, "Read-only database:", errors.New("write requests are disabled"))
 			return
 		}
@@ -498,21 +507,91 @@ func (l *localResponseWriter) Status() int {
 	return l.status
 }
 
+// readOnlyRefused is the one read-only gate the HTTP path and both in-process
+// paths run (#155): write-classified requests are blocked unless a registered
+// guard says this particular one is safe (e.g. CheckIndex without Repair).
+func (ws *Webservice) readOnlyRefused(reg registration, raw []byte) bool {
+	return ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw)
+}
+
+// dispatchDenial is a refusal prepareDispatch decided on: the status code,
+// and the message split the way answerError wants it (prepend + detail) so
+// the two in-process entry points answer identically.
+type dispatchDenial struct {
+	status  int
+	prepend string
+	detail  string
+}
+
+// prepareDispatch is the one set of checks every in-process request shares
+// (#155): known request id, the same request-size cap the HTTP path enforces
+// with MaxBytesReader (#149), and the read-only write block.
+func (ws *Webservice) prepareDispatch(reqID string, raw []byte) (reg registration, denial *dispatchDenial) {
+	reg, known := ws.handlers[reqID]
+	if !known {
+		return registration{}, &dispatchDenial{
+			status:  http.StatusNotFound,
+			prepend: "Unknown request:",
+			detail:  fmt.Sprintf("%q", reqID),
+		}
+	}
+	if int64(len(raw)) > ws.maxRequestBytes() {
+		return registration{}, &dispatchDenial{
+			status:  http.StatusRequestEntityTooLarge,
+			prepend: "Request too large:",
+			detail:  fmt.Sprintf("body of %d bytes exceeds the %d byte limit", len(raw), ws.maxRequestBytes()),
+		}
+	}
+	if ws.readOnlyRefused(reg, raw) {
+		return registration{}, &dispatchDenial{
+			status:  http.StatusForbidden,
+			prepend: "Read-only database:",
+			detail:  "write requests are disabled",
+		}
+	}
+	return reg, nil
+}
+
+// answerPanicLocal turns a recovered panic into the 500 answer net/http would
+// give the same request. Without recovery a corrupt file — tiedb.loadPass
+// panics on read errors — kills the CLI process and its Close never runs
+// (#149). The stack goes to the log; a body is only written when none has
+// started, since an error cannot be appended to a half-written reply.
+func answerPanicLocal(lw *localResponseWriter, reqID string, rec any) {
+	slog.Error("panic in in-process handler", "request", reqID, "panic", rec,
+		"stack", string(debug.Stack()))
+	if !lw.wrote {
+		answerError(lw, http.StatusInternalServerError, "Internal error:", fmt.Errorf("panic: %v", rec))
+	} else {
+		lw.status = http.StatusInternalServerError
+	}
+}
+
+// recoverLocal is answerPanicLocal wired to recover(); it must be the
+// directly deferred function for recover to stop the panic.
+func recoverLocal(lw *localResponseWriter, reqID string) {
+	if rec := recover(); rec != nil {
+		answerPanicLocal(lw, reqID, rec)
+	}
+}
+
 // Dispatch serves one registered request without HTTP. It writes the reply
 // body to w and returns the status code the HTTP handler would have used.
 //
 // Authentication is deliberately absent: an in-process caller already has the
 // .tie file open. The request's registered access level is still honored for
-// collection creation, so reads never create one.
-func (ws *Webservice) Dispatch(reqID string, raw []byte, w io.Writer) int {
+// collection creation, so reads never create one. Like the HTTP path, the
+// request size is capped and a panicking handler is answered as a 500 rather
+// than unwinding the caller's goroutine (#149).
+func (ws *Webservice) Dispatch(reqID string, raw []byte, w io.Writer) (status int) {
 	lw := newLocalResponseWriter(w)
-	reg, known := ws.handlers[reqID]
-	if !known {
-		answerError(lw, http.StatusNotFound, "Unknown request:", fmt.Errorf("%q", reqID))
-		return lw.Status()
-	}
-	if ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw) {
-		answerError(lw, http.StatusForbidden, "Read-only database:", errors.New("write requests are disabled"))
+	// LIFO: recoverLocal runs first, then the status is read back from the
+	// writer — a recovered panic still reports the 500 it answered with.
+	defer func() { status = lw.Status() }()
+	defer recoverLocal(lw, reqID)
+	reg, denial := ws.prepareDispatch(reqID, raw)
+	if denial != nil {
+		answerError(lw, denial.status, denial.prepend, errors.New(denial.detail))
 		return lw.Status()
 	}
 	ws.serve(reg, ws.localEnv(reg.access), raw, lw)
@@ -522,40 +601,67 @@ func (ws *Webservice) Dispatch(reqID string, raw []byte, w io.Writer) int {
 // DispatchStream serves a streaming request in-process. started reports
 // whether the handler wrote any body byte: when false, err is a pre-body
 // failure the caller should report as a status error rather than hand to a
-// consumer expecting triples.
+// consumer expecting triples. The request size is capped and panics become
+// 500s, as on the HTTP path (#149); a half-delivered body stays half-delivered
+// (started=true) with the error alongside it, because a running handler
+// cannot be interrupted mid-call without a context-aware engine API.
 func (ws *Webservice) DispatchStream(ctx context.Context, reqID string, raw []byte, w io.Writer) (started bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	reg, known := ws.handlers[reqID]
-	if !known {
+	reg, denial := ws.prepareDispatch(reqID, raw)
+	if denial != nil {
 		return false, &StatusError{
-			Status:  http.StatusNotFound,
+			Status:  denial.status,
 			Request: reqID,
-			Message: fmt.Sprintf("Unknown request: %q", reqID),
-		}
-	}
-	if ws.Config.ReadOnly && reg.access == auth.AccessWrite && !readOnlyAllowed(reg, raw) {
-		return false, &StatusError{
-			Status:  http.StatusForbidden,
-			Request: reqID,
-			Message: "read-only database: write requests are disabled",
+			Message: denial.prepend + " " + denial.detail,
 		}
 	}
 	env := ws.localEnv(reg.access)
 	if reg.stream == nil {
-		lw := newLocalResponseWriter(ctxWriter{ctx: ctx, w: w})
+		// The non-stream fallback buffers the JSON reply: an error body must
+		// not be pushed at a consumer expecting stream records, and the JSON
+		// carries the handler's real message — answering with only
+		// http.StatusText threw that away (#155).
+		var body bytes.Buffer
+		lw := newLocalResponseWriter(&body)
+		defer func() {
+			if rec := recover(); rec != nil {
+				answerPanicLocal(lw, reqID, rec)
+				started = false // nothing reached the consumer: the body stayed buffered
+				err = &StatusError{
+					Status:  lw.Status(),
+					Request: reqID,
+					Message: fmt.Sprintf("panic: %v", rec),
+				}
+			}
+		}()
 		ws.serve(reg, env, raw, lw)
 		if lw.Status() >= 300 {
-			return lw.wrote, &StatusError{
+			return false, &StatusError{
 				Status:  lw.Status(),
 				Request: reqID,
-				Message: http.StatusText(lw.Status()),
+				Message: streamFallbackMessage(body.Bytes(), lw.Status()),
 			}
 		}
-		return lw.wrote, nil
+		if _, cerr := io.Copy(ctxWriter{ctx: ctx, w: w}, bytes.NewReader(body.Bytes())); cerr != nil {
+			return body.Len() > 0, cerr
+		}
+		return body.Len() > 0, nil
 	}
 	tw := &trackingWriter{w: ctxWriter{ctx: ctx, w: w}}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in in-process stream handler", "request", reqID, "panic", rec,
+				"stack", string(debug.Stack()))
+			started = tw.wrote
+			err = &StatusError{
+				Status:  http.StatusInternalServerError,
+				Request: reqID,
+				Message: fmt.Sprintf("panic: %v", rec),
+			}
+		}
+	}()
 	if ws.sem != nil {
 		ws.sem <- struct{}{}
 		defer func() { <-ws.sem }()
@@ -571,6 +677,17 @@ func (ws *Webservice) DispatchStream(ctx context.Context, reqID string, raw []by
 		}
 	}
 	return tw.wrote, nil
+}
+
+// streamFallbackMessage pulls the handler's own error text out of the JSON
+// error body the non-stream fallback buffered; StatusText is only the last
+// resort when that body is not a decodable error reply (#155).
+func streamFallbackMessage(body []byte, status int) string {
+	var rs ReplyStatus
+	if err := json.Unmarshal(body, &rs); err == nil && rs.Message != "" {
+		return rs.Message
+	}
+	return http.StatusText(status)
 }
 
 // ctxWriter stops a long stream once its context is cancelled. The underlying
