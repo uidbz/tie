@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- **`runclient.CLIName` — branded watch hints.** The job and pipeline
+  watch functions print resume advice ("resume with tie-run status
+  <id>"), which is a trap in a branded shell whose binary is named
+  something else. `runclient.CLIName` defaults to `tie-run`; a shell
+  sets it once at startup, exactly like `runclient.AuthUser`.
+
 ## [v0.8.0] - 2026-11-03
 
 ### Added

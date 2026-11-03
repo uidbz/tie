@@ -400,7 +400,7 @@ func ShowProgressCtx(ctx context.Context, runner, jobID string, headless, follow
 	for !done {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("watching cancelled; job %s still running on %s — resume with tie-run status %s\n", jobID, runner, jobID)
+			fmt.Printf("watching cancelled; job %s still running on %s — resume with %s status %s\n", jobID, runner, CLIName, jobID)
 			return status, nil
 		default:
 		}
@@ -409,11 +409,11 @@ func ShowProgressCtx(ctx context.Context, runner, jobID string, headless, follow
 		if err != nil {
 			stop, ctxErr := backoff.failure(ctx)
 			if ctxErr != nil {
-				fmt.Printf("watching cancelled; job %s still running on %s — resume with tie-run status %s\n", jobID, runner, jobID)
+				fmt.Printf("watching cancelled; job %s still running on %s — resume with %s status %s\n", jobID, runner, CLIName, jobID)
 				return status, nil
 			}
 			if stop {
-				return status, fmt.Errorf("job %s is still on %s; check with tie-run status %s", jobID, runner, jobID)
+				return status, fmt.Errorf("job %s is still on %s; check with %s status %s", jobID, runner, CLIName, jobID)
 			}
 			continue
 		}
@@ -454,7 +454,7 @@ func ShowProgressCtx(ctx context.Context, runner, jobID string, headless, follow
 			}
 		}
 		if !sleepCtx(ctx, 500*time.Millisecond) {
-			fmt.Printf("watching cancelled; job %s still running on %s — resume with tie-run status %s\n", jobID, runner, jobID)
+			fmt.Printf("watching cancelled; job %s still running on %s — resume with %s status %s\n", jobID, runner, CLIName, jobID)
 			return status, nil
 		}
 	}

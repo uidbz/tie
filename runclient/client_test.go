@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -182,6 +183,67 @@ func TestShowProgressGivesUpAfterBudget(t *testing.T) {
 
 // TestShowProgressContextCancel pins that a cancelled context ends the
 // watch promptly with a benign nil error — the job is unaffected.
+// TestWatchHintsNameTheCLI pins the CLIName seam: the watch-cancel advice
+// must name the shell's own binary, not the engine default. A branded
+// shell sets CLIName once (like AuthUser) and every hint follows.
+func TestWatchHintsNameTheCLI(t *testing.T) {
+	old := CLIName
+	t.Cleanup(func() { CLIName = old })
+	CLIName = "mytool"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(api.JobStatus{JobID: "job1", IsRunning: true, Percent: 50})
+	}))
+	defer srv.Close()
+
+	out := captureStdout(t, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := ShowProgressCtx(ctx, srv.URL, "job1", true, true); err != nil {
+			t.Errorf("cancelled watch: %v", err)
+		}
+		psrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(api.Pipeline{PipelineID: "p1", Status: "running"})
+		}))
+		defer psrv.Close()
+		ctx2, cancel2 := context.WithCancel(context.Background())
+		cancel2()
+		if _, err := WaitPipelineCtx(ctx2, psrv.URL, "p1", time.Second, nil); err != nil {
+			t.Errorf("cancelled pipeline watch: %v", err)
+		}
+	})
+
+	for _, want := range []string{
+		"resume with mytool status job1",
+		"resume with mytool pipeline show p1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("watch output missing %q; got:\n%s", want, out)
+		}
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected to a pipe and returns
+// everything written during the run.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	fn()
+	w.Close()
+	os.Stdout = old
+	return <-done
+}
+
 func TestShowProgressContextCancel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(api.JobStatus{JobID: "job1", IsRunning: true, Percent: 50})

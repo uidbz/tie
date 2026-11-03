@@ -143,7 +143,7 @@ func WaitPipelineCtx(ctx context.Context, runner, pipelineID string, poll time.D
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with tie-run pipeline show %s\n", pipelineID, runner, pipelineID)
+			fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
 			return api.Pipeline{}, nil
 		default:
 		}
@@ -151,11 +151,11 @@ func WaitPipelineCtx(ctx context.Context, runner, pipelineID string, poll time.D
 		if err != nil {
 			stop, ctxErr := backoff.failure(ctx)
 			if ctxErr != nil {
-				fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with tie-run pipeline show %s\n", pipelineID, runner, pipelineID)
+				fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
 				return p, nil
 			}
 			if stop {
-				return p, fmt.Errorf("pipeline %s is still on %s; check with tie-run pipeline show %s", pipelineID, runner, pipelineID)
+				return p, fmt.Errorf("pipeline %s is still on %s; check with %s pipeline show %s", pipelineID, runner, CLIName, pipelineID)
 			}
 			continue
 		}
@@ -179,7 +179,7 @@ func WaitPipelineCtx(ctx context.Context, runner, pipelineID string, poll time.D
 			return p, nil
 		}
 		if !sleepCtx(ctx, poll) {
-			fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with tie-run pipeline show %s\n", pipelineID, runner, pipelineID)
+			fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
 			return p, nil
 		}
 	}

@@ -45,6 +45,12 @@ var (
 // runner's configuration.
 var AuthUser = "tie"
 
+// CLIName names the command in the watch-cancel hints ("resume with
+// <CLIName> status <id>"). Watch functions print advice, and advice
+// that names a binary the user never typed is a trap; a branded shell
+// sets this once at startup, like AuthUser.
+var CLIName = "tie-run"
+
 // HTTPError is a non-2xx reply. Body is truncated so a proxy's HTML
 // error page cannot flood the terminal.
 type HTTPError struct {
