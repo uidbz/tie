@@ -4,6 +4,83 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Fixed
+
+Direct `.tie` database access review (tracking issue #156; findings #143–#155, #157):
+
+- Global flags placed after the subcommand are refused with a usage error
+  instead of being parsed and silently dropped (`--read-only`, `--file`,
+  `-c/--collection`, `-C/--config`, `--reverse-relations`); spellings the
+  subcommand itself defines or reads (`get -f` filter, `dump --file`,
+  `conf show -c`, …) stay legal (#143).
+- The leading global-flag scan no longer stops at `-q`/`-V`/`--format`, so a
+  `-f` behind one of them still selects the direct file (#144).
+- `-c`/`NewTieClientFor` may name a sibling collection that does not exist
+  yet — it is created on first write, as on a server; only the pinned file
+  must exist (#145).
+- The lock no longer creates a fresh collection file world-readable; new
+  `.tie` files are `0600` like the writer opens them (#146).
+- `--read-only` is now the load-time snapshot the docs always promised: the
+  direct open serves reads from a private reflink/copy of the directory and
+  removes it on Close, so a live writer cannot change the answer (#147).
+- `dump --file` goes through the shared direct-open rules (validation, blob
+  policy), indexes no reverse relations, honours `--read-only` (export
+  beside a running server), rejects `--file=` with a usage error, and is no
+  longer blocked by an unrelated broken config (#148).
+- The in-process entry points (`Webservice.Dispatch`/`DispatchStream`) gained
+  the HTTP path's protections: a panicking handler answers 500 instead of
+  unwinding the CLI process, the request-size cap is enforced (413), and a
+  cancelled context bounds local calls before and after the handler runs
+  (#149).
+- `In()` ownership: a scoped child shares the parent's open database but
+  never owns it — closing a child (or a child whose open failed) can no
+  longer close the parent's handle, a successfully opened child is not
+  poisoned by the parent's construction error, and filehost overrides are
+  part of scope identity (#150).
+- Direct-mode config normalization: TOML `ReverseRelations = []` now means
+  "index everything" (it used to build an empty index), a symlinked
+  `TripleStoreFile` resolves to the target's identity so history lands
+  beside the target, and an offline direct open gets no implicit localhost
+  filehost — it fails "no filehost configured" like the README says (#151).
+- One shared collection-file validator now runs on every direct open path
+  (`ConfigForFile`, `NewTieClientFor`, `In`, `dump --file`): an existing
+  `X.tie` that is a directory or FIFO is rejected instead of opened or hung
+  on; missing siblings stay legal (#152).
+- `tie-smb`: the EFFECTIVE read-only state (its own flag OR the tie config's)
+  drives validation, warnings and role downgrade; a service with no writers
+  exports the share read-only instead of advertising write (smb's
+  `WriteUsers()` with zero names means everyone may write); startup loads
+  the local collection so a locked database fails at startup with the real
+  reason; exit paths release the client and blob cache (#153).
+- Read-only collections no longer report success for writes: `Apply`,
+  `Update`, `UpdateAdd`, `SimpleUpdate` and `SetValues` return
+  `ErrReadOnly`/false and leave the index untouched (#154).
+- Deduplication: one request gate shared by the HTTP and in-process paths,
+  one local-open helper shared by the direct client and `dump --file`, one
+  table of global flag spellings and arity; the stream fallback keeps the
+  handler's real error message and no longer pushes the JSON error body
+  into a consumer expecting records (#155).
+- `CollectionReverseRelations` overrides match `LocalDir` collections (the
+  key ignored the namespace, as local resolution does) (#157).
+
+### Breaking changes
+
+- Global construction flags after the subcommand exit 2 with a usage error
+  (they were silently ignored before, which is how `--read-only` could
+  "succeed" while writing the database).
+- New `.tie` files are created `0600` (they used to be group/world readable
+  through the lock's create mode).
+- A read-only direct open briefly doubles the disk footprint of the
+  collection directory (reflink makes it cheap on btrfs/XFS; plain copy
+  elsewhere).
+- `tie -f` with an upload/import and no configured filehost now fails
+  immediately instead of contacting the built-in `http://localhost:1162`.
+- `tie-smb` with no write-role users exports the share itself read-only:
+  clients see a read-only share at mount time instead of write-capable
+  mounts that fail per operation.
+
 ## [v0.8.3] - 2026-11-03
 
 ### Changed
