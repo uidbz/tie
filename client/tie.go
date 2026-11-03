@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,9 +125,12 @@ type TieClient struct {
 	transport ws.Doer
 	// local is non-nil when this client opened a .tie file in-process. It owns
 	// the database handle and its lock; Close releases them. Scoped clients in
-	// the same directory share this pointer.
-	local  *localBackend
-	runErr error
+	// the same directory share this pointer but do NOT own it: ownsLocal says
+	// whose Close actually releases the shared handle (#150), so closing a
+	// child can never pull the parent's database out from under it.
+	local     *localBackend
+	ownsLocal bool
+	runErr    error
 	Config Config
 	// active is the resolved collection this client operates on (triplestore,
 	// namespace, collection id, credentials, filehosts), chosen at construction.
@@ -244,6 +248,13 @@ func (c Config) collectionFile(collection string) string {
 	primary := filepath.Clean(c.TripleStoreFile)
 	if abs, err := filepath.Abs(primary); err == nil {
 		primary = abs
+	}
+	// A configured primary that exists resolves through symlinks, like -f does
+	// (canonicalCollectionFile): identity — the collection basename — and the
+	// sibling directory both follow the TARGET, so history is never split
+	// between the link's directory and the target's (#151).
+	if real, err := filepath.EvalSymlinks(primary); err == nil {
+		primary = real
 	}
 	base := strings.TrimSuffix(filepath.Base(primary), ".tie")
 	if collection == "" || collection == base {
@@ -510,8 +521,10 @@ func NewTieClient(config Config) (client *TieClient) {
 }
 
 // sameScope reports whether two resolved collections are the same place: same
-// triplestore, credentials, namespace and collection id. The filehost list is
-// not part of it, because it does not change the transport.
+// triplestore, credentials, namespace, collection id AND filehost list. The
+// hosts belong in the comparison (#150): a [Collections.x] entry that only
+// changes filehosts still selects a different upload destination, and returning
+// the parent client would silently ResolveHosts to the wrong host.
 func sameScope(a, b ResolvedCollection) bool {
 	return a.TripleStoreURL == b.TripleStoreURL &&
 		a.TripleStoreFile == b.TripleStoreFile &&
@@ -519,7 +532,8 @@ func sameScope(a, b ResolvedCollection) bool {
 		a.Collection == b.Collection &&
 		a.Username == b.Username &&
 		a.Password == b.Password &&
-		a.Insecure == b.Insecure
+		a.Insecure == b.Insecure &&
+		slices.Equal(a.FileHosts, b.FileHosts)
 }
 
 // In returns a client scoped to the named collection: the same config, and the
@@ -547,18 +561,42 @@ func (tc *TieClient) In(name string) *TieClient {
 	}
 	sub := *tc
 	sub.active = active
+	// A constructed child must not carry the parent's construction failure:
+	// opening a sibling successfully makes the child usable even when the
+	// parent's own scope was broken (#150).
+	sub.runErr = nil
 	if active.TripleStoreFile != "" {
+		// The shared validator runs on the resolved sibling before anything
+		// is reused or opened: an existing sibling that is a directory or
+		// FIFO is rejected here, not lazily inside the shared webservice
+		// (#152).
+		if _, _, verr := canonicalCollectionFile(active.TripleStoreFile); verr != nil {
+			sub.local = nil
+			sub.ownsLocal = false
+			sub.transport = nil
+			sub.runErr = verr
+			return &sub
+		}
 		if tc.local != nil && localDirFor(active.TripleStoreFile) == tc.local.dir {
 			// Same directory: share the open database and its exclusive lock.
+			// Sharing the pointer is not sharing ownership — the child must
+			// not close the parent's handle (#150).
 			sub.transport = tc.local.transport
+			sub.ownsLocal = false
 			return &sub
 		}
 		lb, err := openLocalBackend(active.TripleStoreFile, tc.Config.ReverseRelations, tc.Config.ReadOnly)
 		if err != nil {
+			// Leave the parent's backend off the failed child: closing it must
+			// never close the parent's database (#150).
+			sub.local = nil
+			sub.ownsLocal = false
+			sub.transport = nil
 			sub.runErr = err
 			return &sub
 		}
 		sub.local = lb
+		sub.ownsLocal = true
 		sub.transport = lb.transport
 		return &sub
 	}
@@ -566,6 +604,7 @@ func (tc *TieClient) In(name string) *TieClient {
 	// file. Drop the parent's backend on the scoped client so closing the child
 	// cannot close the parent's database.
 	sub.local = nil
+	sub.ownsLocal = false
 	if tc.local != nil ||
 		active.TripleStoreURL != tc.active.TripleStoreURL ||
 		active.Username != tc.active.Username ||
@@ -578,6 +617,12 @@ func (tc *TieClient) In(name string) *TieClient {
 		}
 		sub.transport = wsc
 	}
+	// Clearing the inherited runErr is only honest when the child ends up with
+	// a working transport. A parent that failed to construct leaves nothing to
+	// reuse: say so instead of panicking on a nil Doer (#150).
+	if sub.transport == nil {
+		sub.runErr = fmt.Errorf("collection %q: parent client is broken: %v", name, tc.runErr)
+	}
 	return &sub
 }
 
@@ -589,11 +634,14 @@ func NewTieClientFor(config Config, collection string) (client *TieClient) {
 	active := config.ResolveCollection(collection)
 	client = &TieClient{Config: config, active: active}
 	if active.TripleStoreFile != "" {
-		// The pinned collection must exist; siblings (`In("Other")` or
-		// `<name>_prev`) are legitimately absent until first write. This is what
-		// makes a typo in a config's TripleStoreFile fail instead of silently
-		// creating an empty database.
-		if active.Collection == strings.TrimSuffix(filepath.Base(active.TripleStoreFile), ".tie") {
+		// Only the PINNED collection (Config.TripleStoreFile itself) must
+		// exist; a sibling resolved through collectionFile — `In("Other")`,
+		// `-c New`, `<name>_prev` — is legitimately absent until its first
+		// write, exactly as on a server (#145). Comparing against the
+		// canonical primary, not the basename: a sibling's basename always
+		// equals its own file's basename, so the old shape could not tell
+		// pinned from sibling.
+		if active.TripleStoreFile == config.collectionFile("") {
 			if _, err := os.Stat(active.TripleStoreFile); err != nil {
 				client.runErr = fmt.Errorf("opening database %s: %w", active.TripleStoreFile, err)
 				return client
@@ -605,6 +653,7 @@ func NewTieClientFor(config Config, collection string) (client *TieClient) {
 			return client
 		}
 		client.local = lb
+		client.ownsLocal = true
 		client.transport = lb.transport
 		return client
 	}
@@ -619,9 +668,10 @@ func NewTieClientFor(config Config, collection string) (client *TieClient) {
 
 // Close flushes and releases the local database opened by this client. It is a
 // no-op over HTTP and is safe to call more than once. A client obtained from
-// In() shares its parent's database handle; close the client you created.
+// In() shares its parent's database handle and does not own it: closing a
+// scoped child never closes the parent (#150).
 func (tc *TieClient) Close() error {
-	if tc.local != nil {
+	if tc.local != nil && tc.ownsLocal {
 		tc.local.Close()
 	}
 	return nil
