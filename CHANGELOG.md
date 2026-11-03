@@ -14,6 +14,17 @@ to follow semantic versioning.
   something else. `runclient.CLIName` defaults to `tie-run`; a shell
   sets it once at startup, exactly like `runclient.AuthUser`.
 
+### Changed
+
+- **Stdlib `uuid` replaces `google/uuid`.** Go 1.27 added a `uuid`
+  package to the standard library, and tie already requires 1.27, so
+  job and pipeline ids now come from the stdlib — the one external
+  dependency the engine extraction had introduced is withdrawn. Ids
+  move from random v4 to time-ordered v7: same opaque wire contract,
+  same length, but ids now sort by creation time, which reads well in
+  logs and keeps store keys insert-ordered. Nothing in the protocol
+  inspects an id; `docs/runner-api.md` treats them as opaque strings.
+
 ## [v0.8.0] - 2026-11-03
 
 ### Added

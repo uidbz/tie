@@ -23,8 +23,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/uidbz/tie/runner/api"
 	"github.com/uidbz/tie/runner/executor"
@@ -427,7 +426,7 @@ func (m *Manager) NewJob(req api.JobRequest, isProd bool, deployManager string) 
 	job := &Job{
 		JobStatus: &api.JobStatus{
 			DeployManager: deployManager,
-			JobID:         uuid.NewString(),
+			JobID:         uuid.NewV7().String(),
 			InputHash:     req.InputHash,
 			AppHash:       req.AppHash,
 			JobType:       req.JobType,

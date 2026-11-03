@@ -23,8 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/uidbz/tie/io/compose"
 	"github.com/uidbz/tie/runner/api"
@@ -197,7 +196,7 @@ func (e *Engine) build(req *api.PipelineRequest, deployManager string) (*api.Pip
 
 	now := time.Now().Unix()
 	p := &api.Pipeline{
-		PipelineID:    uuid.NewString(),
+		PipelineID:    uuid.NewV7().String(),
 		Name:          req.Name,
 		User:          req.User,
 		Status:        api.StatusRunning,

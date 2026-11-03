@@ -5,7 +5,6 @@ go 1.27.3
 require (
 	github.com/go-filesystems/interface v0.5.0
 	github.com/go-filesystems/smb v0.7.0
-	github.com/google/uuid v1.6.0
 	github.com/h2non/filetype v1.1.3
 	github.com/hanwen/go-fuse/v2 v2.11.0
 	github.com/hirochachacha/go-smb2 v1.1.0
