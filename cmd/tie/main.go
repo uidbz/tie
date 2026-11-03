@@ -141,22 +141,86 @@ func errorPrefix(root *cli.Command, args []string) string {
 	return "tie:"
 }
 
-// globalFlagWithValues are the flags that live before the command name and take
-// a value, so the scan for the command path can step over them.
-var globalFlagWithValues = map[string]bool{
-	"-C": true, "--config": true, "-c": true, "--collection": true, "--format": true,
-	"-f": true, "--file": true, "--reverse-relations": true,
+// globalFlagSpecs is the one table of global flag spellings and value arity
+// (#155): the leading scan (parseGlobalFlags), the command-path walk
+// (commandPath) and the after-subcommand guard (lateGlobalFlagErr) all read
+// it, so a new global flag is defined once.
+type globalFlagSpec struct{ value bool }
+
+var globalFlagSpecs = map[string]globalFlagSpec{
+	"-C": {value: true}, "--config": {value: true},
+	"-c": {value: true}, "--collection": {value: true},
+	"-f": {value: true}, "--file": {value: true},
+	"--reverse-relations": {value: true},
+	"--read-only": {},
+	"-q": {}, "--quiet": {},
+	"-V": {}, "--verbose": {},
+	"--format": {value: true},
+	"-h": {}, "--help": {},
+	"-v": {}, "--version": {},
+}
+
+// lateGlobalCanonical folds each construction-global spelling (no dashes)
+// to its canonical flag name. These are the globals that decide how the
+// client is constructed; a spelling AFTER the subcommand — which cli v3
+// happily parses at root level — is silently dropped unless the command
+// reads it (inheritedReaders) (#143).
+var lateGlobalCanonical = map[string]string{
+	"config": "config", "C": "config",
+	"collection": "collection", "c": "collection",
+	"file": "file", "f": "file",
+	"read-only":       "read-only",
+	"reverse-relations": "reverse-relations",
+}
+
+// inheritedReaders names the subcommands that READ a construction global
+// from the root — cli v3 lets a subcommand's context fall back to parent
+// flags — so spelling it after that subcommand really does apply it, and the
+// guard must stay out (#143): `conf show -c X` prints the collection it
+// resolves, `conf create -C x` writes where -C says, and the offline dump
+// honours --read-only. Everywhere else a trailing construction global is
+// parsed and dropped, which is what the guard rejects.
+var inheritedReaders = map[string]map[string]bool{
+	"conf show":   {"collection": true},
+	"conf create": {"config": true},
+	"dump":        {"read-only": true},
+}
+
+// flagSpelling splits an argument into the flag it spells and any =-attached
+// value: "--file=x" -> ("--file", "x", true); "-f" -> ("-f", "", false).
+func flagSpelling(arg string) (name, value string, attached bool) {
+	name, value, attached = strings.Cut(arg, "=")
+	return name, value, attached
 }
 
 // commandPath walks the command tree along the argument list to name the command
 // the operator actually ran ("tag files"). It stops at the first token that is
 // not a subcommand, so arguments and flags are never mistaken for one.
 func commandPath(root *cli.Command, args []string) string {
-	var path []string
+	_, path, _ := descendCommandPath(root, args, 1)
+	return strings.Join(path, " ")
+}
+
+// descendCommandPath walks root's subcommand tree along args starting at
+// start, stepping over global flags with their values. It returns the deepest
+// command reached, the path walked, and the index where that command's own
+// arguments begin — commandPath's prefix and lateGlobalFlagErr's scan point
+// come from the same walk (#155).
+func descendCommandPath(root *cli.Command, args []string, start int) (*cli.Command, []string, int) {
 	cur := root
-	for i := 1; i < len(args); i++ {
+	path := []string{}
+	i := start
+	seenCommand := false
+	for i < len(args) {
 		a := args[i]
-		if globalFlagWithValues[a] {
+		// Global spellings step over only BEFORE the subcommand: after it,
+		// every flag belongs to the command (cli keeps the raw tokens in the
+		// root args), so skipping one as a global would hide it from the
+		// late-flag scan.
+		if spec, known := globalFlagSpecs[a]; known && !seenCommand {
+			if spec.value {
+				i++
+			}
 			i++
 			continue
 		}
@@ -168,9 +232,69 @@ func commandPath(root *cli.Command, args []string) string {
 			break
 		}
 		path = append(path, a)
+		seenCommand = true
 		cur = next
+		i++
 	}
-	return strings.Join(path, " ")
+	return cur, path, i
+}
+
+// lateGlobalFlagErr rejects construction globals spelled after the subcommand
+// (#143). cli v3 parses root-level flags anywhere in the list and then hands
+// the command its action without them, so `tie -f db add k tag v --read-only`
+// used to exit 0 with the database written — a safety flag silently ignored.
+// The check runs in the Before hook, where cli still exposes the raw tokens in
+// the root command's args. A spelling the subcommand defines as its own flag
+// (get's -f filter, dump's --file, import/verify/repair's --collection) is the
+// subcommand's business and stays legal.
+func lateGlobalFlagErr(root *cli.Command, args []string) error {
+	cur, path, i := descendCommandPath(root, args, 0)
+	pathStr := strings.Join(path, " ")
+	// Arity of the leaf's own flags, so the scan steps over a local flag's
+	// value instead of mistaking it for a token.
+	local := map[string]bool{}
+	for _, f := range cur.Flags {
+		takesValue := true
+		switch f.(type) {
+		case *cli.BoolFlag, *cli.BoolWithInverseFlag:
+			takesValue = false
+		}
+		for _, n := range f.Names() {
+			local[n] = takesValue
+		}
+	}
+	for ; i < len(args); i++ {
+		tok := args[i]
+		if tok == "--" {
+			return nil
+		}
+		if !strings.HasPrefix(tok, "-") || tok == "-" {
+			continue
+		}
+		name, _, attached := flagSpelling(tok)
+		trimmed := strings.TrimLeft(name, "-")
+		if takes, isLocal := local[trimmed]; isLocal {
+			if takes && !attached {
+				i++
+			}
+			continue
+		}
+		canonical, isLate := lateGlobalCanonical[trimmed]
+		if !isLate {
+			continue
+		}
+		if inheritedReaders[pathStr][canonical] {
+			// This command reads the inherited flag: it applies, so the
+			// placement is legal even though it is not a local flag.
+			if spec, known := globalFlagSpecs[name]; known && spec.value && !attached {
+				i++
+			}
+			continue
+		}
+		return exitError{code: exitUsage,
+			msg: fmt.Sprintf("%s is a global flag: put it before the subcommand", name)}
+	}
+	return nil
 }
 
 // newRootCommand builds the whole command tree. It is a function rather than
@@ -260,13 +384,16 @@ type globalFlags struct {
 
 // parseGlobalFlags extracts the global -C/--config, -c/--collection,
 // -f/--file, --read-only and --reverse-relations values from the raw argument
-// list before cli parses them (the command tree is built from config first). It
-// scans only the leading run of global flags, which precede the subcommand, and
-// stops at the first non-global token — so a local --collection or -f on a
-// subcommand (verify/import/get's filter) is left untouched. configName matches
-// the cli default when the flag is absent; configExplicit reports whether -C or
-// $TIE_CONFIG named a file, so -f can tolerate a missing default config but
-// still report a broken explicit one.
+// list before cli parses them (the command tree is built from config first).
+// It scans only the leading run of global flags, which precede the subcommand
+// — but EVERY global spelling, including the boolean -q/-V/-h/-v and the
+// value-taking --format, keeps the scan going: stopping at those dropped a
+// later -f and silently opened the configured server instead of the -f file
+// (#144). The table (globalFlagSpecs) is shared with the command walk and the
+// after-subcommand guard (#155). configName matches the cli default when the
+// flag is absent; configExplicit reports whether -C or $TIE_CONFIG named a
+// file, so -f can tolerate a missing default config but still report a broken
+// explicit one.
 //
 // $TIE_CONFIG is the conventional override for a tool whose config is otherwise
 // found by searching (§6.6). -C still wins, so a wrapper script can set the env
@@ -278,54 +405,38 @@ func parseGlobalFlags(args []string) globalFlags {
 		flags.configExplicit = true
 	}
 	for i := 1; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-C" || a == "--config":
-			if i+1 < len(args) {
-				flags.configName = args[i+1]
-				flags.configExplicit = true
-				i++
-			}
-		case strings.HasPrefix(a, "-C="):
-			flags.configName = strings.TrimPrefix(a, "-C=")
-			flags.configExplicit = true
-		case strings.HasPrefix(a, "--config="):
-			flags.configName = strings.TrimPrefix(a, "--config=")
-			flags.configExplicit = true
-		case a == "-f" || a == "--file":
-			if i+1 < len(args) {
-				flags.dbFile = args[i+1]
-				i++
-			}
-		case strings.HasPrefix(a, "-f="):
-			flags.dbFile = strings.TrimPrefix(a, "-f=")
-		case strings.HasPrefix(a, "--file="):
-			flags.dbFile = strings.TrimPrefix(a, "--file=")
-		case a == "--read-only":
-			flags.readOnly = true
-		case strings.HasPrefix(a, "--read-only="):
-			if v, err := strconv.ParseBool(strings.TrimPrefix(a, "--read-only=")); err == nil {
-				flags.readOnly = v
-			}
-		case a == "--reverse-relations":
-			if i+1 < len(args) {
-				flags.reverseRelations = args[i+1]
-				i++
-			}
-		case strings.HasPrefix(a, "--reverse-relations="):
-			flags.reverseRelations = strings.TrimPrefix(a, "--reverse-relations=")
-		case a == "-c" || a == "--collection":
-			if i+1 < len(args) {
-				flags.collection = args[i+1]
-				i++
-			}
-		case strings.HasPrefix(a, "-c="):
-			flags.collection = strings.TrimPrefix(a, "-c=")
-		case strings.HasPrefix(a, "--collection="):
-			flags.collection = strings.TrimPrefix(a, "--collection=")
-		default:
+		name, value, attached := flagSpelling(args[i])
+		spec, known := globalFlagSpecs[name]
+		if !known {
 			return flags // first non-global token = subcommand; stop scanning
 		}
+		if spec.value {
+			if !attached {
+				if i+1 < len(args) {
+					value = args[i+1]
+				}
+				i++
+			}
+		} else if !attached && name == "--read-only" {
+			value = "true"
+		}
+		switch name {
+		case "-C", "--config":
+			flags.configName = value
+			flags.configExplicit = true
+		case "-f", "--file":
+			flags.dbFile = value
+		case "-c", "--collection":
+			flags.collection = value
+		case "--reverse-relations":
+			flags.reverseRelations = value
+		case "--read-only":
+			if v, err := strconv.ParseBool(value); err == nil {
+				flags.readOnly = v
+			}
+		}
+		// -q/-V/--format/-h/-v: consumed so the scan keeps going; cli applies
+		// them itself.
 	}
 	return flags
 }
