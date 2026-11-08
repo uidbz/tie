@@ -13,7 +13,8 @@ package client
 //
 //	(C, tie-type,     <kind>)        e.g. audio-dir, playlist, tv-series
 //	(C, name|album,   <display>)
-//	(C, thumbnail,    <thumbHash>)   cover / poster (optional)
+//	(C, cover,        <imageHash>)   chosen source artwork (optional)
+//	(C, thumbnail,    <thumbHash>)   small cached cover / poster (optional)
 //	(C, added-at,     RFC3339)       first time the collection entered the store
 //	(C, member-count, <n>)
 //
@@ -95,6 +96,8 @@ const (
 	RelAddedAt     Relation = "added-at"
 	RelMemberCount Relation = "member-count"
 	RelThumbnail   Relation = "thumbnail"
+	RelCover       Relation = "cover"
+	RelCoverSource Relation = "cover-source"
 	RelRating      Relation = "rating"
 
 	// Audio.
@@ -289,11 +292,12 @@ func isAudioRow(row Row) bool {
 // IndexResult summarizes what IndexCollection changed.
 type IndexResult struct {
 	Collection   DirUID
-	Members      int // media members found below the collection
-	AddedMembers int // member-of edges written
-	DroppedStale int // stale member-of edges removed
-	Discs        int // disc subdirectories labeled
-	Ops          int // total write ops (0 = already up to date)
+	Members      int    // media members found below the collection
+	AddedMembers int    // member-of edges written
+	DroppedStale int    // stale member-of edges removed
+	Discs        int    // disc subdirectories labeled
+	Cover        string // chosen source artwork hash, "" when none/unchanged
+	Ops          int    // total write ops (0 = already up to date)
 }
 
 // IndexOptions tunes IndexCollection.
@@ -339,7 +343,8 @@ func (tc *TieClient) CollectionMembers(uid string) ([]Row, error) {
 // memberInfo is one member found by the walk, with the disc it sits on.
 type memberInfo struct {
 	row  Row
-	disc int // from the enclosing disc directory, 0 = none
+	disc int    // from the enclosing disc directory, 0 = none
+	rel  string // slash path below the collection root
 }
 
 // walkCollection gathers the media members below a collection directory,
@@ -351,6 +356,7 @@ func (tc *TieClient) walkCollection(root string) (members []memberInfo, discDirs
 	type item struct {
 		uid  string
 		disc int
+		rel  string
 	}
 	queue := []item{{uid: root}}
 	seen := map[string]bool{root: true}
@@ -381,12 +387,16 @@ func (tc *TieClient) walkCollection(root string) (members []memberInfo, discDirs
 				if disc > 0 && cur.uid == root {
 					discDirs[row.Key] = disc
 				}
-				queue = append(queue, item{uid: row.Key, disc: disc})
+				queue = append(queue, item{uid: row.Key, disc: disc, rel: path.Join(cur.rel, name)})
 				continue
 			}
 			if isMediaFileRow(row) {
 				seen[row.Key] = true
-				members = append(members, memberInfo{row: row, disc: cur.disc})
+				name := RowFirst(row, RelFilename)
+				if name == "" {
+					name = row.Key
+				}
+				members = append(members, memberInfo{row: row, disc: cur.disc, rel: path.Join(cur.rel, name)})
 			}
 		}
 	}
@@ -526,6 +536,16 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 		// folder's disc number, so readers can order discs uniformly.
 		if m.disc > 0 && isAudioRow(row) && RowFirst(row, RelDisc) == "" {
 			b.Set(row.Key, string(RelDisc), []string{strconv.Itoa(m.disc)})
+		}
+	}
+
+	// Choose a source artwork image while the member rows are already here.
+	// Existing covers are user/previous-run choices: never overwrite them.
+	if RowFirst(root, RelCover) == "" {
+		if cand := bestMemberCover(members); cand != nil {
+			b.Set(string(uid), string(RelCover), []string{cand.Hash})
+			b.Set(string(uid), string(RelCoverSource), []string{"file:" + cand.Path})
+			res.Cover = cand.Hash
 		}
 	}
 

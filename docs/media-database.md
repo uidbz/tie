@@ -549,9 +549,25 @@ Import writes all of this (`ImportDir`/`ImportAlbums` call
 `IndexCollection`). For data imported earlier:
 
 ```sh
-tie media backfill            # member-of, added-at, disc labels, album summaries
+tie media backfill            # member-of, added-at, disc labels, album summaries, covers
 tie media backfill --rescan   # also re-read audio tags (genre, disc, composer)
 tie media index /music/Some/Album   # one collection
+```
+
+**Cover artwork** uses two relations: `(C, cover, <imageHash>)` is the chosen
+source image (a folder scan, an extracted embedded picture, an archive member,
+or a download), while the optional `(C, thumbnail, <thumbHash>)` is the small
+display JPEG cached by GUI clients. `ResolveCover` ranks folder/subfolder/
+parent images, embedded pictures and zip members; low-confidence candidates
+(back covers, disc scans, booklets) are returned only as a last resort.
+`IndexCollection` records a high/medium-confidence folder image automatically;
+`tie media covers` can probe embedded pictures and archive members too:
+
+```sh
+tie media covers --missing                     # folder artwork already in the store
+tie media covers --missing --embedded          # also probe first tracks
+tie media covers --missing --archives          # also extract zip covers
+tie media covers --missing --dry-run           # report choices without writing
 ```
 
 **Playlists** are their own subjects (`tie-type playlist`, ordered
@@ -647,5 +663,6 @@ note the range in the relation name or a companion triple.
 | Download bytes | `tie download <hash> <dest>` |
 | Backup / restore | `tie dump > f.tsv` / `tie restore < f.tsv` |
 | Index collections | `tie media backfill [--rescan]` |
+| Backfill cover artwork | `tie media covers --missing [--embedded] [--archives]` |
 | Recent plays | `tie history --since 7d` |
 | Playlists | `tie playlist list` |

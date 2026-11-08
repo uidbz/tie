@@ -187,6 +187,9 @@ func TestIndexCollectionMultiDisc(t *testing.T) {
 	if res.Members != 4 || res.AddedMembers != 4 || res.Discs != 2 {
 		t.Fatalf("result %+v", res)
 	}
+	if res.Cover != cover {
+		t.Errorf("index cover = %q, want artwork member %q", res.Cover, cover)
+	}
 	again, err := tc.IndexCollection(albumUID, IndexOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +229,12 @@ func TestIndexCollectionMultiDisc(t *testing.T) {
 	}
 	if RowFirst(row, RelAddedAt) == "" {
 		t.Error("no added-at on album")
+	}
+	if got := RowFirst(row, RelCover); got != cover {
+		t.Errorf("album cover = %q, want %q", got, cover)
+	}
+	if got := RowFirst(row, RelCoverSource); got != "file:artwork/front.jpg" {
+		t.Errorf("album cover-source = %q, want file:artwork/front.jpg", got)
 	}
 	tr, _ := tc.Get(tracks[0])
 	if RowFirst(tr, RelDisc) != "1" {

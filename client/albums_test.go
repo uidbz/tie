@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/uidbz/tie/io/archivelib"
 	"github.com/uidbz/tie/metadata"
 )
 
@@ -415,6 +416,51 @@ func TestPlaceAlbumDiscsMergedMultiDiscFromDirNames(t *testing.T) {
 	}
 	if len(g.Warnings) != 0 {
 		t.Errorf("warnings = %v", g.Warnings)
+	}
+}
+
+// A merged multi-disc group imports audio only; its album-root cover must ride
+// along as a sidecar at the root, not be dropped with the rest of the tree.
+func TestAddGroupCoverSidecarForMergedAlbum(t *testing.T) {
+	g := fileListGroup([]scannedFile{
+		audio("/lib/A/Alb/CD1/01.flac", "A", "", "Alb", 2000),
+		audio("/lib/A/Alb/CD2/01.flac", "A", "", "Alb", 2000),
+	})
+	tree := []pathSize{
+		{"/lib/A/Alb/CD1/01.flac", 100},
+		{"/lib/A/Alb/CD2/01.flac", 100},
+		{"/lib/A/Alb/cover.jpg", 50},
+		{"/lib/A/Alb/Artwork/front.jpg", 70},
+		{"/lib/A/Alb/Artwork/back.jpg", 60},
+	}
+	addGroupCoverSidecar(&g, tree)
+	if len(g.Sidecars) != 1 || g.Sidecars[0] != "/lib/A/Alb/cover.jpg" {
+		t.Fatalf("Sidecars = %v, want the root cover", g.Sidecars)
+	}
+	if got := g.SubPaths["/lib/A/Alb/cover.jpg"]; got != "cover.jpg" {
+		t.Errorf("cover SubPath = %q, want cover.jpg", got)
+	}
+	if g.Size != 250 {
+		t.Errorf("Size = %d, want audio + cover bytes", g.Size)
+	}
+}
+
+func TestAddGroupCoverSidecarRejectsBackOnly(t *testing.T) {
+	g := fileListGroup([]scannedFile{audio("/lib/A/Alb/01.flac", "A", "", "Alb", 2000)})
+	addGroupCoverSidecar(&g, []pathSize{{"/lib/A/Alb/back.jpg", 10}})
+	if len(g.Sidecars) != 0 {
+		t.Errorf("back-only artwork must stay a last resort, got %v", g.Sidecars)
+	}
+}
+
+func TestBestArchiveCoverMember(t *testing.T) {
+	members := []archivelib.Member{
+		{Name: "scans/back.jpg", Kind: archivelib.Image},
+		{Name: "scans/front.jpg", Kind: archivelib.Image},
+		{Name: "01.flac", Kind: archivelib.Audio},
+	}
+	if got := bestArchiveCoverMember(members); got != "scans/front.jpg" {
+		t.Errorf("bestArchiveCoverMember = %q, want scans/front.jpg", got)
 	}
 }
 

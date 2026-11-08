@@ -64,9 +64,9 @@ type AlbumGroup struct {
 	// sidecars and subdirectories included.
 	Files []string
 	// Sidecars lists non-audio member files to import alongside Files
-	// (cover art, booklets, logs). It is only populated for a dir group the
-	// planner converted to an explicit import because of its disc structure;
-	// merged/split/tag groups never carry sidecars.
+	// (cover art, booklets, logs). A dir group converted to an explicit import
+	// by its disc structure collects them all; merged/split/tag groups carry
+	// their best cover image (addGroupCoverSidecar).
 	Sidecars []string
 	// SubPaths maps a member source path (Files and Sidecars) to its
 	// slash-separated destination path below Dest, e.g. "cd2/01.flac". It is
@@ -79,6 +79,10 @@ type AlbumGroup struct {
 	// It imports as one file into Dest and gets no dir-type stamp — the blob
 	// itself carries the audio-archive classification.
 	IsArchive bool
+	// ArchiveCover names the best cover image member inside an archive group,
+	// chosen during the scan. ImportAlbums extracts it and records the
+	// archive blob's cover relation; it is empty when no image was found.
+	ArchiveCover string
 	// Dest is the virtual import root without a scheme (e.g.
 	// "/music/Miles Davis/1959. Kind of Blue"), rendered from the dir-type's
 	// ImportDest template, or the on-disk source path when no template
@@ -128,6 +132,10 @@ type scannedFile struct {
 	size      int64
 	isArchive bool // audio archive blob (tie-type audio-archive)
 	meta      metadata.Media
+	// coverMember is the best cover image inside a zip archive, chosen while
+	// the planner already lists its members. Empty for plain files and
+	// archives without a recognized image.
+	coverMember string
 }
 
 // PlanAlbumImport scans root for albums and returns the import plan without
@@ -138,7 +146,8 @@ type scannedFile struct {
 // An archive of audio members becomes a one-file group (imported as an
 // audio-archive blob). A directory whose files carry conflicting album tags
 // is split (auto mode), and directories sharing one album identity are merged
-// (auto/tags mode); split and merged groups import their audio files only.
+// (auto/tags mode); split and merged groups import their audio files plus the
+// best cover image found for the album.
 // A whole-tree group nested around another group double-parents the nested
 // files (legitimate, but flagged in Warnings).
 func PlanAlbumImport(cfg Config, root string, opts AlbumPlanOptions) ([]AlbumGroup, error) {
@@ -174,6 +183,13 @@ func finalizePlan(groups []AlbumGroup, tmpl string, tree []pathSize) {
 	// nested groups remain double-parented and must keep their warning.
 	for i := range groups {
 		placeAlbumDiscs(&groups[i], tree)
+	}
+	// Explicit file-list groups (merged multi-disc sets, split/tag clusters)
+	// import audio only; give each one its best cover image as a sidecar so
+	// the artwork is not left behind. Whole-tree groups already import every
+	// sidecar verbatim.
+	for i := range groups {
+		addGroupCoverSidecar(&groups[i], tree)
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].Dest != groups[j].Dest {
@@ -233,7 +249,7 @@ func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFi
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				t, meta, err := probeMediaFile(j.path)
+				t, meta, coverMember, err := probeMediaFile(j.path)
 				mu.Lock()
 				probed++
 				if progress != nil && probed%1000 == 0 {
@@ -243,7 +259,7 @@ func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFi
 				if err != nil {
 					continue // unreadable files simply don't group
 				}
-				sf := scannedFile{path: j.path, size: j.size}
+				sf := scannedFile{path: j.path, size: j.size, coverMember: coverMember}
 				switch t {
 				case TieAudioFile:
 					sf.meta = meta
@@ -275,25 +291,25 @@ func scanAudioFiles(root string, progress func(scanned, total int)) ([]scannedFi
 // filesystems). The tie-type, metadata (empty for non-audio), and any open or
 // read error are returned; a tag parse failure on an audio file degrades to
 // empty metadata rather than an error.
-func probeMediaFile(path string) (TieType, metadata.Media, error) {
+func probeMediaFile(path string) (TieType, metadata.Media, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return TieUnknownFile, metadata.Media{}, err
+		return TieUnknownFile, metadata.Media{}, "", err
 	}
 	defer f.Close()
 
 	t, err := GetTieType(f)
 	if err != nil {
-		return TieUnknownFile, metadata.Media{}, err
+		return TieUnknownFile, metadata.Media{}, "", err
 	}
 	switch t {
 	case TieAudioFile:
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			return t, metadata.Media{}, nil
+			return t, metadata.Media{}, "", nil
 		}
 		m, err := tag.ReadFrom(f)
 		if err != nil {
-			return t, metadata.Media{}, nil
+			return t, metadata.Media{}, "", nil
 		}
 		track, _ := m.Track()
 		disc, discTotal := m.Disc()
@@ -307,7 +323,7 @@ func probeMediaFile(path string) (TieType, metadata.Media, error) {
 			Disc:        disc,
 			DiscTotal:   discTotal,
 			Duration:    m.Duration().Seconds(),
-		}, nil
+		}, "", nil
 	case TieArchiveFile:
 		// The fd is a seekable ReaderAt: peek at the members to refine the
 		// classification (audio-archive etc.) without reopening the file —
@@ -319,10 +335,11 @@ func probeMediaFile(path string) (TieType, metadata.Media, error) {
 		if isZip, err := hasZipMagic(f); err == nil && isZip {
 			if members, err := archivelib.List(f); err == nil {
 				t = ArchiveTieType(archivelib.ModalKind(members))
+				return t, metadata.Media{}, bestArchiveCoverMember(members), nil
 			}
 		}
 	}
-	return t, metadata.Media{}, nil
+	return t, metadata.Media{}, "", nil
 }
 
 // hasZipMagic reports whether the stream starts with the zip local-file (or
@@ -371,11 +388,12 @@ func groupAlbums(files []scannedFile, mode GroupMode) []AlbumGroup {
 	for _, f := range files {
 		if f.isArchive {
 			groups = append(groups, AlbumGroup{
-				SourceDir: filepath.Dir(f.path),
-				Files:     []string{f.path},
-				IsArchive: true,
-				Tracks:    1,
-				Size:      f.size,
+				SourceDir:    filepath.Dir(f.path),
+				Files:        []string{f.path},
+				IsArchive:    true,
+				ArchiveCover: f.coverMember,
+				Tracks:       1,
+				Size:         f.size,
 			})
 			continue
 		}
@@ -785,6 +803,79 @@ func discSubPath(rel string, disc int, discDir, multi bool) string {
 	return fmt.Sprintf("cd%d/%s", disc, r)
 }
 
+// addGroupCoverSidecar attaches the best cover image of an explicit file-list
+// group to its album root. The planner already walked the library, so this is
+// a pure in-memory lookup; no extra disk I/O.
+func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize) {
+	if g.IsArchive || g.WholeTree() || len(g.audioPaths) == 0 {
+		return
+	}
+	dirs := map[string]bool{}
+	for _, p := range g.audioPaths {
+		dirs[filepath.Dir(p)] = true
+	}
+	// A merged multi-disc group keeps its artwork at the album root, above
+	// the per-disc directories. Include that root when the audio files are
+	// at most one level below it, so a scattered tag cluster does not scan a
+	// whole artist tree for unrelated images.
+	if g.SourceDir != "" {
+		shallow := true
+		for _, p := range g.audioPaths {
+			rel, err := filepath.Rel(g.SourceDir, p)
+			if err != nil || strings.Count(filepath.ToSlash(rel), "/") > 1 {
+				shallow = false
+				break
+			}
+		}
+		if shallow {
+			dirs[g.SourceDir] = true
+		}
+	}
+
+	type pick struct {
+		path      string
+		size      int64
+		score     int
+		nameScore int
+	}
+	best := pick{score: -1}
+	for dir := range dirs {
+		prefix := dir + string(os.PathSeparator)
+		for _, tf := range tree {
+			if !strings.HasPrefix(tf.path, prefix) {
+				continue
+			}
+			rel, err := filepath.Rel(dir, tf.path)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				continue
+			}
+			relSlash := filepath.ToSlash(rel)
+			if strings.Count(relSlash, "/") > 2 || !isImageName(tf.path) {
+				continue
+			}
+			nameScore := CoverNameScore(filepath.Base(tf.path))
+			score := nameScore + coverPathScore(relSlash)
+			if score > best.score {
+				best = pick{path: tf.path, size: tf.size, score: score, nameScore: nameScore}
+			}
+		}
+	}
+	if best.nameScore < 50 { // back/scan/booklet only: leave it to the resolver
+		return
+	}
+	for _, s := range g.Sidecars {
+		if s == best.path {
+			return // a disc conversion already collected this image
+		}
+	}
+	g.Sidecars = append(g.Sidecars, best.path)
+	if g.SubPaths == nil {
+		g.SubPaths = map[string]string{}
+	}
+	g.SubPaths[best.path] = filepath.Base(best.path)
+	g.Size += best.size
+}
+
 // warnNestedGroups annotates groups nested inside a whole-tree group: the
 // tree import mirrors every file below it, so a nested album's files are
 // parented twice — under its own destination and inside the tree's mirror.
@@ -915,7 +1006,15 @@ func (tie *TieClient) importAlbum(g AlbumGroup, opts AlbumImportOptions) error {
 		if err != nil {
 			return err
 		}
-		return tie.ImportFile(g.Files[0], opts.Host, opts.Tags, uid, opts.ForcedArchive)
+		if err := tie.ImportFile(g.Files[0], opts.Host, opts.Tags, uid, opts.ForcedArchive); err != nil {
+			return err
+		}
+		if g.ArchiveCover != "" {
+			if err := tie.setArchiveCoverFromFile(g.Files[0], g.ArchiveCover, opts.Host); err != nil {
+				tie.log().Warn("archive cover not imported", "archive", g.Files[0], "error", err)
+			}
+		}
+		return nil
 	case g.WholeTree():
 		return tie.ImportDir(g.SourceDir, opts.Host, opts.DirType, opts.Tags, g.Dest, opts.ForcedArchive)
 	default:

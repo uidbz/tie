@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [0.9.0] - 2026-11-08
+
+### Added
+
+- Cover artwork resolution shared by the CLI and GUI clients: `cover` /
+  `cover-source` relations, `client.ResolveCover` (folder/subfolder/parent
+  images, embedded pictures, zip archive members) and `tie media covers`.
+- Album imports now keep the best cover image for merged/split/tag groups and
+  record the cover from zip archive members.
+- `IndexCollection` records a high/medium-confidence folder image as the
+  collection's `cover` relation on import/backfill.
+
 ## [0.8.5] - 2026-11-03
 
 ### Changed

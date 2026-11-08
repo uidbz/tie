@@ -69,8 +69,120 @@ func countRow(o *out, label string, n int) {
 func cmdMedia(a *app) *cli.Command {
 	return &cli.Command{
 		Name:  "media",
-		Usage: "Media collection model: index, backfill, rescan, restat",
+		Usage: "Media collection model: covers, index, backfill, rescan, restat",
 		Commands: []*cli.Command{
+			{
+				Name:      "covers",
+				Usage:     "Find and record album cover artwork",
+				ArgsUsage: "[path|uid]...",
+				Description: "Resolve artwork from the collection tree (cover/front/folder images,\n" +
+					"artwork/ and scans/ subfolders, parent disc folders) and record it as\n" +
+					"the collection's (uid, cover, <imageHash>) relation. With --embedded,\n" +
+					"the first tracks are probed through the filehost; --archives extracts\n" +
+					"the best image from zip archive blobs. Thumbnail generation stays in\n" +
+					"the GUI clients and happens on first display.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "all", Usage: "Re-resolve collections that already have a cover or thumbnail"},
+					&cli.BoolFlag{Name: "embedded", Value: true, Usage: "Probe the first tracks for embedded pictures"},
+					&cli.BoolFlag{Name: "archives", Value: true, Usage: "Extract cover artwork from audio-archive blobs"},
+					&cli.BoolFlag{Name: "parent", Value: true, Usage: "Consider parent-folder artwork for disc/subfolder albums"},
+					&cli.BoolFlag{Name: "dry-run", Usage: "Report the chosen artwork without writing or uploading"},
+					&cli.StringFlag{Name: "type", Usage: "Only this tie-type (default: audio-dir and audio-archive)"},
+					&cli.IntFlag{Name: "limit", Usage: "Maximum collections to process (0 = all)"},
+				},
+				Action: func(_ context.Context, c *cli.Command) error {
+					o, err := a.outFor(c, "subject", "result", "cover", "source", "path", "confidence", "error")
+					if err != nil {
+						return err
+					}
+					typ := strings.TrimSpace(c.String("type"))
+					var types []string
+					if typ != "" {
+						types = []string{typ}
+					} else {
+						types = []string{client.TieAudioDir.String(), client.TieAudioArchive.String()}
+					}
+
+					var subjects []string
+					seen := map[string]bool{}
+					add := func(uid string) {
+						if uid != "" && !seen[uid] {
+							seen[uid] = true
+							subjects = append(subjects, uid)
+						}
+					}
+					if c.Args().Len() > 0 {
+						for _, arg := range c.Args().Slice() {
+							uid, err := resolveSubject(a, arg)
+							if err != nil {
+								return err
+							}
+							add(uid)
+						}
+					} else {
+						for _, t := range types {
+							rows, _, err := a.tie.Query(client.QuerySpec{
+								Terms: []string{t}, Filter: string(client.RelType), Reverse: true,
+								Expand: true, Limit: -1,
+							})
+							if errors.Is(err, client.ErrNotFound) {
+								continue
+							}
+							if err != nil {
+								return err
+							}
+							for _, row := range rows {
+								add(row.Key)
+							}
+						}
+					}
+
+					host, err := a.tie.ResolveHost("")
+					if err != nil {
+						host = client.FileHost{} // file artwork still works
+					}
+					all := c.Bool("all")
+					limit := int(c.Int("limit"))
+					done := 0
+					for _, uid := range subjects {
+						if limit > 0 && done >= limit {
+							break
+						}
+						row, err := a.tie.Get(uid)
+						if err != nil {
+							if errors.Is(err, client.ErrNotFound) {
+								continue
+							}
+							return err
+						}
+						cover := client.RowFirst(row, client.RelCover)
+						hasGood := cover != "" && !client.RowCoverIsLow(row)
+						if cover == "" && client.RowFirst(row, client.RelThumbnail) != "" {
+							hasGood = true
+						}
+						if !all && hasGood {
+							continue
+						}
+						done++
+						res, err := client.ResolveCover(a.tie, uid, client.CoverOptions{
+							Host:            host,
+							IncludeParent:   c.Bool("parent"),
+							IncludeEmbedded: c.Bool("embedded"),
+							IncludeArchives: c.Bool("archives"),
+							DryRun:          c.Bool("dry-run"),
+						})
+						switch {
+						case errors.Is(err, client.ErrNoCover):
+							o.row(uid, "none", "", "", "", "", "")
+						case err != nil:
+							o.row(uid, "error", "", "", "", "", err.Error())
+						default:
+							o.row(uid, "cover", res.Hash, res.Source, res.Path, res.Confidence.String(), "")
+						}
+					}
+					return o.flush()
+				},
+			},
 			{
 				Name:      "index",
 				Usage:     "Bring one collection up to the collection contract (member-of, added-at, disc labels, album summary)",
