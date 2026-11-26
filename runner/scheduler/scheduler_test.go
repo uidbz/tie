@@ -597,3 +597,29 @@ func TestCleanUpRetainsThenDrops(t *testing.T) {
 		t.Fatal("expired job must be cleaned up")
 	}
 }
+
+// TestPollOnceSeesExternalJobsBehindFinishedOnes pins that pollOnce
+// visits every job: the Range callback used to return false at the first
+// local/finished job, so an in-flight external job was polled only when
+// the map happened to yield it first.
+func TestPollOnceSeesExternalJobsBehindFinishedOnes(t *testing.T) {
+	specs := map[string]executor.Spec{"CPUv1": {CPU: 1, RAMMB: 64}}
+	env := newTestEnv(t, specs, nil)
+	env.local.runFn = func(job *api.JobStatus) executor.ExitInfo { return executor.ExitInfo{} }
+	const local = 40
+	for range local {
+		env.submit("CPUv1", "tool:v2")
+	}
+	for range local {
+		env.waitFinished(t)
+	}
+	job := env.m.NewJob(api.JobRequest{JobType: "ext.big", Handler: "t", InputHash: "in"}, false, "dm")
+	if err := env.m.SubmitExternal(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	env.ext.setState("h1", executor.HandleState{Status: api.StatusRunning})
+	env.m.pollOnce()
+	if rec, _ := env.st.GetJob(job.JobID); rec.Status != api.StatusRunning {
+		t.Fatalf("external job not polled: status %q", rec.Status)
+	}
+}

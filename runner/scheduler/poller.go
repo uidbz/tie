@@ -50,7 +50,10 @@ func (m *Manager) pollOnce() {
 			inflight[j.BatchJobID] = j
 		}
 		m.mu.Unlock()
-		return ext
+		// Always continue: returning false stops Range, and finished or
+		// local jobs stay in the map for days, so in-flight external jobs
+		// behind one were never polled (nor timed out).
+		return true
 	})
 	if len(inflight) == 0 {
 		return
