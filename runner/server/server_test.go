@@ -388,3 +388,22 @@ func TestQueueAndCapacityEndpoints(t *testing.T) {
 		t.Errorf("store stats total: %+v", stats)
 	}
 }
+
+// TestStatusUnknownJobIs404 pins that an unknown job ID is a 404 (with
+// the not-found record as body), not a 200 record: a 200 made fleet
+// lookups pick the first reachable runner and made "not here"
+// indistinguishable from a failed job.
+func TestStatusUnknownJobIs404(t *testing.T) {
+	h := newHarness(t, harnessCfg{})
+	rec := h.do(http.MethodGet, "/api/status/nope", "", "", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown job: status %d, want 404 (body %s)", rec.Code, rec.Body.String())
+	}
+	var r api.JobStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &r); err != nil {
+		t.Fatalf("404 body is not a JobStatus: %v", err)
+	}
+	if r.JobID != "nope" || r.ErrorMsg == "" {
+		t.Fatalf("not-found record = %+v", r)
+	}
+}

@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **runclient: a job's own `ErrorMsg` is no longer a call error** (#162).
+  `GetStatus` returns a failed job's record with a nil error; only "no such
+  job" is an error (wrapping `ErrNotFound`, for both the new 404 and the
+  legacy 200 not-found reply). New `JobError` judges a finished record.
+  `ShowProgressCtx` ends on `Done` whatever the outcome (a failed job used to
+  be retried ~151 s and reported as "still on" the runner) and keeps watching
+  through error markers on a running job.
+- `StartRun`/`StartRunCtx` return the job record with an error wrapping
+  `ErrJobFailed` for a failed or cancelled job, and an error wrapping
+  `ctx.Err()` when the watch is cancelled before the job finishes (it used to
+  look like success, with an empty `OutputHash`).
+- Watches (`ShowProgressCtx`, `WaitPipelineCtx`, `tie-run logs -f`) stop at
+  once on `ErrNotFound`/`ErrUnauthorized` instead of backing off.
+- `WaitPipelineCtx` returns an error for a cancelled pipeline and the last
+  state seen (not a zero `Pipeline`) when the wait is cancelled.
+- The runner answers `GET /api/status/{id}` for an unknown job with 404 (was
+  200 with an `ErrorMsg`), as docs/runner-api.md already specified.
+
+### Added
+
+- `runclient.FindJob` (fleet lookup of a job's owning runner),
+  `CallRunnerCtx`, `GetStatusCtx`, `GetPipelineCtx`, `PipelineError` (#162,
+  #163). In-flight polls are aborted when the watch context is cancelled.
+
 ## [0.9.0] - 2026-11-08
 
 ### Added

@@ -65,7 +65,11 @@ responding runner with `DeployManager` naming the executing host.
 ### status — GET /api/status/{jobid}
 
 → `JobStatus`. Forwarded to the owning backend when the responding runner
-does not hold the job. A not-found is a plain-text 404.
+does not hold the job. An unknown job is a 404 whose JSON body is a
+`JobStatus` with only `JobID`, `DeployManager` and `ErrorMsg` set (older
+runners answered that record with 200; clients treat both as not
+found). A failed job is a normal 200 record with `Status: failed` and
+`ErrorMsg`.
 
 ### jobs — GET /api/jobs, DELETE /api/jobs/{jobid}
 

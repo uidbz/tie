@@ -116,13 +116,21 @@ func followLogs(ctx context.Context, runner, jobID string, showHeader bool) erro
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("watching cancelled; job %s still running on %s — resume with tie-run status %s\n", jobID, runner, jobID)
+			fmt.Printf("watching cancelled; job %s still running on %s — resume with tie-run logs -f %s\n", jobID, runner, jobID)
 			return nil
 		default:
 		}
 
-		status, err := runclient.GetStatus(runner, jobID)
+		status, err := runclient.GetStatusCtx(ctx, runner, jobID)
 		if err != nil {
+			if ctx.Err() != nil {
+				fmt.Printf("watching cancelled; job %s still running on %s — resume with tie-run logs -f %s\n", jobID, runner, jobID)
+				return nil
+			}
+			// Unknown job / bad key will not heal by retrying.
+			if errors.Is(err, runclient.ErrNotFound) || errors.Is(err, runclient.ErrUnauthorized) {
+				return err
+			}
 			consecutiveErrs++
 			if consecutiveErrs >= maxConsecutiveErrs {
 				return fmt.Errorf("job %s is still on %s; check with tie-run status %s", jobID, runner, jobID)

@@ -75,7 +75,10 @@ func cmdStatus() *cli.Command {
 				fmt.Println("RunningTime:", status.RunningTime)
 			}
 
-			return nil
+			// A failed or cancelled job is a non-zero exit with its error;
+			// a still-running job (watch cancelled, or --follow=false) is
+			// not an error.
+			return runclient.JobError(status)
 		},
 	}
 }
