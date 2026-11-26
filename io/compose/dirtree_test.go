@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -205,8 +206,22 @@ func TestComposeOptionalSkipsUnfetchableTree(t *testing.T) {
 	if err == nil {
 		t.Fatal("non-optional unfetchable spec must fail Compose")
 	}
-	if !strings.Contains(err.Error(), "bad status") {
+	if !errors.Is(err, ErrBlobNotFound) {
 		t.Fatalf("error should surface the fetch failure, got: %v", err)
+	}
+}
+
+// An Optional source is skipped only when it does not exist (404): a
+// filehost outage (5xx, timeout) must fail the build instead of silently
+// running the job on less input.
+func TestBuildOptionalFailsOnFilehostOutage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	_, err := Build(srv.URL, "store", []Spec{{Hash: hashOf("x"), Optional: true}})
+	if err == nil || errors.Is(err, ErrBlobNotFound) {
+		t.Fatalf("optional source during an outage: err = %v, want a hard error", err)
 	}
 }
 

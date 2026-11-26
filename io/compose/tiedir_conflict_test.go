@@ -50,3 +50,18 @@ func TestTreeBuilderDirCannotBecomeFile(t *testing.T) {
 		t.Errorf("rejected Add mutated the tree: %+v", data)
 	}
 }
+
+// TreeBuilder must refuse names that metadata.ParseDirLine rejects (e.g.
+// a backslash): readers drop such entries, so the tree would silently
+// lose them.
+func TestTreeBuilderRejectsInvalidEntryNames(t *testing.T) {
+	b := NewTreeBuilder()
+	for _, p := range []string{`dir\file.csv`, `ok/sub\x`} {
+		if err := b.Add(p, metadata.DirEntry{Hash: hashOf(p)}); err == nil {
+			t.Errorf("Add(%q) accepted a name readers drop", p)
+		}
+	}
+	if err := b.Add("ok/fine.csv", metadata.DirEntry{Hash: hashOf("f")}); err != nil {
+		t.Fatalf("valid path rejected: %v", err)
+	}
+}

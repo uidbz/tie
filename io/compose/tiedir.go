@@ -169,6 +169,13 @@ func splitTreePath(path string) ([]string, error) {
 		case "..":
 			return nil, fmt.Errorf("tie tree: path %q escapes the tree root", path)
 		}
+		// Readers (metadata.ParseDirLine) drop entries whose name is not
+		// a valid single component (e.g. one containing a backslash), so
+		// refuse them here instead of writing a tree that silently loses
+		// them.
+		if !metadata.ValidEntryName(name) {
+			return nil, fmt.Errorf("tie tree: path %q: %q is not a valid entry name", path, name)
+		}
 		parts = append(parts, name)
 	}
 	if len(parts) == 0 {
