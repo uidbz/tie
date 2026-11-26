@@ -79,6 +79,6 @@ const (
 // hash the caller supplies instead of rerunning it. An empty body — the
 // common case, "retry what did not finish" — is valid.
 type ResumeRequest struct {
-	From string
-	With map[string]string
+	From string            `json:",omitempty"`
+	With map[string]string `json:",omitempty"`
 }

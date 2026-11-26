@@ -109,13 +109,7 @@ func CancelPipeline(runner, pipelineID, deployKey string) error {
 // same key as CancelPipeline.
 func ResumePipeline(runner, pipelineID, deployKey, fromStep string, overrides map[string]string) (api.Pipeline, error) {
 	var p api.Pipeline
-	body := map[string]any{}
-	if fromStep != "" {
-		body["From"] = fromStep
-	}
-	if len(overrides) > 0 {
-		body["With"] = overrides
-	}
+	body := api.ResumeRequest{From: fromStep, With: overrides}
 	err := do(call{Method: http.MethodPost, Runner: runner, Path: "/api/pipelines/" + seg(pipelineID) + "/resume", Key: deployKey, Body: body, Timeout: 60 * time.Second}, &p)
 	if errors.Is(err, ErrUnauthorized) {
 		return p, fmt.Errorf("%w for this pipeline's entry step", ErrUnauthorized)

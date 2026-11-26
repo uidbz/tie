@@ -91,21 +91,13 @@ func (s *Server) cancelPipelineHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, map[string]string{"status": api.StatusCancelled})
 }
 
-// resumeRequest reruns part of a finished pipeline. From names the first
-// step to rerun; everything downstream of it reruns too. With reads a
-// step's output from a hash the caller supplies instead of rerunning it.
-type resumeRequest struct {
-	From string
-	With map[string]string
-}
-
 func (s *Server) resumePipelineHandler(w http.ResponseWriter, r *http.Request) {
 	p := s.authorizePipeline(w, r)
 	if p == nil {
 		return
 	}
 
-	var req resumeRequest
+	var req api.ResumeRequest
 	// An empty body is the common case ("retry what did not finish"), so
 	// a decode failure on no content is not an error.
 	if r.ContentLength > 0 {
