@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -185,6 +186,13 @@ func runInit(args []string) error {
 	}
 	path, err := conf.PathUserConfigDir(brand.CLIName, configFile())
 	if err != nil {
+		return err
+	}
+	// LoadConfig also fails on a file that exists but does not parse;
+	// never overwrite that (it is the user's config with a typo).
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("%s already exists (and may not parse); not overwriting", path)
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	if err := conf.SaveToUserConfigDir(brand.CLIName, configFile(), defaultFleet()); err != nil {

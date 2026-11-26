@@ -104,6 +104,40 @@ including this tool's own session if it lives there).
 `))
 }
 
+// parseFlags parses fs over args, allowing flags anywhere among the
+// positional arguments (the usage text shows `specs edit FILE --set …`
+// and `autostart set NAME --host H`; the flag package alone stops at the
+// first positional and silently treats the rest as positionals). A
+// literal "--" ends flag parsing. Errors — including -h — are returned
+// wrapped in ErrUsage instead of exiting the process.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	fs.Init(fs.Name(), flag.ContinueOnError)
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, fmt.Errorf("%w: %s: %v", ErrUsage, fs.Name(), err)
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, nil
+		}
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+}
+
+// noArgs rejects positional arguments for commands that take none, so a
+// typo is an error instead of being silently ignored.
+func noArgs(fs *flag.FlagSet, pos []string) error {
+	if len(pos) > 0 {
+		return fmt.Errorf("%w: %s takes no arguments (got %q)", ErrUsage, fs.Name(), pos)
+	}
+	return nil
+}
+
 // commonFlags collects the flags every subcommand shares.
 type commonFlags struct {
 	conf    string

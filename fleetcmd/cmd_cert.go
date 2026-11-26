@@ -65,13 +65,15 @@ func runCert(args []string) error {
 	}
 	var cf commonFlags
 	var only, crtFile, keyFile, token string
-	fs := flag.NewFlagSet("cert", flag.ExitOnError)
+	fs := flag.NewFlagSet("cert", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&only, "only", "", "restrict to one host")
 	fs.StringVar(&crtFile, "crt", "", "PEM certificate file (push)")
 	fs.StringVar(&keyFile, "key", "", "PEM key file (push)")
 	fs.StringVar(&token, "token", "", bt("AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)"))
-	if err := fs.Parse(args[1:]); err != nil {
+	if pos, err := parseFlags(fs, args[1:]); err != nil {
+		return err
+	} else if err := noArgs(fs, pos); err != nil {
 		return err
 	}
 

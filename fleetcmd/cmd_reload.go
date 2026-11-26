@@ -24,12 +24,16 @@ func runReload(args []string) error {
 	var cf commonFlags
 	var only, token string
 	var forceRestart bool
-	fs := flag.NewFlagSet("reload", flag.ExitOnError)
+	fs := flag.NewFlagSet("reload", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&only, "only", "", "restrict to one host")
 	fs.StringVar(&token, "token", "", bt("AdminToken for POST /api/reload (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)"))
 	fs.BoolVar(&forceRestart, "restart", false, "skip HTTP and use sudo systemctl restart (kills service containers on pre-v1.6.0 runners; the pre-v1.2.0 escape hatch)")
-	fs.Parse(args)
+	if pos, err := parseFlags(fs, args); err != nil {
+		return err
+	} else if err := noArgs(fs, pos); err != nil {
+		return err
+	}
 
 	cfg, err := loadFleetConfig(cf.conf)
 	if err != nil {

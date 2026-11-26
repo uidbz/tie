@@ -8,6 +8,7 @@ package fleetcmd
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -189,14 +190,39 @@ func SetAutostart(src string, names []string) (out string, report []string, miss
 			blocks[i] = regexp.MustCompile(`(?m)^ServiceAutostart = false`).ReplaceAllString(block, "ServiceAutostart = true")
 			report = append(report, name+": false -> true")
 		default:
-			blocks[i] = strings.TrimRight(block, "\n") + "\nServiceAutostart = true\n"
+			blocks[i] = insertInMainTable(block, "ServiceAutostart = true")
 			report = append(report, name+": field added = true")
 		}
 	}
 	for n := range want {
 		missing = append(missing, n)
 	}
+	sort.Strings(missing)
 	return strings.Join(blocks, "\n"), report, missing
+}
+
+// insertInMainTable adds line to the block's own [[DeployedImages]]
+// table: after its last key, before the first following table header
+// (a sub-table, or the next top-level table when this is the file's last
+// block). Appending at the end of the block text put the key into
+// whichever table came last.
+func insertInMainTable(block, line string) string {
+	lines := strings.Split(strings.TrimRight(block, "\n"), "\n")
+	at := len(lines)
+	for i := 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "[") {
+			at = i
+			break
+		}
+	}
+	// Keep blank lines/comments that precede the next header with it.
+	for at > 1 && (strings.TrimSpace(lines[at-1]) == "" || strings.HasPrefix(strings.TrimSpace(lines[at-1]), "#")) && at < len(lines) {
+		at--
+	}
+	out := append([]string{}, lines[:at]...)
+	out = append(out, line)
+	out = append(out, lines[at:]...)
+	return strings.Join(out, "\n") + "\n"
 }
 
 // NoAutostart lists service names whose block has ServiceAutostart = false.

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -25,9 +26,15 @@ if [ ! -d ` + buildDir + ` ]; then git clone -q %s ` + buildDir + `; fi
 cd ` + buildDir + `
 git fetch -q origin
 git checkout -q '%s' 2>/dev/null || git checkout -q 'origin/%s'
-git pull -q --ff-only 2>/dev/null || true
+# On a branch, the build must be the remote tip: a failed fast-forward
+# (diverged local checkout) aborts instead of deploying a stale build.
+# Tags and SHAs check out detached and need no pull.
+if git symbolic-ref -q HEAD >/dev/null; then git pull -q --ff-only; fi
 COMMIT=$(git rev-parse --short HEAD)
-go build -trimpath -ldflags "-X main.Version=%s -X main.GitCommit=$COMMIT -X main.BuildDate=$(date -u +%%FT%%TZ)" -o ` + stagedBin + ` .
+# Stamp the describe-version (vN.M.P[-k-gSHA]), not the --rev argument:
+# version-gated features (hot reload, adoption) parse vN.M from it.
+VERSION=$(git describe --tags --always)
+go build -trimpath -ldflags "-X main.Version=$VERSION -X main.GitCommit=$COMMIT -X main.BuildDate=$(date -u +%%FT%%TZ)" -o ` + stagedBin + ` .
 echo BUILT $COMMIT`
 )
 
@@ -36,14 +43,18 @@ func runRollout(args []string) error {
 	var rev, only string
 	var dryRun, allowSelf bool
 	var idleTimeout time.Duration
-	fs := flag.NewFlagSet("rollout", flag.ExitOnError)
+	fs := flag.NewFlagSet("rollout", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&rev, "rev", "master", "tag, branch, or sha to deploy")
 	fs.StringVar(&only, "only", "", "restrict to one host")
 	fs.BoolVar(&dryRun, "dry-run", false, "gate and compare, change nothing")
 	fs.BoolVar(&allowSelf, "allow-self", false, "permit touching the host this tool runs on")
 	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "how long to wait for a host to go idle")
-	fs.Parse(args)
+	if pos, err := parseFlags(fs, args); err != nil {
+		return err
+	} else if err := noArgs(fs, pos); err != nil {
+		return err
+	}
 
 	cfg, err := loadFleetConfig(cf.conf)
 	if err != nil {
@@ -71,14 +82,13 @@ func runRollout(args []string) error {
 
 	// ---- build once ----
 	fmt.Printf("building %s on %s ...\n", rev, cfg.Rollout.BuildHost)
-	buildOut, err := ssh.run(cfg.Rollout.BuildHost, fmt.Sprintf(buildScript, cfg.Rollout.RepoURL, rev, rev, rev))
+	buildOut, err := ssh.run(cfg.Rollout.BuildHost, fmt.Sprintf(buildScript, cfg.Rollout.RepoURL, rev, rev))
 	if err != nil {
 		return fmt.Errorf("build failed on %s: %w", cfg.Rollout.BuildHost, err)
 	}
-	_ = buildOut
-	commit, err := ssh.run(cfg.Rollout.BuildHost, "cd "+buildDir+" && git rev-parse --short HEAD")
+	commit, err := builtCommit(buildOut)
 	if err != nil {
-		return err
+		return fmt.Errorf("build on %s: %w", cfg.Rollout.BuildHost, err)
 	}
 	fmt.Printf("built %s -> commit %s\n", rev, commit)
 
@@ -100,14 +110,14 @@ func runRollout(args []string) error {
 	// ---- per host ----
 	for _, h := range target {
 		fmt.Printf("=== %s ===\n", h.Name)
+		// Any per-host failure stops the whole rollout (no cascading);
+		// returning (not os.Exit) keeps the deferred temp-binary cleanup.
 		if err := idleGate(cl, h, idleTimeout); err != nil {
-			fmt.Printf("  SKIP %s: %v\n", h.Name, err)
-			os.Exit(1)
+			return fmt.Errorf("rollout stopped at %s: %w", h.Name, err)
 		}
 		caps, err := cl.capabilities(h.API)
 		if err != nil {
-			fmt.Printf("  SKIP %s: %v\n", h.Name, err)
-			os.Exit(1)
+			return fmt.Errorf("rollout stopped at %s: %w", h.Name, err)
 		}
 		if caps.GitCommit == commit {
 			fmt.Printf("  up to date (%s), skipping\n", commit)
@@ -122,8 +132,7 @@ func runRollout(args []string) error {
 			fmt.Fprintf(os.Stderr, "  %s: autostart pre-flight failed: %v\n", h.Name, err)
 		}
 		if err := swapAndRestart(ssh, h, localBin.Name(), sha, cfg.Rollout); err != nil {
-			fmt.Printf("  FAILED: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("rollout stopped at %s: %w", h.Name, err)
 		}
 		if !healthCheck(cl, h, commit) {
 			fmt.Printf("  FAILED health check — rolling back %s\n", h.Name)
@@ -133,11 +142,10 @@ func runRollout(args []string) error {
 			rb := fmt.Sprintf("set -e; test -f %s.prev; mv -f %s.prev %s; sudo setcap cap_net_bind_service+ep %s; %s",
 				remoteBin, remoteBin, remoteBin, remoteBin, svc(h.Init, "restart", cfg.Rollout.ServiceName, cfg.Rollout.PidFile))
 			if _, err := ssh.run(h.Name, rb); err != nil {
-				fmt.Printf("  ROLLBACK ALSO FAILED, manual intervention needed: %v\n", err)
-			} else {
-				fmt.Printf("  rollback issued; verify: curl %s/api/capabilities\n", h.API)
+				return fmt.Errorf("rollout stopped at %s: health check failed and ROLLBACK ALSO FAILED, manual intervention needed: %w", h.Name, err)
 			}
-			os.Exit(1) // stop the rollout; do not cascade
+			fmt.Printf("  rollback issued; verify: curl %s/api/capabilities\n", h.API)
+			return fmt.Errorf("rollout stopped at %s: health check failed (rolled back)", h.Name)
 		}
 		fmt.Printf("  OK: %s now at %s\n", h.Name, commit)
 	}
@@ -178,6 +186,18 @@ func healthCheck(cl *api, h Host, commit string) bool {
 		}
 	}
 	return false
+}
+
+// builtCommit extracts the commit from the build script's final
+// "BUILT <sha>" line (saves a second SSH round trip).
+func builtCommit(out string) (string, error) {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	commit, ok := strings.CutPrefix(last, "BUILT ")
+	if !ok || strings.TrimSpace(commit) == "" {
+		return "", fmt.Errorf("no BUILT line in build output (last line %q)", last)
+	}
+	return strings.TrimSpace(commit), nil
 }
 
 func sha256File(path string) (string, error) {

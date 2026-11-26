@@ -6,6 +6,7 @@ package fleetcmd
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -67,8 +68,11 @@ func localHostname() string {
 	return strings.SplitN(h, ".", 2)[0]
 }
 
-// guardSelf refuses host unless allowSelf. Matches fleet names against the
-// local short hostname and against the host part of the API base.
+// guardSelf refuses host unless allowSelf. It matches the local short
+// hostname against the fleet name and against the short host part of the
+// API base. The name match is deliberately loose (either is a prefix of
+// the other): a false "this is you" only costs an --allow-self, a missed
+// one kills the tool's own session.
 func guardSelf(h Host, allowSelf bool) error {
 	if allowSelf {
 		return nil
@@ -77,7 +81,11 @@ func guardSelf(h Host, allowSelf bool) error {
 	if local == "" {
 		return nil
 	}
-	if h.Name == local || strings.HasPrefix(local, h.Name) || strings.HasPrefix(h.Name, local) {
+	apiHost := ""
+	if u, err := url.Parse(h.API); err == nil {
+		apiHost = strings.SplitN(u.Hostname(), ".", 2)[0]
+	}
+	if h.Name == local || apiHost == local || strings.HasPrefix(local, h.Name) || strings.HasPrefix(h.Name, local) {
 		return fmt.Errorf("%s looks like THIS machine: restarting its runner would kill this tool's own session (use --allow-self to override)", h.Name)
 	}
 	return nil
