@@ -26,6 +26,25 @@ to follow semantic versioning.
 - The runner answers `GET /api/status/{id}` for an unknown job with 404 (was
   200 with an `ErrorMsg`), as docs/runner-api.md already specified.
 
+### Fixed
+
+- Cover resolver (#168, #169): album-import cover sidecars no longer pull in
+  a sibling album's artwork and break ties deterministically; `IndexCollection`
+  records only high/medium-confidence covers within two levels and never over
+  a legacy thumbnail; a filehost failure while probing embedded pictures is an
+  error, not "no cover"; `tie media covers` clears the stale thumbnail when the
+  cover changes; the covers docs match the real flags.
+- Scheduler: in-flight external jobs were rarely polled (and never timed out)
+  once a local or finished job was in the live map (#172).
+- tie-runner: a cert push to a runner serving plain HTTP crashed it (second
+  listener on the same port); it now switches to TLS in place (#173).
+- fleetcmd: `init` overwrote an unparsable config; `os.Exit` in library code;
+  `rollout` stamped `--rev` as the version (breaking version-gated reload) and
+  deployed stale builds after a failed fast-forward; flags after positionals
+  were ignored (#164, #165).
+- io/compose: tree entry names readers drop are refused; an `Optional` source
+  is skipped only when absent, not on a filehost outage (#167).
+
 ### Added
 
 - `runclient.FindJob` (fleet lookup of a job's owning runner),

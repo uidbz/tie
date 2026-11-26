@@ -5,8 +5,14 @@ package client
 // A collection (audio-dir, image-dir, playlist, …) keeps two artwork
 // relations:
 //
-//	(uid, "cover",       <imageHash>)  the chosen source image
-//	(uid, "cover-source", "file:cover.jpg" | "embedded:01.flac" | …)
+//	(uid, "cover",        <imageHash>)  the chosen source image
+//	(uid, "cover-source", <kind>:<where>) where it came from:
+//
+//	file:<path>          an image in the tree, slash path relative to the
+//	                     collection ("cover.jpg", "Artwork/front.jpg",
+//	                     "../folder.jpg" for parent-folder art)
+//	embedded:<audioHash> the picture embedded in that audio blob
+//	archive:<member>     an image member of the archive blob ("scans/front.jpg")
 //
 // "thumbnail" remains the small, display-ready JPEG cached by clients. The
 // split matters: the source image can be a full-size scan or an embedded
@@ -21,6 +27,7 @@ package client
 import (
 	"archive/zip"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -112,7 +119,7 @@ type CoverOptions struct {
 type CoverResult struct {
 	Hash       string
 	Source     string // "file", "embedded", "archive"
-	Path       string // e.g. "artwork/front.jpg" or "01 - track.flac"
+	Path       string // file: "artwork/front.jpg"; embedded: the audio blob hash; archive: the member name
 	Score      int
 	Confidence CoverConfidence
 	// Data is set when the resolver already extracted the bytes (embedded
@@ -319,6 +326,10 @@ func numberedCoverName(stem string) bool {
 	return numberedRe.MatchString(stem)
 }
 
+// defaultCoverDepth is how many directory levels below a collection root are
+// searched for artwork when no MaxDepth is given.
+const defaultCoverDepth = 2
+
 // FindCoverCandidates walks a collection directory and returns every image
 // candidate ranked best-first. Parent artwork is included only when
 // IncludeParent is set and the parent is plausibly this album's parent.
@@ -328,7 +339,7 @@ func FindCoverCandidates(tc *TieClient, uid DirUID, opts CoverSearchOptions) ([]
 	}
 	maxDepth := opts.MaxDepth
 	if maxDepth <= 0 {
-		maxDepth = 2
+		maxDepth = defaultCoverDepth
 	}
 	var out []CoverCandidate
 	seen := map[DirUID]bool{}
@@ -531,19 +542,27 @@ func albumBasename(row Row) string {
 }
 
 // bestMemberCover ranks the image rows already gathered by IndexCollection's
-// walk, so indexing a collection and resolving its cover share one rule set.
+// walk, so indexing a collection and resolving its cover share one rule set:
+// the same depth limit as FindCoverCandidates, and only high/medium
+// confidence. A low-confidence back/scan image is left to ResolveCover, which
+// weighs it against embedded artwork first.
 func bestMemberCover(members []memberInfo) *CoverCandidate {
 	var out []CoverCandidate
 	for _, m := range members {
 		if !isImageRow(m.row) {
 			continue
 		}
+		depth := strings.Count(m.rel, "/")
+		if depth > defaultCoverDepth {
+			continue
+		}
 		name := RowFirst(m.row, RelFilename)
 		if name == "" {
 			name = pathpkg.Base(m.rel)
 		}
-		addCoverCandidate(&out, m.row.Key, name, m.rel, strings.Count(m.rel, "/"))
+		addCoverCandidate(&out, m.row.Key, name, m.rel, depth)
 	}
+	out = slices.DeleteFunc(out, func(c CoverCandidate) bool { return c.Confidence == CoverLow })
 	if len(out) == 0 {
 		return nil
 	}
@@ -562,7 +581,9 @@ func isImageRow(row Row) bool {
 
 // ResolveCover finds and records a collection's source artwork. It does not
 // create a thumbnail; clients scale the chosen source into the "thumbnail"
-// relation when they first display it.
+// relation when they first display it. It returns ErrNoCover only when no
+// requested source holds artwork; a failed filehost fetch or upload is
+// returned as that error, so it is not mistaken for "no cover".
 func ResolveCover(tc *TieClient, uid string, opts CoverOptions) (CoverResult, error) {
 	if uid == "" {
 		return CoverResult{}, ErrNoCover
@@ -613,30 +634,37 @@ func ResolveCover(tc *TieClient, uid string, opts CoverOptions) (CoverResult, er
 	}
 
 	// Embedded artwork is the fallback after high/medium file art, but it
-	// beats a low-confidence back/scan/inside image.
+	// beats a low-confidence back/scan/inside image. A track without a
+	// picture is not an error; a failed fetch or upload is. When no track
+	// yields a picture, a probe error is returned instead of ErrNoCover
+	// (callers cache "no cover"), unless a file candidate remains to record.
+	var embeddedErr error
 	if opts.IncludeEmbedded && (best == nil || best.Confidence == CoverLow) {
 		hashes, err := firstAudioHashes(tc, uid, 3)
-		if err == nil {
-			for _, hash := range hashes {
-				pic, err := ExtractEmbeddedPicture(host, hash)
-				if err != nil {
-					continue
-				}
-				if len(pic) == 0 {
-					continue
-				}
-				coverHash, err := coverArtHash(host, pic, opts.DryRun)
-				if err != nil {
-					continue
-				}
-				if !opts.DryRun {
-					if err := SetCover(tc, uid, coverHash, "embedded:"+hash); err != nil {
-						return CoverResult{}, err
-					}
-				}
-				return CoverResult{Hash: coverHash, Source: "embedded", Path: hash,
-					Score: 95, Confidence: CoverHigh, Data: pic}, nil
+		if err != nil {
+			embeddedErr = err
+		}
+		for _, hash := range hashes {
+			pic, err := ExtractEmbeddedPicture(host, hash)
+			if err != nil {
+				embeddedErr = cmp.Or(embeddedErr, fmt.Errorf("embedded artwork %s: %w", hash, err))
+				continue
 			}
+			if len(pic) == 0 {
+				continue
+			}
+			coverHash, err := coverArtHash(host, pic, opts.DryRun)
+			if err != nil {
+				embeddedErr = cmp.Or(embeddedErr, fmt.Errorf("embedded artwork %s: %w", hash, err))
+				continue
+			}
+			if !opts.DryRun {
+				if err := SetCover(tc, uid, coverHash, "embedded:"+hash); err != nil {
+					return CoverResult{}, err
+				}
+			}
+			return CoverResult{Hash: coverHash, Source: "embedded", Path: hash,
+				Score: 95, Confidence: CoverHigh, Data: pic}, nil
 		}
 	}
 
@@ -649,6 +677,9 @@ func ResolveCover(tc *TieClient, uid string, opts CoverOptions) (CoverResult, er
 		}
 		return CoverResult{Hash: best.Hash, Source: "file", Path: best.Path,
 			Score: best.Score, Confidence: best.Confidence}, nil
+	}
+	if embeddedErr != nil {
+		return CoverResult{}, embeddedErr
 	}
 	return CoverResult{}, ErrNoCover
 }

@@ -188,8 +188,9 @@ func finalizePlan(groups []AlbumGroup, tmpl string, tree []pathSize) {
 	// import audio only; give each one its best cover image as a sidecar so
 	// the artwork is not left behind. Whole-tree groups already import every
 	// sidecar verbatim.
+	audioDirs := audioDirSet(groups)
 	for i := range groups {
-		addGroupCoverSidecar(&groups[i], tree)
+		addGroupCoverSidecar(&groups[i], tree, audioDirs)
 	}
 	sort.Slice(groups, func(i, j int) bool {
 		if groups[i].Dest != groups[j].Dest {
@@ -806,13 +807,21 @@ func discSubPath(rel string, disc int, discDir, multi bool) string {
 // addGroupCoverSidecar attaches the best cover image of an explicit file-list
 // group to its album root. The planner already walked the library, so this is
 // a pure in-memory lookup; no extra disk I/O.
-func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize) {
+//
+// Only images that belong to this album are considered: those directly in a
+// member audio directory or the group's root, and those below art-named
+// subfolders (Artwork/, Scans/, …) of them. Other subdirectories are another
+// album's business (a split group in a shared folder must not adopt a sibling
+// album's cover), and so is an art-named folder that holds audio itself.
+// audioDirs is the set of directories containing audio at any depth. Ties
+// break on the path, so the choice does not depend on map order.
+func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize, audioDirs map[string]bool) {
 	if g.IsArchive || g.WholeTree() || len(g.audioPaths) == 0 {
 		return
 	}
-	dirs := map[string]bool{}
+	dirSet := map[string]bool{}
 	for _, p := range g.audioPaths {
-		dirs[filepath.Dir(p)] = true
+		dirSet[filepath.Dir(p)] = true
 	}
 	// A merged multi-disc group keeps its artwork at the album root, above
 	// the per-disc directories. Include that root when the audio files are
@@ -828,9 +837,14 @@ func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize) {
 			}
 		}
 		if shallow {
-			dirs[g.SourceDir] = true
+			dirSet[g.SourceDir] = true
 		}
 	}
+	dirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
 
 	type pick struct {
 		path      string
@@ -839,10 +853,10 @@ func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize) {
 		nameScore int
 	}
 	best := pick{score: -1}
-	for dir := range dirs {
+	for _, dir := range dirs {
 		prefix := dir + string(os.PathSeparator)
 		for _, tf := range tree {
-			if !strings.HasPrefix(tf.path, prefix) {
+			if !strings.HasPrefix(tf.path, prefix) || !isImageName(tf.path) {
 				continue
 			}
 			rel, err := filepath.Rel(dir, tf.path)
@@ -850,12 +864,12 @@ func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize) {
 				continue
 			}
 			relSlash := filepath.ToSlash(rel)
-			if strings.Count(relSlash, "/") > 2 || !isImageName(tf.path) {
+			if !groupArtPath(dir, relSlash, audioDirs) {
 				continue
 			}
 			nameScore := CoverNameScore(filepath.Base(tf.path))
 			score := nameScore + coverPathScore(relSlash)
-			if score > best.score {
+			if score > best.score || (score == best.score && tf.path < best.path) {
 				best = pick{path: tf.path, size: tf.size, score: score, nameScore: nameScore}
 			}
 		}
@@ -874,6 +888,42 @@ func addGroupCoverSidecar(g *AlbumGroup, tree []pathSize) {
 	}
 	g.SubPaths[best.path] = filepath.Base(best.path)
 	g.Size += best.size
+}
+
+// groupArtPath reports whether an image at rel (slash path below dir) is
+// artwork of dir's album: directly in dir, or at most two art-named folder
+// levels below it, none of which contains audio.
+func groupArtPath(dir, rel string, audioDirs map[string]bool) bool {
+	parts := strings.Split(rel, "/")
+	folders := parts[:len(parts)-1]
+	if len(folders) > 2 {
+		return false
+	}
+	cur := dir
+	for _, name := range folders {
+		cur = filepath.Join(cur, name)
+		if !isArtDirName(name) || audioDirs[cur] {
+			return false
+		}
+	}
+	return true
+}
+
+// audioDirSet returns every directory that contains a group's audio file, at
+// any depth (each audio file marks all of its ancestors).
+func audioDirSet(groups []AlbumGroup) map[string]bool {
+	set := map[string]bool{}
+	for _, g := range groups {
+		for _, p := range g.audioPaths {
+			for d := filepath.Dir(p); !set[d]; d = filepath.Dir(d) {
+				set[d] = true
+				if parent := filepath.Dir(d); parent == d {
+					break
+				}
+			}
+		}
+	}
+	return set
 }
 
 // warnNestedGroups annotates groups nested inside a whole-tree group: the
