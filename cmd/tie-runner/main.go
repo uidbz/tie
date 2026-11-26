@@ -13,10 +13,10 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,8 +46,6 @@ var (
 	fleetReg   *fleet.Registry
 	replicator *fleet.Replicator
 	certs      = &sec.CertManager{}
-
-	tlsUp atomic.Bool // guarded start of the TLS listener
 )
 
 func main() {
@@ -239,25 +237,29 @@ func main() {
 	server.StartPlainFileServer(config.FileServer)
 	mux.Handle("/", srv.Handler())
 
-	httpServer := &http.Server{Addr: config.Address, Handler: mux}
-	var tlsServer *http.Server
-
-	// HTTPS startup: guarded so the startup path and a cert push (the
-	// OnCertInstalled hook) cannot both start the listener. Serving
-	// through the cert manager lets POST /api/cert hot-swap the
-	// certificate without a restart (service containers keep running).
+	// One listener and one server for the whole process. Without a
+	// loadable cert the listener serves plain HTTP; a cert push (the
+	// OnCertInstalled hook) switches new connections to TLS in place.
+	// Starting a separate TLS server on the same address used to fail
+	// with "address already in use" and exit the runner. Serving through
+	// the cert manager lets POST /api/cert hot-swap the certificate
+	// without a restart (service containers keep running).
+	ln, err := net.Listen("tcp", config.Address)
+	if err != nil {
+		slog.Error("Listen failed", "address", config.Address, "error", err)
+		os.Exit(1)
+	}
+	listener := sec.NewUpgradableListener(ln, &tls.Config{
+		NextProtos: []string{"h2", "http/1.1"},
+		GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certs.GetCertificate(hi)
+		},
+	})
+	httpServer := &http.Server{Handler: mux}
 	startTLS = func() {
-		if tlsUp.Swap(true) {
-			return
+		if listener.EnableTLS() {
+			slog.Info("HTTPS enabled", "address", config.Address)
 		}
-		go func() {
-			slog.Info("HTTPS server starting", "address", config.Address)
-			// Empty paths: the cert comes from the manager.
-			if err := tlsServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				slog.Error("HTTPS server error", "error", err)
-				os.Exit(1)
-			}
-		}()
 	}
 
 	// TLS availability: a loadable keypair means HTTPS from startup;
@@ -271,45 +273,40 @@ func main() {
 	_, certErr := os.Stat(config.TLSCert)
 	_, keyErr := os.Stat(config.TLSKey)
 	_, certLiveErr := certs.GetCertificate(nil) // nil when a cert is loaded
-	hasTLS := certErr == nil && keyErr == nil && certLiveErr == nil
-
-	tlsServer = &http.Server{
-		Addr:    config.Address,
-		Handler: mux,
-		TLSConfig: &tls.Config{GetCertificate: func(hi *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return certs.GetCertificate(hi)
-		}},
-	}
-
-	if hasTLS {
+	if certErr == nil && keyErr == nil && certLiveErr == nil {
 		startTLS()
 	} else {
-		go func() {
-			slog.Info("HTTP server starting (TLS disabled)", "address", config.Address)
-			if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				slog.Error("HTTP server error", "error", err)
-				os.Exit(1)
-			}
-		}()
+		slog.Info("HTTP server starting (TLS disabled until a cert is pushed)", "address", config.Address)
 	}
+	serveErr := make(chan error, 1)
+	go func() {
+		if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+	}()
 
 	// Graceful shutdown.
 	stopChan := make(chan os.Signal, 1)
 	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
-	<-stopChan
-	slog.Info("Shutting down gracefully")
+	select {
+	case <-stopChan:
+		slog.Info("Shutting down gracefully")
+	case err := <-serveErr:
+		// Not os.Exit: the graceful path below still stops services and
+		// closes the store.
+		slog.Error("HTTP server error", "error", err)
+	}
+
+	// Stop accepting requests first, so nothing reaches the managers
+	// while they shut down.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	httpServer.Shutdown(ctx)
 
 	svc.StopAll()
 	replicator.Wait()
 	jobman.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if hasTLS {
-		tlsServer.Shutdown(ctx)
-	} else {
-		httpServer.Shutdown(ctx)
-	}
 	if err := st.Close(); err != nil {
 		slog.Error("Error closing job store", "error", err)
 	}
