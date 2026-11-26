@@ -1,9 +1,6 @@
 package api
 
-// TaskInfo is one deployed service as listed by GET /api/services (keyed by
-// service name) and reported by GET /api/services/{service}.
-//
-// Status values: "running", "stopped", "crashed" (a service that died after
+// TaskInfo Status values: "running", "stopped", "crashed" (a service that died after
 // start; its stored logs carry the reason).
 const (
 	TaskStatusRunning = "running"
@@ -17,6 +14,8 @@ const (
 	TaskTypeJob     = "job"
 )
 
+// TaskInfo is one deployed service as listed by GET /api/services (keyed by
+// service name) and reported by GET /api/services/{service}.
 type TaskInfo struct {
 	Name         string `json:"name"`
 	Status       string `json:"status"`

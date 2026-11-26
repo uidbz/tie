@@ -130,9 +130,9 @@ func (n *treeNode) upload(filehost string, cfg putlib.PutConfig) (metadata.DirEn
 }
 
 // uploadBlob PUTs body to the filehost under its content address and returns an
-// entry describing it. UploadMultipart reports only transport errors, so a
-// rejected upload surfaces as the response body landing in Hash; comparing it
-// against the address we computed is what catches an HTTP-level failure.
+// entry describing it. HTTP and transport failures come back as ErrorMsg (via
+// fhclient); comparing the echoed address against the one computed here also
+// catches a filehost that stored the body under a different address.
 func uploadBlob(filehost string, cfg putlib.PutConfig, body string) (metadata.DirEntry, error) {
 	hash, err := cfg.AddressOf(strings.NewReader(body))
 	if err != nil {
