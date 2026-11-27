@@ -13,5 +13,6 @@
   "GitCommit": "deadbeefcafe0123456789abcdef0123456789ab",
   "BuildDate": "2026-10-01T12:00:00Z",
   "CertNotAfter": "2027-01-15T09:30:00Z",
-  "DeployedImageCount": 12
+  "DeployedImageCount": 12,
+  "ScheduledJobCount": 4
 }

@@ -224,7 +224,7 @@ func (s *Server) jobStatusHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if j.DeployManager != deployManager { // job runs on another backend
+	if j.DeployManager != "" && j.DeployManager != deployManager { // job runs on another backend
 		slog.Info("Forwarding status request to backend", "job_id", jobID, "backend", j.DeployManager)
 		dispatch.Forward(nil, j.DeployManager, w, r)
 	} else {
@@ -248,7 +248,7 @@ func (s *Server) cancelJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if job.DeployManager != deployManager {
+	if job.DeployManager != "" && job.DeployManager != deployManager {
 		slog.Info("Forwarding cancel request to backend", "job_id", jobID, "backend", job.DeployManager)
 		dispatch.Forward(nil, job.DeployManager, w, r)
 		return

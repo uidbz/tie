@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -89,6 +90,197 @@ func TestPortPool(t *testing.T) {
 	}
 }
 
+// TestPortPoolBindProbe covers the live-holder paths: the pool must never
+// hand out a port that is bound on the host, must refuse to re-queue one,
+// and must DROP a stale queue entry instead of handing it out (the real
+// holder re-queues through Release once it actually stops).
+func TestPortPoolBindProbe(t *testing.T) {
+	// Pick a port the OS knows is free, so the range is safe to claim.
+	probe, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	p := NewPortPool(port, port+2)
+
+	bind := func(port int) {
+		t.Helper()
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			t.Fatalf("binding %d: %v", port, err)
+		}
+		t.Cleanup(func() { ln.Close() })
+	}
+
+	// A bound frontier port is skipped, not handed out.
+	bind(port)
+	p.Release(port) // bound: must not enter the queue
+	if got, err := p.Next(); err != nil || got != port+1 {
+		t.Fatalf("bound frontier port: got %d, %v (want %d)", got, err, port+1)
+	}
+
+	// A bound queue entry is dropped: releasing it back must also be refused.
+	bind(port + 1)
+	p.Release(port + 1)
+	if got, err := p.Next(); err != nil || got != port+2 {
+		t.Fatalf("bound queue port: got %d, %v (want %d)", got, err, port+2)
+	}
+
+	// Once the holder is gone the port flows back normally. This test
+	// holds its listeners until cleanup, so the free port comes from
+	// the frontier instead.
+	free, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	freePort := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+	p2 := NewPortPool(freePort, freePort)
+	p2.Release(freePort)
+	if got, err := p2.Next(); err != nil || got != freePort {
+		t.Fatalf("unbound recycled port: got %d, %v (want %d)", got, err, freePort)
+	}
+}
+
+// TestStopTaskForceRemovesZombie: dockerd cannot signal a zombie init,
+// so docker stop fails forever for such a container. The stop failure
+// must not abort StopTask — forced removal is what frees the name and
+// the port.
+func TestStopTaskForceRemovesZombie(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+case "$1" in
+  run) exit 0;;
+  stop) echo "cannot kill zombie" >&2; exit 1;;
+  rm) exit 0;;
+  inspect) echo "true 0";;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Config{
+		Images:            images.New(nil, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080}),
+		Bin:               bin,
+		Ports:             NewPortPool(2000, 2002),
+		ExtDir:            t.TempDir(),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  25 * time.Millisecond,
+	})
+	if _, err := m.StartService("svc:v1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.StopTask("svc:v1"); err != nil {
+		t.Fatalf("stop must complete despite an unstoppably zombie: %v", err)
+	}
+	if _, ok := m.RunningPort("svc:v1"); ok {
+		t.Error("task still running after zombie stop")
+	}
+	if port, err := m.cfg.Ports.Next(); err != nil || port != 2000 {
+		t.Errorf("port %d %v: zombie stop must release the port", port, err)
+	}
+}
+
+// TestStartServiceMemoryCap: an operator ServiceMemoryMB becomes a real
+// docker ceiling (--memory with an equal --memory-swap, so the
+// container cannot escape the cap through swap).
+func TestStartServiceMemoryCap(t *testing.T) {
+	m, argsLog := testManager(t, images.Image{
+		Name: "svc:v1", IsService: true, ServiceInternalPort: 8080, ServiceMemoryMB: 512,
+	})
+	if _, err := m.StartService("svc:v1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(calls(t, argsLog), "--memory=512m\n--memory-swap=512m\n") {
+		t.Errorf("memory cap flags missing:\n%s", calls(t, argsLog))
+	}
+}
+
+// TestRestoreAdoptsRunningContainers: docker run -d containers outlive
+// the runner process, so boot must re-register the running container
+// (published port restored, port reserved from the dynamic pool)
+// instead of recreating it.
+func TestRestoreAdoptsRunningContainers(t *testing.T) {
+	bin, argsLog, _ := writeFakeCLI(t, "2001") // inspect answers: HostPort 2001
+	m := New(Config{
+		Images:            images.New(nil, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080}),
+		Bin:               bin,
+		Registry:          "registry.example/tie",
+		ExtDir:            t.TempDir(),
+		Ports:             NewPortPool(2000, 2002),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  50 * time.Millisecond,
+	})
+	m.Restore()
+	if port, ok := m.RunningPort("svc:v1"); !ok || port != 2001 {
+		t.Fatalf("adopted port = %d %v, want 2001", port, ok)
+	}
+	if strings.Contains(calls(t, argsLog), "run\n") {
+		t.Errorf("adopted service must not be recreated:\n%s", calls(t, argsLog))
+	}
+	// The adopted port must never be handed out by the dynamic pool.
+	for i := 0; i < 3; i++ {
+		if port, err := m.cfg.Ports.Next(); err == nil && port == 2001 {
+			t.Fatal("adopted port leaked into the dynamic pool")
+		}
+	}
+}
+
+// TestRestoreRecreatesOffPinnedPort: an operator ServiceExternalPort pin
+// is a client contract — a running container off its pin gets recreated
+// on the pinned port.
+func TestRestoreRecreatesOffPinnedPort(t *testing.T) {
+	bin, argsLog, _ := writeFakeCLI(t, "2001") // running on 2001
+	m := New(Config{
+		Images: images.New(nil, images.Image{
+			Name: "svc:v1", IsService: true, ServiceInternalPort: 8080,
+			ServiceExternalPort: 2002, ServiceAutostart: true,
+		}),
+		Bin:               bin,
+		ExtDir:            t.TempDir(),
+		Ports:             NewPortPool(2000, 2002),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  50 * time.Millisecond,
+	})
+	m.Restore()
+	got := calls(t, argsLog)
+	for _, want := range []string{"stop\nsvc-v1\n", "rm\n-f\nsvc-v1\n", "-p\n2002:8080\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("off-pinned container must be stopped, removed and recreated (missing %q):\n%s", want, got)
+		}
+	}
+}
+
+// TestRestoreRemovesStaleCorpse: a present-but-not-running container
+// must be removed so autostart's docker run can claim the name.
+func TestRestoreRemovesStaleCorpse(t *testing.T) {
+	bin, argsLog, _ := writeFakeCLI(t, "") // inspect present, not running
+	m := New(Config{
+		Images: images.New(nil, images.Image{
+			Name: "svc:v1", IsService: true, ServiceInternalPort: 8080, ServiceAutostart: true,
+		}),
+		Bin:               bin,
+		ExtDir:            t.TempDir(),
+		Ports:             NewPortPool(2000, 2002),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  50 * time.Millisecond,
+	})
+	m.Restore()
+	got := calls(t, argsLog)
+	if !strings.Contains(got, "rm\n-f\nsvc-v1\n") {
+		t.Errorf("stale corpse not removed:\n%s", got)
+	}
+	if !strings.Contains(got, "run\n") {
+		t.Errorf("autostart must run after the corpse sweep:\n%s", got)
+	}
+}
+
 func TestStartServiceArgs(t *testing.T) {
 	m, argsLog := testManager(t, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080})
 
@@ -99,7 +291,9 @@ func TestStartServiceArgs(t *testing.T) {
 	if msg != "Service svc:v1 started on port 2000" {
 		t.Errorf("message = %q", msg)
 	}
-	want := "run\n-d\n--name\nsvc-v1\n--pull\nalways\n--mount\ntype=bind,src=" +
+	// The stale-corpse sweep runs before the start (issue fix: a zombie
+	// or half-removed container claims the name forever otherwise).
+	want := "rm\n-f\nsvc-v1\nrun\n-d\n--name\nsvc-v1\n--pull\nalways\n--mount\ntype=bind,src=" +
 		m.extDir("svc-v1") + ",dst=/ext\n-p\n2000:8080\nregistry.example/tie/svc:v1\n"
 	if got := calls(t, argsLog); got != want {
 		t.Errorf("docker invocation:\n got %q\nwant %q", got, want)

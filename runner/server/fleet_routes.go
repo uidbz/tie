@@ -39,6 +39,9 @@ func (s *Server) capabilitiesHandler(w http.ResponseWriter, r *http.Request) {
 		CertNotAfter:       s.certNotAfter(),
 		DeployedImageCount: len(s.d.Images.List()),
 	}
+	if s.d.ScheduleCount != nil {
+		resp.ScheduledJobCount = s.d.ScheduleCount()
+	}
 	jsonResponse(w, resp)
 }
 

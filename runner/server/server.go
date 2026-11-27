@@ -57,6 +57,9 @@ type Deps struct {
 	FleetSeed      func() string // seed URL to forward registry ops to
 	Backends       func() []string
 	Capabilities   func() []string
+	// ScheduleCount optionally reports how many recurring job schedules
+	// the binary evaluates (reported in /api/capabilities).
+	ScheduleCount func() int
 	// ExtDir is the host-side scratch base deploys create per image.
 	ExtDir func() string
 	// TLSCertPath feeds the cert-expiry capability; TLSKeyPath gates the

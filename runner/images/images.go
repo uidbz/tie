@@ -34,6 +34,13 @@ type Image struct {
 	ServiceAutostart         bool
 	ServiceStartOnAccess     bool
 	ServiceInactivityTimeout int
+	// ServiceMemoryMB caps the service container's RAM (docker
+	// --memory, with an equal --memory-swap so the container cannot
+	// grow its memory through swap). Operator-set in the runner's own
+	// config, preserved across redeploys, and never replicated: a
+	// memory cap belongs to the host running the service. 0 means no
+	// cap beyond the daemon default.
+	ServiceMemoryMB int
 	// ServiceProxyRewrite limits how far the reverse proxy rewrites this
 	// service's response bodies: "" or "all" rewrites HTML, XML, CSS and
 	// JS; "html" rewrites only HTML/XML; "none" leaves bodies untouched.

@@ -137,8 +137,8 @@ func TestServeServiceUnknownServiceJSONError(t *testing.T) {
 func TestRewriteHTMLPathsXMLNoBase(t *testing.T) {
 	xml := `<?xml version='1.0'?>\n<partial-response><changes><update id="f:panel"><![CDATA[<img src="/app/resources/images/imgcenter.png"/>]]></update></changes></partial-response>`
 
-	htmlOut := string(rewriteHTMLPaths([]byte(xml), "https://x.test/service/a:latest/p/", "/service/a:latest", false, true, false))
-	xmlOut := string(rewriteHTMLPaths([]byte(xml), "https://x.test/service/a:latest/p/", "/service/a:latest", false, false, false))
+	htmlOut := string(rewriteHTMLPaths([]byte(xml), "https://x.test/service/a:latest/p/", "/service/a:latest", false, true, false, ""))
+	xmlOut := string(rewriteHTMLPaths([]byte(xml), "https://x.test/service/a:latest/p/", "/service/a:latest", false, false, false, ""))
 
 	if !strings.Contains(htmlOut, "<base href=") {
 		t.Errorf("HTML mode must inject base tag")
@@ -172,7 +172,7 @@ func TestRewriteHTMLPathsKeepsForeignURLs(t *testing.T) {
 	body := []byte(`<html xmlns="http://www.w3.org/1999/xhtml"><head></head>` +
 		`<a href="http://own.host.example:2008/app/x">own</a>` +
 		`<a href="https://example.com/go">ext</a></html>`)
-	out := string(rewriteHTMLPaths(body, "https://own.host.example:443/service/tool:latest/app/", "/service/tool:latest", false, false, false))
+	out := string(rewriteHTMLPaths(body, "https://own.host.example:443/service/tool:latest/app/", "/service/tool:latest", false, false, false, ""))
 	if !strings.Contains(out, `xmlns="http://www.w3.org/1999/xhtml"`) {
 		t.Errorf("foreign w3.org URL must stay intact, got: %s", out)
 	}
@@ -188,7 +188,7 @@ func TestRewriteCSSAndJSPaths(t *testing.T) {
 	p := "/service/tool:latest"
 	css := `.ui-icon{background-image:url("/app/static/ui-icons.png?ln=theme")}` +
 		`.ui-tree .line{background:url(/app/static/tree/line.gif)}`
-	out := string(rewriteHTMLPaths([]byte(css), "https://x.test/service/tool:latest/app/", p, false, false, true))
+	out := string(rewriteHTMLPaths([]byte(css), "https://x.test/service/tool:latest/app/", p, false, false, true, "/app"))
 	if !strings.Contains(out, `url("`+p+`/app/static/ui-icons.png`) {
 		t.Errorf("quoted url() must be prefixed, got: %s", out)
 	}
@@ -197,7 +197,7 @@ func TestRewriteCSSAndJSPaths(t *testing.T) {
 	}
 
 	js := `$.ajax({url: '/app/faces/AjaxCall'}); var s = a.split('/'); var u = '//cdn.example/x'; export_image('/x');`
-	out = string(rewriteHTMLPaths([]byte(js), "https://x.test/service/tool:latest/app/", p, false, false, true))
+	out = string(rewriteHTMLPaths([]byte(js), "https://x.test/service/tool:latest/app/", p, false, false, true, "/app"))
 	if !strings.Contains(out, `url: '`+p+`/app/faces/AjaxCall'`) {
 		t.Errorf("JS quoted root path must be prefixed, got: %s", out)
 	}
@@ -211,16 +211,62 @@ func TestRewriteCSSAndJSPaths(t *testing.T) {
 	// Some server-rendered frameworks emit 'href = "/..." ' with spaces
 	// around '='; the strict ="/ rule misses it.
 	link := `<b>Download: </b> <a target='_blank' href = "/app/users/u1/report.png"><b>x</b></a>`
-	out = string(rewriteHTMLPaths([]byte(link), "https://x.test/service/tool:latest/app/", p, false, false, false))
+	out = string(rewriteHTMLPaths([]byte(link), "https://x.test/service/tool:latest/app/", p, false, false, false, ""))
 	if !strings.Contains(out, `href ="`+p+`/app/users/u1/report.png"`) {
 		t.Errorf("spaced href must be normalized and prefixed, got: %s", out)
 	}
 
 	// Already-prefixed strings (ajax XML, rewritten attributes) must stay single-prefixed.
 	once := `<img src="/service/tool:latest/app/tmp/x.png"/>`
-	out = string(rewriteHTMLPaths([]byte(once), "https://x.test/service/tool:latest/app/", p, false, false, false))
+	out = string(rewriteHTMLPaths([]byte(once), "https://x.test/service/tool:latest/app/", p, false, false, false, ""))
 	if strings.Contains(out, p+p) {
 		t.Errorf("no double prefix, got: %s", out)
+	}
+}
+
+// TestRewriteCSSJSScopedToContextRoot: standalone CSS/JS bodies must
+// only have literals that name the app's own context root rewritten.
+// Minified UI bundles are full of quote+slash sequences that are regex
+// literals or selector fragments; a blanket rule corrupts them at
+// syntax level (the whole script dies, and the breakage looks
+// unrelated to the proxy). With no context root known, a CSS/JS body
+// is left byte-identical.
+func TestRewriteCSSJSScopedToContextRoot(t *testing.T) {
+	p := "/service/tool:latest"
+
+	// The historic corruption shape: regex literals and selector
+	// fragments with quote+slash. Nothing here names /app.
+	js := `x=y.replace(/'/g,"");var s=$('script[src*="/'+ID+'/"]');var re=/'/g;`
+	out := string(rewriteHTMLPaths([]byte(js), "https://x.test"+p+"/app/faces/", p, false, false, true, "/app"))
+	if out != js {
+		t.Errorf("non-context literals must survive byte-identical:\n got %s\nwant %s", out, js)
+	}
+
+	// Literals that DO name the context root are real app URLs.
+	jsApp := `$.ajax({url:'/app/faces/Call'});img.src="/app/javax.faces.resource/x.png";var base='/app';`
+	out = string(rewriteHTMLPaths([]byte(jsApp), "https://x.test"+p+"/app/faces/", p, false, false, true, "/app"))
+	if !strings.Contains(out, `url:'`+p+`/app/faces/Call'`) {
+		t.Errorf("quoted app URL must be prefixed, got: %s", out)
+	}
+	if !strings.Contains(out, `img.src="`+p+`/app/javax.faces.resource/x.png"`) {
+		t.Errorf("double-quoted app URL must be prefixed, got: %s", out)
+	}
+	if !strings.Contains(out, `var base='`+p+`/app'`) {
+		t.Errorf("bare app root literal must be prefixed, got: %s", out)
+	}
+
+	// Spaced assignment inside JS-built HTML strings (the quote rule
+	// catches the URL; the spaced rule backstops the '= "/ctx/' shape).
+	spaced := `html += '<a href = "/app/report.png">x</a>';`
+	out = string(rewriteHTMLPaths([]byte(spaced), "https://x.test"+p+"/app/x/", p, false, false, true, "/app"))
+	if !strings.Contains(out, `href = "`+p+`/app/report.png"`) {
+		t.Errorf("spaced app assignment must be prefixed, got: %s", out)
+	}
+
+	// Unknown context root: scan is inert, byte-identical body.
+	out = string(rewriteHTMLPaths([]byte(jsApp), "https://x.test"+p+"/", p, false, false, true, ""))
+	if out != jsApp {
+		t.Errorf("no context root must leave the body untouched:\n got %s\nwant %s", out, jsApp)
 	}
 }
 
@@ -292,14 +338,14 @@ func TestInlineHTMLScriptLiteralsAreNotRewritten(t *testing.T) {
 	p := "/service/worker-agent:latest"
 	page := `<script>fetch(prefix + '/auth/password-login');</script>`
 
-	htmlOut := string(rewriteHTMLPaths([]byte(page), "https://x.test"+p+"/login/", p, false, false, false))
+	htmlOut := string(rewriteHTMLPaths([]byte(page), "https://x.test"+p+"/login/", p, false, false, false, ""))
 	if htmlOut != page {
 		t.Errorf("HTML inline script must survive untouched, got: %s", htmlOut)
 	}
 
-	jsOut := string(rewriteHTMLPaths([]byte(page), "https://x.test"+p+"/login/", p, false, false, true))
+	jsOut := string(rewriteHTMLPaths([]byte(page), "https://x.test"+p+"/login/", p, false, false, true, "/auth"))
 	if !strings.Contains(jsOut, `'`+p+`/auth/password-login'`) {
-		t.Errorf("JS bodies must still have quoted root literals prefixed, got: %s", jsOut)
+		t.Errorf("JS bodies must still have context-root quoted literals prefixed, got: %s", jsOut)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,9 @@ type Config struct {
 	ReadinessTimeout  time.Duration
 	// LogsTail is how many log lines status attaches (default 200).
 	LogsTail int
+	// InactivityInterval is the idle sweep cadence for
+	// ServiceInactivityTimeout (default 30s).
+	InactivityInterval time.Duration
 }
 
 // Manager is the task registry plus the service runtime.
@@ -58,6 +62,20 @@ type Manager struct {
 	mu      sync.Mutex
 	tasks   map[string]*api.TaskInfo // every registered task (services and running jobs)
 	running map[string]int           // task name -> published host port
+
+	// Activity tracking (see activity.go): last-access clock and live
+	// WebSocket tunnel counts per service.
+	actMu      sync.Mutex
+	lastAccess map[string]time.Time
+	tunnels    map[string]int
+
+	// startMu/startCalls guard one in-flight start-on-access per service.
+	startMu    sync.Mutex
+	startCalls map[string]*serviceStartCall
+
+	// done closes on StopAll, ending the inactivity watcher.
+	done      chan struct{}
+	doneClose sync.Once
 }
 
 // New builds a manager and applies the pool defaults.
@@ -83,7 +101,20 @@ func New(cfg Config) *Manager {
 	if cfg.LogsTail == 0 {
 		cfg.LogsTail = 200
 	}
-	return &Manager{cfg: cfg, tasks: map[string]*api.TaskInfo{}, running: map[string]int{}}
+	if cfg.InactivityInterval == 0 {
+		cfg.InactivityInterval = 30 * time.Second
+	}
+	m := &Manager{
+		cfg:        cfg,
+		tasks:      map[string]*api.TaskInfo{},
+		running:    map[string]int{},
+		lastAccess: map[string]time.Time{},
+		tunnels:    map[string]int{},
+		startCalls: map[string]*serviceStartCall{},
+		done:       make(chan struct{}),
+	}
+	go m.watchInactivity()
+	return m
 }
 
 func (m *Manager) extDir(name string) string { return m.cfg.ExtDir + "/" + name }
@@ -111,6 +142,7 @@ func (m *Manager) UnregisterTask(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.tasks, name)
+	m.clearActivity(name)
 	delete(m.running, name)
 }
 
@@ -206,6 +238,16 @@ func (m *Manager) StartService(service string) (string, error) {
 		return "", fmt.Errorf("service already running")
 	}
 
+	// Sweep stale or zombie corpses before docker run: a failed or
+	// stopped start leaves the container name claimed, and dockerd can
+	// never stop a zombie PID, so nothing else ever clears it and every
+	// later start dies with a name Conflict. rm -f removes corpses; a
+	// missing container is the normal case, so errors are ignored.
+	if out, err := m.exec("rm", "-f", containerName).CombinedOutput(); err == nil {
+		slog.Info("Removed stale service container before start",
+			"service", service, "output", strings.TrimSpace(string(out)))
+	}
+
 	img, found := m.cfg.Images.Get(service)
 	if !found {
 		return "", fmt.Errorf("image not deployed on this runner: %s", service)
@@ -240,6 +282,13 @@ func (m *Manager) StartService(service string) (string, error) {
 			args = append(args, "--mount", "type=bind,src="+x+",dst="+x)
 		}
 	}
+	if img.ServiceMemoryMB > 0 {
+		// Operator RAM cap for this service. --memory-swap equal to
+		// --memory disables swap: the cap is a real ceiling, not a
+		// soft limit the container escapes through.
+		mem := fmt.Sprintf("%dm", img.ServiceMemoryMB)
+		args = append(args, "--memory="+mem, "--memory-swap="+mem)
+	}
 	args = append(args,
 		"-p", fmt.Sprintf("%d:%s", externalPort, internalPort),
 		m.imageRef(service),
@@ -262,6 +311,7 @@ func (m *Manager) StartService(service string) (string, error) {
 	}
 
 	m.Activate(service, api.TaskTypeService, externalPort)
+	m.Touch(service)
 	go m.watchReadiness(service, containerName, externalPort, fixedPort)
 	slog.Info("Service started", "service", service, "external_port", externalPort, "internal_port", internalPort)
 
@@ -280,10 +330,16 @@ func (m *Manager) StopTask(task string) (string, error) {
 	m.Deactivate(task)
 
 	if output, err := m.exec("stop", containerName).CombinedOutput(); err != nil {
-		slog.Error("Failed to stop task", "task", task, "error", err, "output", string(output))
-		return "", fmt.Errorf("failed to stop service: %s", string(output))
+		// A zombie container PID can never be stopped (dockerd cannot
+		// signal a dead init), so a stop failure must not abort the
+		// request: the forced removal below is what actually frees the
+		// name and the port.
+		slog.Warn("docker stop failed, forcing removal", "task", task, "error", err, "output", string(output))
 	}
-	m.exec("rm", containerName).Run()
+	if out, rmErr := m.exec("rm", "-f", containerName).CombinedOutput(); rmErr != nil {
+		slog.Error("Failed to remove service container", "task", task, "error", rmErr, "output", string(out))
+		return "", fmt.Errorf("failed to stop service: %s", string(out))
+	}
 
 	// Release the port back to the dynamic pool, unless it is a fixed-port
 	// TCP service whose port stays reserved across stop/start cycles.
@@ -291,6 +347,7 @@ func (m *Manager) StopTask(task string) (string, error) {
 	if img.ServiceExternalPort == 0 {
 		m.cfg.Ports.Release(port)
 	}
+	m.clearActivity(task)
 	slog.Info("Task stopped", "task", task, "port", port)
 
 	return fmt.Sprintf("Service %s stopped and port %d released", task, port), nil
@@ -298,7 +355,9 @@ func (m *Manager) StopTask(task string) (string, error) {
 
 // Restore reserves the fixed ports of deployed TCP services, registers
 // every service task, and starts the autostart ones. Run it at startup,
-// after the image registry has been loaded.
+// after the image registry has been loaded. A service container that
+// survived a runner restart is adopted instead of recreated (see
+// adoptRunning).
 func (m *Manager) Restore() {
 	for _, img := range m.cfg.Images.List() {
 		if img.ServiceExternalPort > 0 {
@@ -310,6 +369,9 @@ func (m *Manager) Restore() {
 			continue
 		}
 		m.RegisterTask(img.Name, api.TaskTypeService)
+		if m.adoptRunning(img) {
+			continue
+		}
 		if img.ServiceAutostart {
 			if _, err := m.StartService(img.Name); err != nil {
 				slog.Error("Autostart failed", "service", img.Name, "error", err)
@@ -318,8 +380,64 @@ func (m *Manager) Restore() {
 	}
 }
 
-// StopAll stops every running service (graceful shutdown).
+// adoptRunning re-attaches the runner to a service container that
+// survived a runner restart: docker run -d containers outlive the
+// runner process, so an upgrade (SIGTERM + new binary + start) can keep
+// every service serving clients without a blip. Returns true when the
+// container was adopted (task state and published host port restored).
+//
+// Policy:
+//   - running, and the published port equals a pinned ServiceExternalPort
+//     (or the entry has no pin): adopt; the port is marked reserved so
+//     the dynamic pool never hands it out a second time.
+//   - running but published on a different port than an operator pin:
+//     the pin is a client contract, so recreate on the pinned port.
+//   - present but not running: remove the corpse (a stale name would
+//     make the next docker run fail) and fall back to autostart.
+//   - absent (host reboot etc.): fall back to autostart.
+func (m *Manager) adoptRunning(img images.Image) bool {
+	containerName := executor.ContainerName(img.Name)
+	internal := fmt.Sprint(img.ServiceInternalPort)
+	// The internal port is substituted into the template BEFORE docker
+	// sees it. A placeholder left inside {{...}} would reach the daemon
+	// as an invalid key ("INTERNAL" is not a port map entry) and the
+	// inspect would fail — adoption would silently never happen.
+	out, err := m.exec("inspect", "-f",
+		fmt.Sprintf(`{{if .State.Running}}{{with (index .NetworkSettings.Ports "%s/tcp")}}{{(index . 0).HostPort}}{{end}}{{end}}`, internal),
+		containerName).CombinedOutput()
+	if err != nil {
+		return false // container absent: nothing to adopt
+	}
+	portStr := strings.TrimSpace(string(out))
+	if portStr == "" {
+		// present but not running (or unexpected port map): clear it out
+		m.exec("rm", "-f", containerName).Run()
+		slog.Info("Stale service container removed for autostart", "service", img.Name)
+		return false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		slog.Warn("Cannot parse published port, not adopting", "service", img.Name, "inspect_output", portStr)
+		return false
+	}
+	if img.ServiceExternalPort > 0 && port != img.ServiceExternalPort {
+		slog.Info("Running container is off its pinned port, recreating",
+			"service", img.Name, "actual_port", port, "pinned_port", img.ServiceExternalPort)
+		m.exec("stop", containerName).Run()
+		m.exec("rm", "-f", containerName).Run()
+		return false
+	}
+	m.cfg.Ports.Reserve(port)
+	m.Activate(img.Name, api.TaskTypeService, port)
+	m.Touch(img.Name)
+	slog.Info("Adopted running service container", "service", img.Name, "external_port", port, "internal_port", internal)
+	return true
+}
+
+// StopAll stops every running service (graceful shutdown) and ends the
+// inactivity watcher.
 func (m *Manager) StopAll() {
+	m.doneClose.Do(func() { close(m.done) })
 	m.mu.Lock()
 	names := make([]string, 0, len(m.running))
 	for name := range m.running {

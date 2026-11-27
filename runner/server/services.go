@@ -84,6 +84,16 @@ func (s *Server) replicateImageHandler(w http.ResponseWriter, r *http.Request) {
 		// Host ports are assigned per-runner (raw-TCP services); never
 		// adopt a peer's ServiceExternalPort.
 		img.ServiceExternalPort = 0
+		// Service placement is a deploy-host decision: the replicated
+		// entry exists ONLY to carry DeployKey authorization. A peer's
+		// autostart/start-on-access/timeout flags must never make this
+		// runner boot the peer's webservice on its own ports (duplicate
+		// services observed after fleet replication). To run a service
+		// on this host too, deploy it locally on this runner.
+		img.ServiceAutostart = false
+		img.ServiceStartOnAccess = false
+		img.ServiceInactivityTimeout = 0
+		img.ServiceMemoryMB = 0
 		if !s.d.Images.Upsert(img) {
 			http.Error(w, "failed to upsert image entry", http.StatusInternalServerError)
 			return

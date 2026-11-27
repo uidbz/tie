@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net"
 	"sync"
 )
 
@@ -27,8 +28,25 @@ func NewPortPool(min, max int, reserved ...int) *PortPool {
 	return p
 }
 
+// portBindFree reports whether a TCP listener can actually bind the port
+// on this host. The pool's own bookkeeping can drift: a recycled queue
+// entry may name a port a live container still holds, and handing it out
+// starts a service onto a conflict. The bind probe is the source of truth
+// at both ends of the pool. Go listeners set SO_REUSEADDR, so TIME_WAIT
+// on the runner's own sockets never produces a false "in use".
+func portBindFree(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
 // Next returns the next unreserved port: a recycled one first, then the
-// ascending frontier.
+// ascending frontier. Queue entries whose port is still bound on the host
+// are dropped, not handed out — the entry is stale, and the real holder
+// will re-queue the port through Release once it actually stops.
 func (p *PortPool) Next() (int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -36,15 +54,19 @@ func (p *PortPool) Next() (int, error) {
 	for len(p.available) > 0 {
 		port := p.available[0]
 		p.available = p.available[1:]
-		if !p.reserved[port] {
-			return port, nil
+		if p.reserved[port] {
+			continue
 		}
+		if !portBindFree(port) {
+			continue // stale queue entry: a live socket holds this port
+		}
+		return port, nil
 	}
 
 	for p.base <= p.Max {
 		port := p.base
 		p.base++
-		if !p.reserved[port] {
+		if !p.reserved[port] && portBindFree(port) {
 			return port, nil
 		}
 	}
@@ -59,13 +81,15 @@ func (p *PortPool) Reserve(port int) {
 	p.reserved[port] = true
 }
 
-// Release returns a dynamic port to the pool. Ports outside the range or
-// reserved (fixed services keep theirs across stop/start cycles) are
-// ignored.
+// Release returns a dynamic port to the pool. Ports outside the range,
+// reserved (fixed services keep theirs across stop/start cycles), or
+// still bound on the host are ignored: re-queueing a bound port poisons
+// the queue, because the next Next() would hand a live port to a new
+// service.
 func (p *PortPool) Release(port int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if port >= p.Min && port <= p.Max && !p.reserved[port] {
+	if port >= p.Min && port <= p.Max && !p.reserved[port] && portBindFree(port) {
 		p.available = append(p.available, port)
 	}
 }
