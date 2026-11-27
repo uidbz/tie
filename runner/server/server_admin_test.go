@@ -267,16 +267,18 @@ func TestImagesEndpoints(t *testing.T) {
 		t.Errorf("listing: %+v", list)
 	}
 
-	// Replicate: admin-gated, never adopts the peer's host port.
-	body := `{"Name":"peer-tool:v1","DeployKey":"pk","ServiceExternalPort":1234,"IsService":true}`
+	// Replicate: admin-gated, never adopts the peer's host port or
+	// service-start flags (placement stays a deploy-host decision).
+	body := `{"Name":"peer-tool:v1","DeployKey":"pk","ServiceExternalPort":1234,"IsService":true,"ServiceAutostart":true,"ServiceStartOnAccess":true,"ServiceInactivityTimeout":600}`
 	if rec := h.do(http.MethodPut, "/api/images/replicate", body, "tie", "wrong"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("replicate wrong token: %d", rec.Code)
 	}
 	if rec := h.do(http.MethodPut, "/api/images/replicate", body, "tie", "admintok"); rec.Code != http.StatusOK {
 		t.Errorf("replicate: %d %s", rec.Code, rec.Body.String())
 	}
-	if img, ok := h.images.Get("peer-tool:v1"); !ok || img.ServiceExternalPort != 0 {
-		t.Errorf("replicated entry: %+v", img)
+	if img, ok := h.images.Get("peer-tool:v1"); !ok || img.ServiceExternalPort != 0 ||
+		img.ServiceAutostart || img.ServiceStartOnAccess || img.ServiceInactivityTimeout != 0 {
+		t.Errorf("replicated entry adopted peer placement: %+v", img)
 	}
 
 	// Delete: deploykey gate first, then removal even though the
@@ -550,6 +552,18 @@ func TestDeployEndpoints(t *testing.T) {
 	}
 	if _, ok := h.images.Get("x:v1"); ok {
 		t.Error("a test deploy must not publish the image")
+	}
+
+	// test without a test input: build and report, but never run the
+	// image against a meaningless empty input.
+	rec = h.do(http.MethodPost, "/api/deploymanager",
+		`{"Command":"test","Name":"x:v1","ProjectHash":"`+projAddr+`","JobType":"CPUv1"}`, "", "")
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.ErrorMsg != "" || resp.JobStatus.JobID != "" {
+		t.Errorf("empty-test-input deploy must not submit a job: %+v", resp)
+	}
+	if !strings.Contains(resp.Message, "not test-run") {
+		t.Errorf("empty-test-input deploy message: %+v", resp)
 	}
 
 	// test of a service type: rejected before any job.
