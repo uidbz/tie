@@ -65,7 +65,9 @@ responding runner with `DeployManager` naming the executing host.
 ### status — GET /api/status/{jobid}
 
 → `JobStatus`. Forwarded to the owning backend when the responding runner
-does not hold the job. An unknown job is a 404 whose JSON body is a
+does not hold the job; a record with an empty `DeployManager` (locally or
+internally submitted) is answered locally and never forwarded. An unknown
+job is a 404 whose JSON body is a
 `JobStatus` with only `JobID`, `DeployManager` and `ErrorMsg` set (older
 runners answered that record with 200; clients treat both as not
 found). A failed job is a normal 200 record with `Status: failed` and
@@ -148,7 +150,8 @@ month → user list for cross-runner dedup and is omitted when empty.
 
 → `CapabilityReply` (`capabilities.json`): job types, live resource pool
 (free/total CPU/RAM/GPU, queue length, active count), build info,
-`CertNotAfter`, `DeployedImageCount`. This is the routing input for
+`CertNotAfter`, `DeployedImageCount`, `ScheduledJobCount` (runners that
+evaluate recurring schedules; 0 elsewhere). This is the routing input for
 capacity-aware dispatch and the health-diff for admins.
 
 ### reload — POST /api/reload

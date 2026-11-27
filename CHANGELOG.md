@@ -4,6 +4,53 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [0.11.0] - 2026-11-27
+
+Runner-engine parity ports (#178), each with a regression test.
+
+### Added
+
+- **service: start-on-access and inactivity timeouts are real.** The
+  reverse proxy stamps a last-access clock per service (every request,
+  every WebSocket tunnel open/close); a background sweep stops services
+  past `ServiceInactivityTimeout` through the normal stop path, and
+  `ServiceStartOnAccess` wakes a parked service through the normal start
+  path — single-flight, with a bounded wait until the backend accepts
+  connections. `proxy.Config` gains `Activity`, `WakeOnAccess`,
+  `TunnelOpen`/`TunnelClosed` hooks for the runner binary to wire.
+- **service: per-service memory caps.** `ServiceMemoryMB` on an image
+  entry becomes docker `--memory` with an equal `--memory-swap`; it is
+  preserved across re-deploys and never replicated.
+- **api: `ScheduledJobCount` in `CapabilityReply`**, filled via an
+  optional `Deps.ScheduleCount` (0 without schedules).
+
+### Fixed
+
+- **service: the port pool never hands out a port still bound on the
+  host.** A bind probe is now the source of truth: stale queue entries
+  are dropped, unbindable ports are never re-queued.
+- **service: stale/zombie containers are swept before start**, and a
+  failing `docker stop` (a zombie PID can never be stopped) falls
+  through to forced removal — name and port always freed.
+- **service: running service containers are adopted across restarts.**
+  `Restore` re-registers a surviving container and its published port
+  instead of recreating it; an operator port pin always wins; stale
+  corpses are removed before autostart.
+- **server: replicated image entries never adopt peer service-start
+  flags** (`ServiceAutostart`, `ServiceStartOnAccess`,
+  `ServiceInactivityTimeout`, `ServiceMemoryMB`): placement stays a
+  deploy-host decision.
+- **server: the deploy test job is skipped when no test input was
+  uploaded** (build and report, never run on a meaningless empty
+  input).
+- **server: a job with an empty `DeployManager` is answered and
+  cancelled locally** — the old comparison bounced internal submissions
+  to an empty backend URL.
+- **proxy: CSS/JS literal rewriting is scoped to the service's own
+  context root.** The blanket quoted-root rule corrupted minified
+  bundles at syntax level (regex literals such as `/'/g`); now only
+  literals naming the context root are rewritten.
+
 ## [0.10.0] - 2026-11-27
 
 ### Changed
