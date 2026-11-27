@@ -446,7 +446,18 @@ func (h *Handler) buildReverseProxy(r *http.Request, target *url.URL, service st
 			isHTML := strings.Contains(contentType, "text/html")
 			isCSS := strings.Contains(contentType, "text/css")
 			isJS := strings.Contains(contentType, "javascript")
-			modifiedBody := rewriteHTMLPaths(body, baseURL, prefix, cleanURLs, isHTML, isCSS || isJS)
+			// Context root of this service behind the prefix:
+			// /service/tool:latest/App/faces/x → /App. Used to scope
+			// CSS/JS literal rewriting to real app URLs only.
+			ctxRoot := ""
+			if up := strings.TrimPrefix(r.URL.Path, prefix); up != "" && strings.HasPrefix(up, "/") {
+				if seg := strings.TrimPrefix(up, "/"); seg != "" {
+					if i := strings.Index(seg, "/"); i > 0 {
+						ctxRoot = "/" + seg[:i]
+					}
+				}
+			}
+			modifiedBody := rewriteHTMLPaths(body, baseURL, prefix, cleanURLs, isHTML, isCSS || isJS, ctxRoot)
 
 			// Don't re-gzip, just remove the encoding header and send uncompressed
 			// (simpler and the content is small)

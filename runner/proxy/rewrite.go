@@ -96,14 +96,24 @@ func rewriteSetCookiePath(cookie, prefix string) string {
 // If cleanURLs is true, strips service prefix from generated URLs (for proxy access)
 // injectBase adds the <base> tag only for HTML; XML (JSF partial responses) gets
 // path rewriting only.
-// scanQuotedLiterals enables the quoted root-relative literal rule ('/path',
-// "/path", url("/path")) for CSS/JS bodies. It stays off for HTML/XML: an HTML
-// body's inline <script> builds URLs at runtime (fetch(prefix + '/login')), so
-// prefixing that literal cannot be repaired by the collapse below — the join
-// happens in the browser and the doubled prefix only shows up as a failed
-// request. Standalone CSS/JS bodies are scanned instead, which is where the
-// url("/path") style references actually live.
-func rewriteHTMLPaths(body []byte, baseURL, servicePrefix string, cleanURLs bool, injectBase, scanQuotedLiterals bool) []byte {
+// scanQuotedLiterals enables the standalone CSS/JS rewrite mode: only
+// literals that name the app's own context root (ctxRoot, e.g. "/app")
+// get prefixed. It stays off for HTML/XML, which use the blanket
+// root-relative attribute rules instead: an HTML body's inline
+// <script> builds URLs at runtime (fetch(prefix + '/login')), so
+// prefixing that literal cannot be repaired by the collapse below —
+// the join happens in the browser and the doubled prefix only shows up
+// as a failed request. Standalone CSS/JS bodies are scanned instead,
+// which is where the url("/path") style references actually live.
+//
+// Why the CSS/JS scan is ctxRoot-scoped: minified bundles (UI
+// frameworks in the wild) are full of quote+slash sequences that are
+// regex literals or selector fragments — replace(/'/g,...),
+// $('script[src*="/'+ID+'/"]') — and blanket '="/' or generic
+// quoted-root rules corrupt them at syntax level (scripts fail to
+// parse, widgets break in ways that look unrelated to the proxy).
+// Only literals naming THIS app's context root are URLs for sure.
+func rewriteHTMLPaths(body []byte, baseURL, servicePrefix string, cleanURLs bool, injectBase, scanQuotedLiterals bool, ctxRoot string) []byte {
 	// Use simple string replacement to avoid regex backtracking issues
 	bodyStr := string(body)
 
@@ -138,28 +148,36 @@ func rewriteHTMLPaths(body []byte, baseURL, servicePrefix string, cleanURLs bool
 			return servicePrefix + "/"
 		})
 
-		// Rewrite root-relative paths: href="/path" → href="/service/{name}/path"
-		bodyStr = strings.ReplaceAll(bodyStr, `="/`, `="`+servicePrefix+`/`)
-		bodyStr = strings.ReplaceAll(bodyStr, `='/`, `='`+servicePrefix+`/`)
-
-		// Spaced attribute assignments: href = "/path" (some server-rendered
-		// app frameworks build anchors with spaces around '=', which defeats
-		// the strict ="/ match).
-		spacedAssign := regexp.MustCompile(`=\s+(['"])/([A-Za-z0-9_~.+-])`)
-		bodyStr = spacedAssign.ReplaceAllString(bodyStr, `=$1`+servicePrefix+`/$2`)
-
-		// Quoted root-relative path literals in CSS/JS bodies:
-		// url("/path"), ('/path'), url: '/path'. A path character must follow
-		// the slash, so separator strings like '/' and protocol-relative
-		// '//' are left alone. Already-prefixed matches double the prefix,
-		// which the collapse below then repairs.
 		if scanQuotedLiterals {
-			quotedRoot := regexp.MustCompile(`(['"])/([A-Za-z0-9_~.+-])`)
-			bodyStr = quotedRoot.ReplaceAllString(bodyStr, "$1"+servicePrefix+"/$2")
-		}
+			// Standalone CSS/JS bodies: only literals naming the app's
+			// own context root are rewritten (see the function comment).
+			// Everything else in the body is left byte-identical.
+			if ctxRoot != "" {
+				bodyStr = strings.ReplaceAll(bodyStr, `"`+ctxRoot+`/`, `"`+servicePrefix+ctxRoot+`/`)
+				bodyStr = strings.ReplaceAll(bodyStr, `'`+ctxRoot+`/`, `'`+servicePrefix+ctxRoot+`/`)
+				bodyStr = strings.ReplaceAll(bodyStr, `url(`+ctxRoot+`/`, `url(`+servicePrefix+ctxRoot+`/`)
+				bodyStr = strings.ReplaceAll(bodyStr, `"`+ctxRoot+`"`, `"`+servicePrefix+ctxRoot+`"`)
+				bodyStr = strings.ReplaceAll(bodyStr, `'`+ctxRoot+`'`, `'`+servicePrefix+ctxRoot+`'`)
+				// Spaced assignments inside JS-built HTML strings too:
+				// href = "/ctx/resources/...".
+				spacedCtx := regexp.MustCompile(`=\s+(["'])` + regexp.QuoteMeta(ctxRoot) + `/`)
+				bodyStr = spacedCtx.ReplaceAllString(bodyStr, `=$1`+servicePrefix+ctxRoot+`/`)
+			}
+		} else {
+			// HTML/XML bodies: rewrite root-relative paths,
+			// href="/path" → href="/service/{name}/path".
+			bodyStr = strings.ReplaceAll(bodyStr, `="/`, `="`+servicePrefix+`/`)
+			bodyStr = strings.ReplaceAll(bodyStr, `='/`, `='`+servicePrefix+`/`)
 
-		// Unquoted CSS url(/path) form.
-		bodyStr = strings.ReplaceAll(bodyStr, `url(/`, `url(`+servicePrefix+`/`)
+			// Spaced attribute assignments: href = "/path" (some
+			// server-rendered app frameworks build anchors with spaces
+			// around '=', which defeats the strict ="/ match).
+			spacedAssign := regexp.MustCompile(`=\s+(['"])/([A-Za-z0-9_~.+-])`)
+			bodyStr = spacedAssign.ReplaceAllString(bodyStr, `=$1`+servicePrefix+`/$2`)
+
+			// Unquoted CSS url(/path) form.
+			bodyStr = strings.ReplaceAll(bodyStr, `url(/`, `url(`+servicePrefix+`/`)
+		}
 
 		// Fix any double-rewrites (stacked rules can nest the prefix more
 		// than once, so collapse until stable).
