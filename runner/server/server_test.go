@@ -83,6 +83,7 @@ type harnessCfg struct {
 	images       []images.Image
 	backends     []string
 	capabilities []string
+	scheduleCnt  int
 	totalCPU     int
 	delay        time.Duration
 	joinToken    string
@@ -176,6 +177,7 @@ func newHarness(t *testing.T, cfg harnessCfg) *harness {
 		FleetSeed:       func() string { return cfg.seedURL },
 		Backends:        func() []string { return cfg.backends },
 		Capabilities:    func() []string { return caps },
+		ScheduleCount:   func() int { return cfg.scheduleCnt },
 		ExtDir:          func() string { return cfg.extDir },
 		TLSCertPath:     func() string { return h.certPath },
 		TLSKeyPath:      func() string { return h.keyPath },
@@ -386,6 +388,35 @@ func TestQueueAndCapacityEndpoints(t *testing.T) {
 	}
 	if stats.Total != 2 {
 		t.Errorf("store stats total: %+v", stats)
+	}
+}
+
+// TestStatusEmptyOwnerNotForwarded: an internally submitted job carries
+// an empty DeployManager. It belongs to this runner; the status forward
+// guard must not bounce it to an empty backend URL.
+func TestStatusEmptyOwnerNotForwarded(t *testing.T) {
+	h := newHarness(t, harnessCfg{})
+	h.st.UpsertJob(&api.JobStatus{JobID: "internal-1", Status: api.StatusDone, Handler: "x:v1"})
+	rec := h.do(http.MethodGet, "/api/status/internal-1", "", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty-owner status: %d %s", rec.Code, rec.Body.String())
+	}
+	var j api.JobStatus
+	json.Unmarshal(rec.Body.Bytes(), &j)
+	if j.JobID != "internal-1" || j.Status != api.StatusDone {
+		t.Errorf("empty-owner status record: %+v", j)
+	}
+}
+
+// TestCapabilitiesScheduleCount: the capabilities reply reports how many
+// recurring schedules the binary evaluates.
+func TestCapabilitiesScheduleCount(t *testing.T) {
+	h := newHarness(t, harnessCfg{scheduleCnt: 3})
+	rec := h.do(http.MethodGet, "/api/capabilities", "", "", "")
+	var rep api.CapabilityReply
+	json.Unmarshal(rec.Body.Bytes(), &rep)
+	if rep.ScheduledJobCount != 3 {
+		t.Errorf("ScheduledJobCount = %d, want 3", rep.ScheduledJobCount)
 	}
 }
 
