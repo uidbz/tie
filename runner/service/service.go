@@ -282,6 +282,13 @@ func (m *Manager) StartService(service string) (string, error) {
 			args = append(args, "--mount", "type=bind,src="+x+",dst="+x)
 		}
 	}
+	if img.ServiceMemoryMB > 0 {
+		// Operator RAM cap for this service. --memory-swap equal to
+		// --memory disables swap: the cap is a real ceiling, not a
+		// soft limit the container escapes through.
+		mem := fmt.Sprintf("%dm", img.ServiceMemoryMB)
+		args = append(args, "--memory="+mem, "--memory-swap="+mem)
+	}
 	args = append(args,
 		"-p", fmt.Sprintf("%d:%s", externalPort, internalPort),
 		m.imageRef(service),

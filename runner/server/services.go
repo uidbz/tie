@@ -93,6 +93,7 @@ func (s *Server) replicateImageHandler(w http.ResponseWriter, r *http.Request) {
 		img.ServiceAutostart = false
 		img.ServiceStartOnAccess = false
 		img.ServiceInactivityTimeout = 0
+		img.ServiceMemoryMB = 0
 		if !s.d.Images.Upsert(img) {
 			http.Error(w, "failed to upsert image entry", http.StatusInternalServerError)
 			return

@@ -269,7 +269,7 @@ func TestImagesEndpoints(t *testing.T) {
 
 	// Replicate: admin-gated, never adopts the peer's host port or
 	// service-start flags (placement stays a deploy-host decision).
-	body := `{"Name":"peer-tool:v1","DeployKey":"pk","ServiceExternalPort":1234,"IsService":true,"ServiceAutostart":true,"ServiceStartOnAccess":true,"ServiceInactivityTimeout":600}`
+	body := `{"Name":"peer-tool:v1","DeployKey":"pk","ServiceExternalPort":1234,"IsService":true,"ServiceAutostart":true,"ServiceStartOnAccess":true,"ServiceInactivityTimeout":600,"ServiceMemoryMB":4096}`
 	if rec := h.do(http.MethodPut, "/api/images/replicate", body, "tie", "wrong"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("replicate wrong token: %d", rec.Code)
 	}
@@ -277,7 +277,7 @@ func TestImagesEndpoints(t *testing.T) {
 		t.Errorf("replicate: %d %s", rec.Code, rec.Body.String())
 	}
 	if img, ok := h.images.Get("peer-tool:v1"); !ok || img.ServiceExternalPort != 0 ||
-		img.ServiceAutostart || img.ServiceStartOnAccess || img.ServiceInactivityTimeout != 0 {
+		img.ServiceAutostart || img.ServiceStartOnAccess || img.ServiceInactivityTimeout != 0 || img.ServiceMemoryMB != 0 {
 		t.Errorf("replicated entry adopted peer placement: %+v", img)
 	}
 
@@ -602,15 +602,15 @@ func TestDeployEndpoints(t *testing.T) {
 	}
 
 	// Re-deploy with the issued key: keeps key, port, and operator
-	// rewrite scope.
+	// rewrite scope and memory cap.
 	h.images.Upsert(images.Image{Name: "svc:v1", Owner: "me", DeployKey: resp.DeployKey,
 		IsService: true, ServiceInternalPort: 9000, ServiceExternalPort: 3000,
-		ServiceProxyRewrite: "html"})
+		ServiceProxyRewrite: "html", ServiceMemoryMB: 512})
 	rec = h.do(http.MethodPost, "/api/deploymanager",
 		`{"Command":"prod","Name":"svc:v1","Owner":"me","ProjectHash":"`+projAddr+`","JobType":"TCPServiceV1","ServiceInternalPort":9000,"DeployKey":"`+resp.DeployKey+`"}`, "", "")
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	img, _ := h.images.Get("svc:v1")
-	if resp.ErrorMsg != "" || img.ServiceProxyRewrite != "html" || img.ServiceExternalPort != 3000 {
+	if resp.ErrorMsg != "" || img.ServiceProxyRewrite != "html" || img.ServiceExternalPort != 3000 || img.ServiceMemoryMB != 512 {
 		t.Errorf("re-deploy must preserve operator settings: %+v %+v", resp, img)
 	}
 }

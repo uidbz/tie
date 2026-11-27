@@ -184,6 +184,21 @@ esac
 	}
 }
 
+// TestStartServiceMemoryCap: an operator ServiceMemoryMB becomes a real
+// docker ceiling (--memory with an equal --memory-swap, so the
+// container cannot escape the cap through swap).
+func TestStartServiceMemoryCap(t *testing.T) {
+	m, argsLog := testManager(t, images.Image{
+		Name: "svc:v1", IsService: true, ServiceInternalPort: 8080, ServiceMemoryMB: 512,
+	})
+	if _, err := m.StartService("svc:v1"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(calls(t, argsLog), "--memory=512m\n--memory-swap=512m\n") {
+		t.Errorf("memory cap flags missing:\n%s", calls(t, argsLog))
+	}
+}
+
 // TestRestoreAdoptsRunningContainers: docker run -d containers outlive
 // the runner process, so boot must re-register the running container
 // (published port restored, port reserved from the dynamic pool)

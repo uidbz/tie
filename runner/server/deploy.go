@@ -137,11 +137,14 @@ func (s *Server) deployHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// ServiceProxyRewrite is an operator setting, not something the
-		// deploying project owns, so a re-deploy must not reset it back
-		// to the fleet default.
+		// ServiceProxyRewrite and ServiceMemoryMB are operator settings,
+		// not something the deploying project owns, so a re-deploy must
+		// not reset them back to fleet defaults (or no cap).
 		if found && existing.ServiceProxyRewrite != "" {
 			image.ServiceProxyRewrite = existing.ServiceProxyRewrite
+		}
+		if found && existing.ServiceMemoryMB > 0 {
+			image.ServiceMemoryMB = existing.ServiceMemoryMB
 		}
 
 		s.d.Images.Upsert(image)

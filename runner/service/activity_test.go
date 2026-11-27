@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -187,17 +188,18 @@ func TestRunServiceStartOnceSingleFlight(t *testing.T) {
 	m := idleTestManager(t, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080})
 	var starts int
 	var mu sync.Mutex
-	release := make(chan struct{})
+	var enteredOnce sync.Once
 	entered := make(chan struct{})
+	release := make(chan struct{})
 
 	worker := func() error {
 		return m.runServiceStartOnce("svc:v1", func() error {
 			mu.Lock()
 			starts++
 			mu.Unlock()
-			close(entered)
+			enteredOnce.Do(func() { close(entered) })
 			<-release
-			return fmt.Errorf("boom")
+			return errors.New("boom")
 		})
 	}
 
@@ -208,7 +210,8 @@ func TestRunServiceStartOnceSingleFlight(t *testing.T) {
 		go func(i int) { defer wg.Done(); errs[i] = worker() }(i)
 	}
 	<-entered
-	release <- struct{}{}
+	time.Sleep(50 * time.Millisecond) // let the stragglers attach to the in-flight call
+	close(release)
 	wg.Wait()
 
 	mu.Lock()
