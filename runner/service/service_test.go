@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -86,6 +87,59 @@ func TestPortPool(t *testing.T) {
 	p.Release(3001)
 	if port, err := p.Next(); err == nil {
 		t.Fatalf("reserved port %d leaked back into the pool", port)
+	}
+}
+
+// TestPortPoolBindProbe covers the live-holder paths: the pool must never
+// hand out a port that is bound on the host, must refuse to re-queue one,
+// and must DROP a stale queue entry instead of handing it out (the real
+// holder re-queues through Release once it actually stops).
+func TestPortPoolBindProbe(t *testing.T) {
+	// Pick a port the OS knows is free, so the range is safe to claim.
+	probe, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	p := NewPortPool(port, port+2)
+
+	bind := func(port int) {
+		t.Helper()
+		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			t.Fatalf("binding %d: %v", port, err)
+		}
+		t.Cleanup(func() { ln.Close() })
+	}
+
+	// A bound frontier port is skipped, not handed out.
+	bind(port)
+	p.Release(port) // bound: must not enter the queue
+	if got, err := p.Next(); err != nil || got != port+1 {
+		t.Fatalf("bound frontier port: got %d, %v (want %d)", got, err, port+1)
+	}
+
+	// A bound queue entry is dropped: releasing it back must also be refused.
+	bind(port + 1)
+	p.Release(port + 1)
+	if got, err := p.Next(); err != nil || got != port+2 {
+		t.Fatalf("bound queue port: got %d, %v (want %d)", got, err, port+2)
+	}
+
+	// Once the holder is gone the port flows back normally. This test
+	// holds its listeners until cleanup, so the free port comes from
+	// the frontier instead.
+	free, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	freePort := free.Addr().(*net.TCPAddr).Port
+	free.Close()
+	p2 := NewPortPool(freePort, freePort)
+	p2.Release(freePort)
+	if got, err := p2.Next(); err != nil || got != freePort {
+		t.Fatalf("unbound recycled port: got %d, %v (want %d)", got, err, freePort)
 	}
 }
 
