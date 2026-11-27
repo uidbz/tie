@@ -98,6 +98,9 @@ func (m *Manager) pollOnce() {
 		case api.StatusDone:
 			m.mu.Lock()
 			job.exitCode = state.ExitCode
+			if state.OutputHash != "" {
+				job.OutputHash = state.OutputHash
+			}
 			m.mu.Unlock()
 			m.finalize(job)
 		case api.StatusFailed:

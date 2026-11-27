@@ -47,6 +47,13 @@ to follow semantic versioning.
 
 ### Added
 
+- tie-exec takes settings from a filehost hash (`-settings-hash`,
+  `$TIE_SETTINGS_HASH`) or inline JSON (`$TIE_SETTINGS`) when no `-settings`
+  file is given, so remote batch backends can deliver them; the app still
+  gets `-settings <file>`. `executor.HandleState.OutputHash` lets an
+  external backend report a job's result (#174).
+- fleetcmd `cert push` requires `--only` or `--all` and refuses a cert/key
+  that do not pair or whose names do not cover every target (#166).
 - `runclient.FindJob` (fleet lookup of a job's owning runner),
   `CallRunnerCtx`, `GetStatusCtx`, `GetPipelineCtx`, `PipelineError` (#162,
   #163). In-flight polls are aborted when the watch context is cancelled.

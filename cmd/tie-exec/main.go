@@ -11,6 +11,10 @@
 // -inputhash, -store, -settings, -apphash and -debug. That argument
 // vector is a wire contract, frozen together with the runner's run
 // path - never rename a flag.
+//
+// Remote batch backends, which cannot mount a settings file, pass
+// settings by filehost hash (-settings-hash or $TIE_SETTINGS_HASH) or
+// inline ($TIE_SETTINGS); the app still receives -settings <file>.
 package main
 
 import (
@@ -48,6 +52,7 @@ type externalApp struct {
 	input           string
 	output          string
 	settings        string
+	settingsHash    string
 	useFuse         bool
 	cacheSizeGB     int
 	debug           bool
@@ -126,6 +131,7 @@ func parseFlags() externalApp {
 
 	hashPtr := flag.String("inputhash", "", "input hash")
 	settingsPtr := flag.String("settings", "", "settings file")
+	settingsHashPtr := flag.String("settings-hash", "", "settings JSON stored on the filehost under this hash (else $TIE_SETTINGS_HASH; else inline JSON in $TIE_SETTINGS)")
 	appHashPtr := flag.String("apphash", "", "injected app hash")
 
 	inputDirPtr := flag.String("input", "/input", "input dir")
@@ -150,6 +156,7 @@ func parseFlags() externalApp {
 		name:            *appPtr,
 		hash:            *hashPtr,
 		settings:        *settingsPtr,
+		settingsHash:    *settingsHashPtr,
 		input:           filepath.Join(*ioPrefixPtr, *inputDirPtr),
 		output:          filepath.Join(*ioPrefixPtr, *outputDirPtr),
 		injectedAppHash: *appHashPtr,
@@ -186,6 +193,17 @@ func main() {
 	if e := verifyCleanInput(&app); e != nil {
 		setError(1, e.Error())
 	}
+
+	// Settings may arrive as a file (-settings, the docker path), as a
+	// filehost hash (-settings-hash / TIE_SETTINGS_HASH, no size limit: the
+	// way remote batch backends hand them over) or inline (TIE_SETTINGS).
+	// The app always gets a file via -settings (#174).
+	settingsPath, cleanup, err := resolveSettings(app, os.Getenv)
+	if err != nil {
+		setError(1, "Error resolving settings: "+err.Error())
+	}
+	defer cleanup()
+	app.settings = settingsPath
 
 	if app.debug {
 		printDebugInfo(app)

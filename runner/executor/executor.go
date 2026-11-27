@@ -131,4 +131,9 @@ type HandleState struct {
 	Status   string
 	ExitCode int
 	Reason   string
+	// OutputHash is the job's result, when the backend can report it (for
+	// example from the SetResult marker in the container's log). Applied
+	// on a terminal state; an external job otherwise finishes without an
+	// OutputHash (#174).
+	OutputHash string
 }

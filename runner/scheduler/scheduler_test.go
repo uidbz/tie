@@ -623,3 +623,19 @@ func TestPollOnceSeesExternalJobsBehindFinishedOnes(t *testing.T) {
 		t.Fatalf("external job not polled: status %q", rec.Status)
 	}
 }
+
+// #174: an external backend that reports the result hash gets it onto the
+// job; previously external jobs always finished without an OutputHash.
+func TestExternalDoneCarriesOutputHash(t *testing.T) {
+	env := newTestEnv(t, nil, nil)
+	job := env.m.NewJob(api.JobRequest{JobType: "ext.big", Handler: "t", InputHash: "in"}, false, "dm")
+	if err := env.m.SubmitExternal(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	env.ext.setState("h1", executor.HandleState{Status: api.StatusDone, OutputHash: "outhash"})
+	env.m.pollOnce()
+	fin := env.waitFinished(t)
+	if fin.OutputHash != "outhash" || fin.Status != api.StatusDone {
+		t.Fatalf("finished = %+v", fin)
+	}
+}
