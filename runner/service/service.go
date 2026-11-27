@@ -50,6 +50,9 @@ type Config struct {
 	ReadinessTimeout  time.Duration
 	// LogsTail is how many log lines status attaches (default 200).
 	LogsTail int
+	// InactivityInterval is the idle sweep cadence for
+	// ServiceInactivityTimeout (default 30s).
+	InactivityInterval time.Duration
 }
 
 // Manager is the task registry plus the service runtime.
@@ -59,6 +62,20 @@ type Manager struct {
 	mu      sync.Mutex
 	tasks   map[string]*api.TaskInfo // every registered task (services and running jobs)
 	running map[string]int           // task name -> published host port
+
+	// Activity tracking (see activity.go): last-access clock and live
+	// WebSocket tunnel counts per service.
+	actMu      sync.Mutex
+	lastAccess map[string]time.Time
+	tunnels    map[string]int
+
+	// startMu/startCalls guard one in-flight start-on-access per service.
+	startMu    sync.Mutex
+	startCalls map[string]*serviceStartCall
+
+	// done closes on StopAll, ending the inactivity watcher.
+	done      chan struct{}
+	doneClose sync.Once
 }
 
 // New builds a manager and applies the pool defaults.
@@ -84,7 +101,20 @@ func New(cfg Config) *Manager {
 	if cfg.LogsTail == 0 {
 		cfg.LogsTail = 200
 	}
-	return &Manager{cfg: cfg, tasks: map[string]*api.TaskInfo{}, running: map[string]int{}}
+	if cfg.InactivityInterval == 0 {
+		cfg.InactivityInterval = 30 * time.Second
+	}
+	m := &Manager{
+		cfg:        cfg,
+		tasks:      map[string]*api.TaskInfo{},
+		running:    map[string]int{},
+		lastAccess: map[string]time.Time{},
+		tunnels:    map[string]int{},
+		startCalls: map[string]*serviceStartCall{},
+		done:       make(chan struct{}),
+	}
+	go m.watchInactivity()
+	return m
 }
 
 func (m *Manager) extDir(name string) string { return m.cfg.ExtDir + "/" + name }
@@ -112,6 +142,7 @@ func (m *Manager) UnregisterTask(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.tasks, name)
+	m.clearActivity(name)
 	delete(m.running, name)
 }
 
@@ -273,6 +304,7 @@ func (m *Manager) StartService(service string) (string, error) {
 	}
 
 	m.Activate(service, api.TaskTypeService, externalPort)
+	m.Touch(service)
 	go m.watchReadiness(service, containerName, externalPort, fixedPort)
 	slog.Info("Service started", "service", service, "external_port", externalPort, "internal_port", internalPort)
 
@@ -308,6 +340,7 @@ func (m *Manager) StopTask(task string) (string, error) {
 	if img.ServiceExternalPort == 0 {
 		m.cfg.Ports.Release(port)
 	}
+	m.clearActivity(task)
 	slog.Info("Task stopped", "task", task, "port", port)
 
 	return fmt.Sprintf("Service %s stopped and port %d released", task, port), nil
@@ -389,12 +422,15 @@ func (m *Manager) adoptRunning(img images.Image) bool {
 	}
 	m.cfg.Ports.Reserve(port)
 	m.Activate(img.Name, api.TaskTypeService, port)
+	m.Touch(img.Name)
 	slog.Info("Adopted running service container", "service", img.Name, "external_port", port, "internal_port", internal)
 	return true
 }
 
-// StopAll stops every running service (graceful shutdown).
+// StopAll stops every running service (graceful shutdown) and ends the
+// inactivity watcher.
 func (m *Manager) StopAll() {
+	m.doneClose.Do(func() { close(m.done) })
 	m.mu.Lock()
 	names := make([]string, 0, len(m.running))
 	for name := range m.running {

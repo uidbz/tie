@@ -38,6 +38,19 @@ type Config struct {
 	// consulted per request, so configuration changes take effect without
 	// rebuilding anything.
 	RewriteScope func(service string) string
+	// Activity optionally records that a proxied request touched a
+	// service (feeds the inactivity-timeout clock).
+	Activity func(service string)
+	// WakeOnAccess optionally starts a parked service whose entry opts
+	// into start-on-access, and reports its new backend port. Called
+	// when ExternalPort does not know the service; nil, or a false
+	// return, keeps the historic "Service not running" answer.
+	WakeOnAccess func(service string) (int, bool)
+	// TunnelOpen/TunnelClosed optionally bracket a live WebSocket
+	// tunnel, so idle accounting never reaps a service with open
+	// tunnels.
+	TunnelOpen   func(service string)
+	TunnelClosed func(service string)
 }
 
 // Handler serves proxied service traffic. The route pattern stays with the
@@ -55,6 +68,11 @@ func (h *Handler) ServeService(w http.ResponseWriter, r *http.Request, service s
 	slog.Debug("Service request", "service", service, "path", r.URL.Path, "method", r.Method)
 
 	port, exists := h.cfg.ExternalPort(service)
+	if !exists && h.cfg.WakeOnAccess != nil {
+		// Parked service with start-on-access: waking it through the
+		// normal start path lets this request proxy normally.
+		port, exists = h.cfg.WakeOnAccess(service)
+	}
 	if !exists {
 		// Wire-compatible with the API endpoints' JSON error body.
 		b, err := json.Marshal(&api.JobStatus{ErrorMsg: "Service not running: " + service})
@@ -67,6 +85,10 @@ func (h *Handler) ServeService(w http.ResponseWriter, r *http.Request, service s
 		return
 	}
 	target := mustParseURL("http://localhost:" + strconv.Itoa(port))
+
+	if h.cfg.Activity != nil {
+		h.cfg.Activity(service)
+	}
 
 	// Check if this is a WebSocket upgrade request
 	if isWebSocketRequest(r) {
@@ -100,6 +122,13 @@ func headerHasToken(h http.Header, name, token string) bool {
 }
 
 func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request, target *url.URL, service string) {
+	// Bracket the tunnel for idle accounting: while any tunnel is open
+	// the inactivity sweep leaves this service alone.
+	if h.cfg.TunnelOpen != nil {
+		h.cfg.TunnelOpen(service)
+		defer h.cfg.TunnelClosed(service)
+	}
+
 	// Extract path for backend
 	incomingPath := r.URL.Path
 	prefix := servicePrefix(service)
