@@ -58,6 +58,9 @@ func (s *server) routes(mux *http.ServeMux, store *auth.Store) {
 	// (a GET pattern also serves HEAD, which the mux would flag against
 	// "HEAD /{hash}").
 	mux.HandleFunc("GET /-/version", store.Require(auth.AccessRead, s.versionHandler))
+	// Replication primitives (#159): read-only, so read access suffices.
+	mux.HandleFunc("GET /-/keys/{store}", store.Require(auth.AccessRead, s.keysHandler))
+	mux.HandleFunc("POST /-/has", store.Require(auth.AccessRead, s.hasHandler))
 	mux.HandleFunc("GET /{hash}", store.Require(auth.AccessRead, s.withHash(s.downloadHandler)))
 	mux.HandleFunc("HEAD /{hash}", store.Require(auth.AccessRead, s.withHash(s.statHandler)))
 	mux.HandleFunc("GET /{hash}/{filename}", store.Require(auth.AccessRead, s.withHash(s.namedDownloadHandler)))

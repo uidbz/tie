@@ -1,5 +1,5 @@
 // Package fhclient is the one HTTP client for a tie filehost: Stat (HEAD), Get,
-// GetRange, Put and Version.
+// GetRange, Put, Version, and the replication reads Keys and Has.
 //
 // Three places used to implement "HEAD a blob" and two implemented a ranged
 // GET, each with its own idea of what a status code means (§8 S6): verify
@@ -12,11 +12,14 @@
 package fhclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/uidbz/tie/metadata"
@@ -307,6 +310,90 @@ func (c *Client) Version() (version.Info, error) {
 		return version.Info{}, err
 	}
 	return body.Build, nil
+}
+
+// KeysPage is one page of a store's keylist (GET /-/keys/{store}).
+type KeysPage struct {
+	Store string   `json:"store"`
+	Keys  []string `json:"keys"`
+	// Next is the cursor for the following page; "" on the last page.
+	Next string `json:"next"`
+}
+
+// Keys lists the blob hashes of store in ascending order, strictly after
+// cursor ("" = from the start), at most limit per page (0 = the server
+// default). Page with the returned Next until it is "".
+func (c *Client) Keys(ctx context.Context, store, cursor string, limit int) (KeysPage, error) {
+	if cursor != "" && !metadata.IsHexHash(cursor) {
+		return KeysPage{}, fmt.Errorf("fhclient: cursor %q is not a content address", cursor)
+	}
+	q := url.Values{}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	u := c.URL + "/-/keys/" + url.PathEscape(store)
+	if len(q) > 0 {
+		u += "?" + q.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return KeysPage{}, err
+	}
+	resp, err := c.client().Do(req)
+	if err != nil {
+		return KeysPage{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return KeysPage{}, fmt.Errorf("keys %s: %s%s", store, resp.Status, readSnip(resp.Body))
+	}
+	var page KeysPage
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil {
+		return KeysPage{}, err
+	}
+	return page, nil
+}
+
+// Has reports which of hashes the client's Store (Tie-Store; "" = the
+// filehost's default store) holds (POST /-/has). The server accepts up to
+// 10000 hashes per call.
+func (c *Client) Has(ctx context.Context, hashes []string) (present, absent []string, err error) {
+	for _, h := range hashes {
+		if !metadata.IsHexHash(h) {
+			return nil, nil, fmt.Errorf("fhclient: %q is not a content address", h)
+		}
+	}
+	body, err := json.Marshal(map[string][]string{"hashes": hashes})
+	if err != nil {
+		return nil, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/-/has", bytes.NewReader(body))
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.Store != "" {
+		req.Header.Set("Tie-Store", c.Store)
+	}
+	resp, err := c.client().Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("has: %s%s", resp.Status, readSnip(resp.Body))
+	}
+	var r struct {
+		Present []string `json:"present"`
+		Absent  []string `json:"absent"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, nil, err
+	}
+	return r.Present, r.Absent, nil
 }
 
 // readSnip returns a short, printable excerpt of a response body for an error

@@ -145,6 +145,25 @@ Having the *bytes* on the backup server is independent from being able to
 the backup host pointed at the received/mirrored blob root. Keep that as a
 separate decision — the backup's job is durability first.
 
+### Replicating a store between filehosts
+
+Two read-only endpoints let a replicator compute what another filehost is
+missing without transferring blobs; the push itself is ordinary
+`PUT /upload/{hash}` calls (present blobs are deduplicated for free):
+
+- `GET /-/keys/{store}?cursor=<hash>&limit=<n>` — the store's blob hashes in
+  ascending order, strictly after `cursor`; `{"store", "keys", "next"}`.
+  Page with `next` until it is empty. The order is the shard layout's, so a
+  replicator can split the key space by prefix. The listing is a
+  point-in-time walk: blobs written or reaped while paging may or may not
+  appear, so run the diff periodically rather than once.
+- `POST /-/has` with `{"hashes": [...]}` (up to 10000; store from the
+  `Tie-Store` header, else the default) — `{"store", "present", "absent"}`.
+
+Both need read access. `io/fhclient` exposes them as `Client.Keys` and
+`Client.Has`. Retention is not replicated by these primitives: set it on the
+target with the upload's retention headers.
+
 ## Triple-store (a separate backup concern)
 
 The filehost holds the *bytes*; the `tie-triplestore` triple-store holds everything
