@@ -211,11 +211,18 @@ func (s *Server) jobStatusHandler(w http.ResponseWriter, r *http.Request) {
 	} else if stored, ok := s.d.Store.GetJob(jobID); ok {
 		j = stored
 	} else {
-		j = &api.JobStatus{
+		// 404 so clients (fleet lookups in particular) can tell "not
+		// here" from a failed job, whose record also carries ErrorMsg.
+		// The body keeps the historic not-found record for readers that
+		// print it.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(&api.JobStatus{
 			DeployManager: deployManager,
 			JobID:         jobID,
 			ErrorMsg:      "Did not find job with ID: " + jobID,
-		}
+		})
+		return
 	}
 	if j.DeployManager != deployManager { // job runs on another backend
 		slog.Info("Forwarding status request to backend", "job_id", jobID, "backend", j.DeployManager)

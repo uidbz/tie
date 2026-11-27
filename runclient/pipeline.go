@@ -69,8 +69,13 @@ func SubmitPipeline(runner string, req api.PipelineRequest) (api.Pipeline, error
 
 // GetPipeline reads the current state of one pipeline.
 func GetPipeline(runner, pipelineID string) (api.Pipeline, error) {
+	return GetPipelineCtx(context.Background(), runner, pipelineID)
+}
+
+// GetPipelineCtx is GetPipeline bounded by ctx.
+func GetPipelineCtx(ctx context.Context, runner, pipelineID string) (api.Pipeline, error) {
 	var p api.Pipeline
-	if err := do(call{Method: http.MethodGet, Runner: runner, Path: "/api/pipelines/" + seg(pipelineID)}, &p); err != nil {
+	if err := do(call{Method: http.MethodGet, Runner: runner, Path: "/api/pipelines/" + seg(pipelineID), Ctx: ctx}, &p); err != nil {
 		return p, fmt.Errorf("getting pipeline: %w", err)
 	}
 	return p, nil
@@ -104,13 +109,7 @@ func CancelPipeline(runner, pipelineID, deployKey string) error {
 // same key as CancelPipeline.
 func ResumePipeline(runner, pipelineID, deployKey, fromStep string, overrides map[string]string) (api.Pipeline, error) {
 	var p api.Pipeline
-	body := map[string]any{}
-	if fromStep != "" {
-		body["From"] = fromStep
-	}
-	if len(overrides) > 0 {
-		body["With"] = overrides
-	}
+	body := api.ResumeRequest{From: fromStep, With: overrides}
 	err := do(call{Method: http.MethodPost, Runner: runner, Path: "/api/pipelines/" + seg(pipelineID) + "/resume", Key: deployKey, Body: body, Timeout: 60 * time.Second}, &p)
 	if errors.Is(err, ErrUnauthorized) {
 		return p, fmt.Errorf("%w for this pipeline's entry step", ErrUnauthorized)
@@ -132,33 +131,46 @@ func WaitPipeline(runner, pipelineID string, poll time.Duration, onStep func(ste
 // WaitPipelineCtx is WaitPipeline with a context threaded through the
 // wait: transient status errors are tolerated with the same exponential
 // backoff as the job watch, and a cancelled context stops the wait
-// promptly with a benign nil return — the pipeline keeps running on the
-// runner, exactly like a cancelled job watch.
+// promptly with a benign nil return and the last state seen — the
+// pipeline keeps running on the runner, exactly like a cancelled job
+// watch (check PipelineDone on the result). Permanent errors (unknown
+// pipeline, unauthorized) end the wait at once. A pipeline that ends
+// failed or cancelled returns its final state with a non-nil error.
 func WaitPipelineCtx(ctx context.Context, runner, pipelineID string, poll time.Duration, onStep func(step *api.PipelineStep)) (api.Pipeline, error) {
 	if poll <= 0 {
 		poll = 3 * time.Second
 	}
 	seen := make(map[string]string)
 	var backoff pollBackoff
+	var last api.Pipeline
+	cancelled := func() (api.Pipeline, error) {
+		fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
+		return last, nil
+	}
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
-			return api.Pipeline{}, nil
+			return cancelled()
 		default:
 		}
-		p, err := GetPipeline(runner, pipelineID)
+		p, err := GetPipelineCtx(ctx, runner, pipelineID)
 		if err != nil {
+			if ctx.Err() != nil {
+				return cancelled()
+			}
+			if permanent(err) {
+				return last, err
+			}
 			stop, ctxErr := backoff.failure(ctx)
 			if ctxErr != nil {
-				fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
-				return p, nil
+				return cancelled()
 			}
 			if stop {
-				return p, fmt.Errorf("pipeline %s is still on %s; check with %s pipeline show %s", pipelineID, runner, CLIName, pipelineID)
+				return last, fmt.Errorf("pipeline %s is still on %s; check with %s pipeline show %s", pipelineID, runner, CLIName, pipelineID)
 			}
 			continue
 		}
+		last = p
 		backoff.success()
 		if onStep != nil {
 			for _, s := range p.Steps {
@@ -169,18 +181,31 @@ func WaitPipelineCtx(ctx context.Context, runner, pipelineID string, poll time.D
 			}
 		}
 		if PipelineDone(&p) {
-			if p.Status == api.StatusFailed {
-				msg := p.ErrorMsg
-				if msg == "" {
-					msg = "pipeline failed"
-				}
-				return p, errors.New(msg)
-			}
-			return p, nil
+			return p, PipelineError(&p)
 		}
 		if !sleepCtx(ctx, poll) {
-			fmt.Printf("watching cancelled; pipeline %s still running on %s — resume with %s pipeline show %s\n", pipelineID, runner, CLIName, pipelineID)
-			return p, nil
+			return cancelled()
 		}
 	}
+}
+
+// PipelineError reports the outcome of a finished pipeline: nil while
+// it runs or when it completed, else an error carrying the pipeline's
+// ErrorMsg (failed) or saying it was cancelled.
+func PipelineError(p *api.Pipeline) error {
+	switch p.Status {
+	case api.StatusFailed:
+		msg := p.ErrorMsg
+		if msg == "" {
+			msg = "pipeline failed"
+		}
+		return errors.New(msg)
+	case api.StatusCancelled:
+		msg := "pipeline " + p.PipelineID + " was cancelled"
+		if p.ErrorMsg != "" {
+			msg += ": " + p.ErrorMsg
+		}
+		return errors.New(msg)
+	}
+	return nil
 }

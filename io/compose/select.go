@@ -218,7 +218,7 @@ func Dependencies(specs []Spec) []Dependency {
 	return out
 }
 
-// Compose resolves specs into a single input tree and returns its root hash,
+// Build resolves specs into a single input tree and returns its root hash,
 // which is the value to use as a job's InputHash. Every spec must already carry
 // a Hash; call ResolveSteps first for step-addressed ones.
 //
@@ -227,7 +227,7 @@ func Dependencies(specs []Spec) []Dependency {
 func Build(filehost, store string, specs []Spec) (string, error) {
 	roots := make(map[string]*sourceTree)
 	for _, s := range specs {
-		// Validate at both entry points: the runner calls Compose directly,
+		// Validate at both entry points: the runner calls Build directly,
 		// without ResolveSteps (review B9k).
 		if err := s.validate(); err != nil {
 			return "", err
@@ -235,7 +235,7 @@ func Build(filehost, store string, specs []Spec) (string, error) {
 		if s.Hash == "" {
 			// Without a hash this would GET the filehost root and treat the
 			// store listing as a tree. ResolveSteps rejects this upstream;
-			// Compose is also called directly (by the runner), so guard here
+			// Build is also called directly (by the runner), so guard here
 			// with the identical message (review B9j).
 			return "", errors.New("input: source has neither a step nor a hash")
 		}
@@ -244,10 +244,12 @@ func Build(filehost, store string, specs []Spec) (string, error) {
 		}
 		items, err := DirTree(filehost, s.Hash, "")
 		if err != nil {
-			if s.Optional {
-				// An optional source that cannot be walked yields nothing,
+			if s.Optional && errors.Is(err, ErrBlobNotFound) {
+				// An optional source that does not exist yields nothing,
 				// which is what makes selectEntries' Optional branch
-				// reachable from Compose (review B9j).
+				// reachable from Build (review B9j). A filehost outage
+				// (timeout, 5xx) is not "absent": it fails the build rather
+				// than silently running the job on less input.
 				continue
 			}
 			return "", fmt.Errorf("input from %s: %w", s.SourceLabel(), err)

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -135,28 +134,16 @@ func resolveRunner(cmd *cli.Command, jobID string) (string, error) {
 	return runner, nil
 }
 
-// findJobRunner asks each runner for the job's status; the first runner
-// that answers (i.e. does not 404) owns the job. Errors other than 404
-// are collected so an unreachable fleet is not mistaken for "the job
-// does not exist" — the same model as runclient.FindPipeline.
+// findJobRunner locates the runner that owns jobID via
+// runclient.FindJob: every other runner answers not-found, and errors
+// other than not-found are reported so an unreachable fleet is not
+// mistaken for "the job does not exist".
 func findJobRunner(servers []string, jobID string) (string, error) {
-	var hard []error
-	for _, s := range servers {
-		var st api.JobStatus
-		err := runclient.CallRunner("GET", s, "/api/status/"+url.PathEscape(jobID), nil, &st, 0)
-		switch {
-		case err == nil:
-			return s, nil
-		case errors.Is(err, runclient.ErrNotFound):
-			// runner does not own this job; try the next one
-		default:
-			hard = append(hard, fmt.Errorf("%s: %w", s, err))
-		}
+	hit, err := runclient.FindJob(servers, jobID)
+	if err != nil {
+		return "", err
 	}
-	if len(hard) > 0 {
-		return "", fmt.Errorf("job %s not found on any reachable runner (%v)", jobID, hard)
-	}
-	return "", fmt.Errorf("job %s not found on any runner", jobID)
+	return hit.Server, nil
 }
 
 // printJSON writes v as indented JSON to stdout.

@@ -94,19 +94,88 @@ func ListImages(runner string) ([]api.ImageInfo, error) {
 	return out, nil
 }
 
-// GetStatus reads one job's current record. A runner-level ErrorMsg
-// (unknown job) becomes the returned error; the record is still handed
-// back so callers can show what came with it.
+// GetStatus reads one job's current record. The job's own ErrorMsg is
+// data about the job (a failed job, or a SetError marker while it runs),
+// not a call failure: the record is returned with a nil error and the
+// caller decides via Done/Status/ErrorMsg (see JobError). The returned
+// error is reserved for the call itself failing — transport, auth — and
+// for "no such job on this runner", which wraps ErrNotFound whether the
+// runner says so with a 404 or (older runners) a 200 not-found record.
 func GetStatus(runner, jobID string) (api.JobStatus, error) {
+	return GetStatusCtx(context.Background(), runner, jobID)
+}
+
+// GetStatusCtx is GetStatus bounded by ctx.
+func GetStatusCtx(ctx context.Context, runner, jobID string) (api.JobStatus, error) {
 	var r api.JobStatus
-	err := do(call{Method: http.MethodGet, Runner: runner, Path: "/api/status/" + seg(jobID)}, &r)
+	err := do(call{Method: http.MethodGet, Runner: runner, Path: "/api/status/" + seg(jobID), Ctx: ctx}, &r)
 	if err != nil {
 		return r, err
 	}
-	if r.ErrorMsg != "" {
-		return r, errors.New(r.ErrorMsg)
+	if notFoundRecord(r) {
+		msg := r.ErrorMsg
+		if msg == "" {
+			msg = "job " + jobID
+		}
+		return r, fmt.Errorf("%w: %s", ErrNotFound, msg)
 	}
 	return r, nil
+}
+
+// legacyNotFoundPrefix is the ErrorMsg older runners put in the 200
+// reply for an unknown job ID (current runners answer 404).
+const legacyNotFoundPrefix = "Did not find job with ID: "
+
+// notFoundRecord reports whether a 200 status reply means "unknown job":
+// no JobID at all, or the legacy not-found record — which carries the
+// requested JobID but never a Status, Handler or Done.
+func notFoundRecord(r api.JobStatus) bool {
+	if r.JobID == "" {
+		return true
+	}
+	return r.Status == "" && r.Handler == "" && !r.Done && strings.HasPrefix(r.ErrorMsg, legacyNotFoundPrefix)
+}
+
+// ErrJobFailed is what JobError (and StartRun for a failed job) wraps,
+// so callers can tell "the job ran and failed" from "could not talk to
+// the runner".
+var ErrJobFailed = errors.New("job failed")
+
+// JobError reports the outcome of a finished job: nil while the job is
+// still running or when it finished successfully, else an error wrapping
+// ErrJobFailed with the job's ErrorMsg. A runner records Status "failed"
+// exactly when the job ended with an ErrorMsg; runners that predate
+// Status are judged by ErrorMsg alone.
+func JobError(s api.JobStatus) error {
+	if !s.Done {
+		return nil
+	}
+	msg := strings.TrimSpace(s.ErrorMsg)
+	switch s.Status {
+	case api.StatusDone:
+		return nil
+	case api.StatusCancelled:
+		if msg == "" {
+			msg = "cancelled"
+		}
+		return fmt.Errorf("%w: job %s was cancelled: %s", ErrJobFailed, s.JobID, msg)
+	case api.StatusFailed:
+		if msg == "" {
+			msg = "no error message"
+		}
+		return fmt.Errorf("%w: job %s: %s", ErrJobFailed, s.JobID, msg)
+	}
+	if msg != "" {
+		return fmt.Errorf("%w: job %s: %s", ErrJobFailed, s.JobID, msg)
+	}
+	return nil
+}
+
+// permanent reports whether a status/pipeline fetch error will not go
+// away by retrying: the job/pipeline does not exist, or the call is not
+// authorized. Watches stop on these at once instead of backing off.
+func permanent(err error) bool {
+	return errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnauthorized)
 }
 
 // CurrentUser returns the OS login name of the current user, used for
@@ -280,6 +349,15 @@ func StartRun(runner string, headless bool, req api.JobRequest) (api.JobStatus, 
 // StartRunCtx is StartRun with a context threaded into the progress
 // watch, so a cancelled context (Ctrl-C in the CLI) stops the wait
 // cleanly. StartRun stays for callers without a context.
+//
+// The returned record is the job's last known state (at least the
+// submitted record, so JobID is always set once the job was accepted).
+// The error is non-nil when the job did not finish successfully:
+//   - the job failed or was cancelled on the runner: wraps ErrJobFailed;
+//   - the watch was cancelled before the job finished: wraps ctx.Err()
+//     (the job keeps running on the runner) — callers must not use the
+//     OutputHash then;
+//   - the runner could not be watched (unreachable, job vanished).
 func StartRunCtx(ctx context.Context, runner string, headless bool, req api.JobRequest) (api.JobStatus, error) {
 	resp, err := Run(runner, req)
 	if err != nil {
@@ -287,8 +365,18 @@ func StartRunCtx(ctx context.Context, runner string, headless bool, req api.JobR
 	}
 
 	status, err := ShowProgressCtx(ctx, runner, resp.JobID, headless, true)
+	if status.JobID == "" {
+		status = resp
+	}
 	if err != nil {
-		return api.JobStatus{}, err
+		return status, err
+	}
+	if !status.Done {
+		cause := ctx.Err()
+		if cause == nil {
+			cause = context.Canceled
+		}
+		return status, fmt.Errorf("stopped watching job %s before it finished: %w", resp.JobID, cause)
 	}
 	fmt.Println("RunningTime:", status.RunningTime)
 
@@ -310,7 +398,7 @@ func StartRunCtx(ctx context.Context, runner string, headless bool, req api.JobR
 		// mode was noise.
 	}
 
-	return status, nil
+	return status, JobError(status)
 }
 
 // pollBackoff tracks transient-failure backoff for the polling loops: a
@@ -380,11 +468,18 @@ func ShowProgress(runner, jobID string, headless, follow bool) (api.JobStatus, e
 
 // ShowProgressCtx watches a job with a context: on cancellation it
 // prints how to resume watching and returns nil — the job keeps running
-// on the runner, so a cancelled watch is benign, not a failure.
+// on the runner, so a cancelled watch is benign, not a failure (the
+// returned record then has Done == false).
 // Transient status errors are tolerated per pollBackoff; after
 // pollMaxConsecutiveErrors consecutive failures it returns an error
 // naming the runner and the resume command instead of aborting on the
-// first blip.
+// first blip. Permanent errors (unknown job, unauthorized) end the watch
+// at once.
+//
+// The watch ends when the runner reports Done, whatever the outcome: a
+// failed job is returned with a nil error and its ErrorMsg in the
+// record — use JobError to judge it. An ErrorMsg on a job that is still
+// running (an error marker) does not end the watch.
 func ShowProgressCtx(ctx context.Context, runner, jobID string, headless, follow bool) (api.JobStatus, error) {
 	fmt.Println("JobID:", jobID)
 	runningShowed := false
@@ -404,9 +499,15 @@ func ShowProgressCtx(ctx context.Context, runner, jobID string, headless, follow
 			return status, nil
 		default:
 		}
-		var err error
-		status, err = GetStatus(runner, jobID)
+		next, err := GetStatusCtx(ctx, runner, jobID)
 		if err != nil {
+			if ctx.Err() != nil {
+				fmt.Printf("watching cancelled; job %s still running on %s — resume with %s status %s\n", jobID, runner, CLIName, jobID)
+				return status, nil
+			}
+			if permanent(err) {
+				return status, fmt.Errorf("watching job %s on %s: %w", jobID, runner, err)
+			}
 			stop, ctxErr := backoff.failure(ctx)
 			if ctxErr != nil {
 				fmt.Printf("watching cancelled; job %s still running on %s — resume with %s status %s\n", jobID, runner, CLIName, jobID)
@@ -417,6 +518,7 @@ func ShowProgressCtx(ctx context.Context, runner, jobID string, headless, follow
 			}
 			continue
 		}
+		status = next
 		backoff.success()
 		done = status.Done
 		if !headless {

@@ -88,6 +88,10 @@ type call struct {
 	Query   url.Values
 	Body    any
 	Timeout time.Duration // 0 = defaultTimeout
+	// Ctx, when set, bounds the request in addition to Timeout, so a
+	// cancelled caller (Ctrl-C) aborts an in-flight call instead of
+	// waiting the timeout out. nil = context.Background().
+	Ctx context.Context
 }
 
 // defaultTimeout bounds one runner request when the caller does not say
@@ -119,7 +123,11 @@ func do(c call, out any) error {
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	parent := c.Ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	var body io.Reader
@@ -168,7 +176,14 @@ func do(c call, out any) error {
 // outside this package — the deploy POST to /api/deploymanager, which
 // needs an explicit long timeout instead of the default.
 func CallRunner(method, runner, path string, body, out any, timeout time.Duration) error {
-	return do(call{Method: method, Runner: runner, Path: path, Body: body, Timeout: timeout}, out)
+	return CallRunnerCtx(context.Background(), method, runner, path, body, out, timeout)
+}
+
+// CallRunnerCtx is CallRunner bounded by ctx as well as timeout: a
+// cancelled ctx aborts the request (the error wraps ctx.Err()), so a
+// long call such as a 30-minute deploy can be interrupted.
+func CallRunnerCtx(ctx context.Context, method, runner, path string, body, out any, timeout time.Duration) error {
+	return do(call{Method: method, Runner: runner, Path: path, Body: body, Timeout: timeout, Ctx: ctx}, out)
 }
 
 // normalizeTarget trims a trailing slash from the runner URL and

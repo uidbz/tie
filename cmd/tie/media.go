@@ -79,8 +79,9 @@ func cmdMedia(a *app) *cli.Command {
 					"artwork/ and scans/ subfolders, parent disc folders) and record it as\n" +
 					"the collection's (uid, cover, <imageHash>) relation. With --embedded,\n" +
 					"the first tracks are probed through the filehost; --archives extracts\n" +
-					"the best image from zip archive blobs. Thumbnail generation stays in\n" +
-					"the GUI clients and happens on first display.",
+					"the best image from zip archive blobs (both on by default). A cover\n" +
+					"that changes clears the cached thumbnail; thumbnail generation stays\n" +
+					"in the GUI clients and happens on first display.",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "all", Usage: "Re-resolve collections that already have a cover or thumbnail"},
 					&cli.BoolFlag{Name: "embedded", Value: true, Usage: "Probe the first tracks for embedded pictures"},
@@ -171,6 +172,13 @@ func cmdMedia(a *app) *cli.Command {
 							IncludeArchives: c.Bool("archives"),
 							DryRun:          c.Bool("dry-run"),
 						})
+						// The cached thumbnail was scaled from the previous source
+						// image; a replaced cover must not keep showing it (SetCover's
+						// contract). The clients regenerate it on first display.
+						if err == nil && !c.Bool("dry-run") && res.Hash != cover &&
+							client.RowFirst(row, client.RelThumbnail) != "" {
+							err = a.tie.Set(uid, string(client.RelThumbnail), nil)
+						}
 						switch {
 						case errors.Is(err, client.ErrNoCover):
 							o.row(uid, "none", "", "", "", "", "")

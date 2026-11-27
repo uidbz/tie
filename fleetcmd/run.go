@@ -85,9 +85,10 @@ commands:
   hosts approve|remove <id>    approve a pending joiner / tombstone a host
                                (seed from the 'seed' key in tie-fleet.toml)
   cert status                  TLS cert expiry per runner (warns <30 days)
-  cert push --only H --crt F --key F
+  cert push (--only H | --all) --crt F --key F [--skip-name-check]
                                remote cert install + hot swap (POST /api/cert,
-                               no restart)
+                               no restart); refuses a cert that does not cover
+                               every target's API hostname
   reload [--only H] [--token T] [--restart]
                                hot config reload (no container restart): POST
                                /api/reload with the AdminToken (--token,
@@ -102,6 +103,40 @@ safety: rollout/restart refuse to touch the host the tool runs on unless
 --allow-self (restarting the runner kills every service container on it,
 including this tool's own session if it lives there).
 `))
+}
+
+// parseFlags parses fs over args, allowing flags anywhere among the
+// positional arguments (the usage text shows `specs edit FILE --set …`
+// and `autostart set NAME --host H`; the flag package alone stops at the
+// first positional and silently treats the rest as positionals). A
+// literal "--" ends flag parsing. Errors — including -h — are returned
+// wrapped in ErrUsage instead of exiting the process.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	fs.Init(fs.Name(), flag.ContinueOnError)
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, fmt.Errorf("%w: %s: %v", ErrUsage, fs.Name(), err)
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return pos, nil
+		}
+		if consumed := len(args) - len(rest); consumed > 0 && args[consumed-1] == "--" {
+			return append(pos, rest...), nil
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+}
+
+// noArgs rejects positional arguments for commands that take none, so a
+// typo is an error instead of being silently ignored.
+func noArgs(fs *flag.FlagSet, pos []string) error {
+	if len(pos) > 0 {
+		return fmt.Errorf("%w: %s takes no arguments (got %q)", ErrUsage, fs.Name(), pos)
+	}
+	return nil
 }
 
 // commonFlags collects the flags every subcommand shares.

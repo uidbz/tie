@@ -433,7 +433,7 @@ func TestAddGroupCoverSidecarForMergedAlbum(t *testing.T) {
 		{"/lib/A/Alb/Artwork/front.jpg", 70},
 		{"/lib/A/Alb/Artwork/back.jpg", 60},
 	}
-	addGroupCoverSidecar(&g, tree)
+	addGroupCoverSidecar(&g, tree, nil)
 	if len(g.Sidecars) != 1 || g.Sidecars[0] != "/lib/A/Alb/cover.jpg" {
 		t.Fatalf("Sidecars = %v, want the root cover", g.Sidecars)
 	}
@@ -447,7 +447,7 @@ func TestAddGroupCoverSidecarForMergedAlbum(t *testing.T) {
 
 func TestAddGroupCoverSidecarRejectsBackOnly(t *testing.T) {
 	g := fileListGroup([]scannedFile{audio("/lib/A/Alb/01.flac", "A", "", "Alb", 2000)})
-	addGroupCoverSidecar(&g, []pathSize{{"/lib/A/Alb/back.jpg", 10}})
+	addGroupCoverSidecar(&g, []pathSize{{"/lib/A/Alb/back.jpg", 10}}, nil)
 	if len(g.Sidecars) != 0 {
 		t.Errorf("back-only artwork must stay a last resort, got %v", g.Sidecars)
 	}

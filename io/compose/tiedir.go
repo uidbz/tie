@@ -130,9 +130,9 @@ func (n *treeNode) upload(filehost string, cfg putlib.PutConfig) (metadata.DirEn
 }
 
 // uploadBlob PUTs body to the filehost under its content address and returns an
-// entry describing it. UploadMultipart reports only transport errors, so a
-// rejected upload surfaces as the response body landing in Hash; comparing it
-// against the address we computed is what catches an HTTP-level failure.
+// entry describing it. HTTP and transport failures come back as ErrorMsg (via
+// fhclient); comparing the echoed address against the one computed here also
+// catches a filehost that stored the body under a different address.
 func uploadBlob(filehost string, cfg putlib.PutConfig, body string) (metadata.DirEntry, error) {
 	hash, err := cfg.AddressOf(strings.NewReader(body))
 	if err != nil {
@@ -168,6 +168,13 @@ func splitTreePath(path string) ([]string, error) {
 			continue
 		case "..":
 			return nil, fmt.Errorf("tie tree: path %q escapes the tree root", path)
+		}
+		// Readers (metadata.ParseDirLine) drop entries whose name is not
+		// a valid single component (e.g. one containing a backslash), so
+		// refuse them here instead of writing a tree that silently loses
+		// them.
+		if !metadata.ValidEntryName(name) {
+			return nil, fmt.Errorf("tie tree: path %q: %q is not a valid entry name", path, name)
 		}
 		parts = append(parts, name)
 	}

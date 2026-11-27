@@ -557,18 +557,33 @@ tie media index /music/Some/Album   # one collection
 **Cover artwork** uses two relations: `(C, cover, <imageHash>)` is the chosen
 source image (a folder scan, an extracted embedded picture, an archive member,
 or a download), while the optional `(C, thumbnail, <thumbHash>)` is the small
-display JPEG cached by GUI clients. `ResolveCover` ranks folder/subfolder/
-parent images, embedded pictures and zip members; low-confidence candidates
-(back covers, disc scans, booklets) are returned only as a last resort.
-`IndexCollection` records a high/medium-confidence folder image automatically;
-`tie media covers` can probe embedded pictures and archive members too:
+display JPEG cached by GUI clients. `(C, cover-source, …)` records where the
+cover came from: `file:<path>` (relative to the collection, e.g.
+`Artwork/front.jpg` or `../folder.jpg`), `embedded:<audioHash>` or
+`archive:<member>`. `ResolveCover` ranks folder/subfolder/parent images,
+embedded pictures and zip members; low-confidence candidates (back covers,
+disc scans, booklets) are returned only as a last resort. `IndexCollection`
+records a high/medium-confidence folder image automatically (at most two
+directory levels down, and never over an existing `cover` or `thumbnail`).
+
+`tie media covers` resolves every `audio-dir` and `audio-archive` collection
+that has no cover yet (or only a low-confidence one); a collection with only a
+legacy thumbnail counts as covered. Embedded pictures, archive members and
+parent-folder artwork are all probed by default:
 
 ```sh
-tie media covers --missing                     # folder artwork already in the store
-tie media covers --missing --embedded          # also probe first tracks
-tie media covers --missing --archives          # also extract zip covers
-tie media covers --missing --dry-run           # report choices without writing
+tie media covers                               # collections still missing artwork
+tie media covers /music/Some/Album             # just these collections (path or uid)
+tie media covers --all                         # re-resolve collections that already have one
+tie media covers --embedded=false --archives=false   # folder artwork only, no filehost reads
+tie media covers --parent=false                # ignore parent-folder artwork
+tie media covers --type image-dir --limit 50   # another collection type, first 50
+tie media covers --dry-run                     # report choices without writing or uploading
 ```
+
+A cover that changes clears the collection's `thumbnail`, so the clients
+regenerate it from the new source on first display. A filehost failure while
+probing is reported as an `error` row, not as `none`.
 
 **Playlists** are their own subjects (`tie-type playlist`, ordered
 `playlist-track "000003:<hash>"` entries, `member-of` from each track) —
@@ -663,6 +678,6 @@ note the range in the relation name or a companion triple.
 | Download bytes | `tie download <hash> <dest>` |
 | Backup / restore | `tie dump > f.tsv` / `tie restore < f.tsv` |
 | Index collections | `tie media backfill [--rescan]` |
-| Backfill cover artwork | `tie media covers --missing [--embedded] [--archives]` |
+| Backfill cover artwork | `tie media covers [--all] [--embedded=false] [--archives=false] [--dry-run]` |
 | Recent plays | `tie history --since 7d` |
 | Playlists | `tie playlist list` |

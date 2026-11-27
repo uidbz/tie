@@ -38,6 +38,11 @@ const maxDirNodes = 1_000_000
 // errManifestTooLarge is returned when a walk exceeds its node budget.
 var errManifestTooLarge = errors.New("manifest too large (>1e6 nodes)")
 
+// ErrBlobNotFound is what a filehost 404 for a tree's blob unwraps to.
+// Build treats only this as "an Optional source is absent"; any other
+// error (timeout, 5xx) is a real failure.
+var ErrBlobNotFound = errors.New("blob not found on filehost")
+
 // httpClient gives every filehost read a deadline. http.Get used
 // http.DefaultClient, which has no timeout: a stalled filehost would hang a
 // script — and, because this package is shared with the runner, a pipeline
@@ -219,6 +224,9 @@ func fetchBlob(url, hash string) (manifest []byte, isDir bool, size int, err err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, 0, fmt.Errorf("%w: %s", ErrBlobNotFound, hash)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, 0, fmt.Errorf("bad status for %s: %s", hash, resp.Status)
 	}

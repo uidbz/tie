@@ -501,7 +501,7 @@ flushed on-disk state.
 go build ./...
 ```
 
-Requires Go 1.27.3+. Mounting additionally requires FUSE (`/dev/fuse`,
+Requires Go 1.27.2+ (1.27.4+ recommended for stdlib security fixes). Mounting additionally requires FUSE (`/dev/fuse`,
 `fusermount`).
 
 ### Makefile

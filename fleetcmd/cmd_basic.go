@@ -2,6 +2,7 @@
 package fleetcmd
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,9 +14,13 @@ import (
 
 func runStatus(args []string) error {
 	var cf commonFlags
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	cf.register(fs)
-	fs.Parse(args)
+	if pos, err := parseFlags(fs, args); err != nil {
+		return err
+	} else if err := noArgs(fs, pos); err != nil {
+		return err
+	}
 
 	cfg, err := loadFleetConfig(cf.conf)
 	if err != nil {
@@ -58,7 +63,7 @@ func runStatus(args []string) error {
 			h.Name, ver, commit, caps.ActiveJobs, caps.QueueLength, strings.Join(caps.Capabilities, ","))
 	}
 	if fail {
-		os.Exit(1)
+		return errors.New("one or more runners are down")
 	}
 	return nil
 }
@@ -90,12 +95,16 @@ func runRestart(args []string) error {
 	var only string
 	var allowSelf bool
 	var idleTimeout time.Duration
-	fs := flag.NewFlagSet("restart", flag.ExitOnError)
+	fs := flag.NewFlagSet("restart", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&only, "only", "", "restrict to one host")
 	fs.BoolVar(&allowSelf, "allow-self", false, "permit restarting the host this tool runs on")
 	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Minute, "how long to wait for the host to go idle")
-	fs.Parse(args)
+	if pos, err := parseFlags(fs, args); err != nil {
+		return err
+	} else if err := noArgs(fs, pos); err != nil {
+		return err
+	}
 
 	cfg, err := loadFleetConfig(cf.conf)
 	if err != nil {

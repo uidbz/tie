@@ -540,8 +540,10 @@ func (tc *TieClient) IndexCollection(uid DirUID, opts IndexOptions) (IndexResult
 	}
 
 	// Choose a source artwork image while the member rows are already here.
-	// Existing covers are user/previous-run choices: never overwrite them.
-	if RowFirst(root, RelCover) == "" {
+	// Existing covers are user/previous-run choices: never overwrite them. A
+	// legacy thumbnail without a cover counts as a choice too (it is what the
+	// clients display), as it does for `tie media covers`.
+	if RowFirst(root, RelCover) == "" && RowFirst(root, RelThumbnail) == "" {
 		if cand := bestMemberCover(members); cand != nil {
 			b.Set(string(uid), string(RelCover), []string{cand.Hash})
 			b.Set(string(uid), string(RelCoverSource), []string{"file:" + cand.Path})

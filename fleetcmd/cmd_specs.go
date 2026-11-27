@@ -34,9 +34,13 @@ func runSpecs(args []string) error {
 
 func specsShow(args []string) error {
 	var cf commonFlags
-	fs := flag.NewFlagSet("specs show", flag.ExitOnError)
+	fs := flag.NewFlagSet("specs show", flag.ContinueOnError)
 	cf.register(fs)
-	fs.Parse(args)
+	if pos, err := parseFlags(fs, args); err != nil {
+		return err
+	} else if err := noArgs(fs, pos); err != nil {
+		return err
+	}
 	cfg, err := loadFleetConfig(cf.conf)
 	if err != nil {
 		return err
@@ -61,14 +65,17 @@ func specsEdit(args []string) error {
 	var sets, drops, addCaps stringList
 	var host string
 	var dryRun bool
-	fs := flag.NewFlagSet("specs edit", flag.ExitOnError)
+	fs := flag.NewFlagSet("specs edit", flag.ContinueOnError)
 	cf.register(fs)
 	fs.Var(&sets, "set", "add/update spec as name:cpu:rammb:gpu (repeatable)")
 	fs.Var(&drops, "drop", "remove [JobTypeSpecs.name] and its capability (repeatable)")
 	fs.Var(&addCaps, "add-cap", "append capability (repeatable)")
 	fs.StringVar(&host, "host", "", "edit this fleet host's runner config (remote_config key) over SSH")
 	fs.BoolVar(&dryRun, "dry-run", false, "print the diff, write nothing")
-	fs.Parse(args)
+	pos, err := parseFlags(fs, args)
+	if err != nil {
+		return err
+	}
 
 	if len(sets)+len(drops)+len(addCaps) == 0 {
 		return fmt.Errorf("nothing to do: pass --set/--drop/--add-cap")
@@ -92,10 +99,10 @@ func specsEdit(args []string) error {
 	if host != "" {
 		return specsEditRemote(host, cf, specEdits, []string(drops), addCap, dryRun)
 	}
-	if fs.NArg() != 1 {
-		return fmt.Errorf("usage: specs edit FILE [flags] (or --host H)")
+	if len(pos) != 1 {
+		return fmt.Errorf("%w: specs edit FILE [flags] (or --host H)", ErrUsage)
 	}
-	path := fs.Arg(0)
+	path := pos[0]
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -185,10 +192,13 @@ func runAutostart(args []string) error {
 	}
 	var cf commonFlags
 	var host string
-	fs := flag.NewFlagSet("autostart", flag.ExitOnError)
+	fs := flag.NewFlagSet("autostart", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&host, "host", "", "fleet host whose config to read/edit (default: local FILE)")
-	fs.Parse(args[1:])
+	pos, err := parseFlags(fs, args[1:])
+	if err != nil {
+		return err
+	}
 
 	var src string
 	var localPath string // set when editing a local FILE
@@ -208,10 +218,10 @@ func runAutostart(args []string) error {
 		}
 		src = out
 	} else {
-		if fs.NArg() < 1 {
-			return fmt.Errorf("no FILE given and no --host")
+		if len(pos) < 1 {
+			return fmt.Errorf("%w: no FILE given and no --host", ErrUsage)
 		}
-		localPath = fs.Arg(0)
+		localPath = pos[0]
 		b, err := os.ReadFile(localPath)
 		if err != nil {
 			return err
@@ -226,7 +236,7 @@ func runAutostart(args []string) error {
 		}
 		return nil
 	case "set":
-		names := fs.Args()
+		names := pos
 		if host == "" {
 			names = names[1:] // Arg(0) was the FILE
 		}
@@ -255,16 +265,24 @@ func runAutostart(args []string) error {
 				return err
 			}
 			defer os.Remove(tmp.Name())
+			tmp.Close()
 			if err := os.WriteFile(tmp.Name(), []byte(out), 0o600); err != nil {
 				return err
 			}
-			if _, err := ssh.run(host, "cp -a ~/"+cfg.RemoteConfig+" ~/"+cfg.RemoteConfig+".fleet-bak"); err != nil {
+			// scp remote paths do NOT expand ~ (same as specs edit
+			// --host), so resolve the home dir over ssh first.
+			home, err := ssh.run(host, "echo $HOME")
+			if err != nil {
 				return err
 			}
-			if err := ssh.copyTo(tmp.Name(), host, "~/"+cfg.RemoteConfig); err != nil {
+			cfgPath := strings.TrimSpace(home) + "/" + cfg.RemoteConfig
+			if _, err := ssh.run(host, "cp -a "+cfgPath+" "+cfgPath+".fleet-bak"); err != nil {
 				return err
 			}
-			fmt.Printf("wrote %s:~/%s (takes effect at next restart)\n", host, cfg.RemoteConfig)
+			if err := ssh.copyTo(tmp.Name(), host, cfgPath); err != nil {
+				return err
+			}
+			fmt.Printf("wrote %s:%s (takes effect at next restart)\n", host, cfgPath)
 			return nil
 		}
 		return backupAndWrite(localPath, out)

@@ -19,6 +19,13 @@ import (
 	runnerapi "github.com/uidbz/tie/runner/api"
 )
 
+// sameBase reports whether url is base or a path below it: a plain
+// prefix test let https://runner1 match https://runner10.
+func sameBase(url, base string) bool {
+	url, base = strings.TrimRight(url, "/"), strings.TrimRight(base, "/")
+	return base != "" && (url == base || strings.HasPrefix(url, base+"/"))
+}
+
 // fleetAdminToken resolves the seed's AdminToken: --token flag >
 // TIE_FLEET_ADMIN_TOKEN env > the seed host's [[Hosts]] Token key (matched
 // by API prefix against the seed URL).
@@ -28,7 +35,7 @@ func fleetAdminToken(token string, hosts []Host, seed string) (string, error) {
 	}
 	if token == "" {
 		for _, h := range hosts {
-			if h.API == seed || strings.HasPrefix(seed, h.API) {
+			if sameBase(seed, h.API) {
 				token = h.Token
 				break
 			}
@@ -110,16 +117,15 @@ func runHosts(args []string) error {
 	}
 	var cf commonFlags
 	var token string
-	fs := flag.NewFlagSet("hosts", flag.ExitOnError)
+	fs := flag.NewFlagSet("hosts", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&token, "token", "", bt("seed AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the seed [[Hosts]] Token key)"))
 	sub := args[0]
-	rest := args[1:]
-	// Allow flags before or after the subcommand.
-	if err := fs.Parse(rest); err != nil {
+	// Flags may come before or after the <id> argument.
+	rest, err := parseFlags(fs, args[1:])
+	if err != nil {
 		return err
 	}
-	rest = fs.Args()
 
 	cfg, err := loadFleetConfig(cf.conf)
 	if err != nil {

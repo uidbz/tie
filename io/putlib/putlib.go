@@ -1,4 +1,5 @@
-// putlib project main.go
+// Package putlib uploads files and directories to a tie filehost under
+// their content addresses.
 package putlib
 
 import (
@@ -81,11 +82,11 @@ func (pc *PutConfig) AddressOfFile(file string) (string, error) { // function to
 	return pc.AddressOf(fsocket)
 }
 
-func (pc *PutConfig) AddressOf(input io.Reader) (string, error) { // function to compute address based on content
+// AddressOf computes the content address of input.
+func (pc *PutConfig) AddressOf(input io.Reader) (string, error) {
 	return metadata.HashReader(input)
 }
 
-// UploadFile uploads the file at path under the content address hash.
 // context returns the run's context, so a PutConfig built without one behaves
 // like context.Background().
 func (pc *PutConfig) context() context.Context {
@@ -95,6 +96,7 @@ func (pc *PutConfig) context() context.Context {
 	return pc.Context
 }
 
+// UploadFile uploads the file at path under the content address hash.
 func (pc *PutConfig) UploadFile(fh *fhclient.Client, hash, path string) StatusItem {
 	f, err := os.OpenFile(path, os.O_RDONLY, 0644)
 	if err != nil {
@@ -182,7 +184,6 @@ func headOf(s string) []byte {
 	return []byte(s[:metadata.MagicNumber])
 }
 
-// fileHead samples a file's leading bytes and size without reading it whole.
 // hashAndHead hashes a file and captures its leading bytes from one open. The
 // uploader used to open the file to hash it, then again to read the head for
 // media-type detection, then a third time to stream it (§5.2 item 3) — three

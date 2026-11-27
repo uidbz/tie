@@ -4,6 +4,60 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
+## [Unreleased]
+
+### Changed
+
+- **runclient: a job's own `ErrorMsg` is no longer a call error** (#162).
+  `GetStatus` returns a failed job's record with a nil error; only "no such
+  job" is an error (wrapping `ErrNotFound`, for both the new 404 and the
+  legacy 200 not-found reply). New `JobError` judges a finished record.
+  `ShowProgressCtx` ends on `Done` whatever the outcome (a failed job used to
+  be retried ~151 s and reported as "still on" the runner) and keeps watching
+  through error markers on a running job.
+- `StartRun`/`StartRunCtx` return the job record with an error wrapping
+  `ErrJobFailed` for a failed or cancelled job, and an error wrapping
+  `ctx.Err()` when the watch is cancelled before the job finishes (it used to
+  look like success, with an empty `OutputHash`).
+- Watches (`ShowProgressCtx`, `WaitPipelineCtx`, `tie-run logs -f`) stop at
+  once on `ErrNotFound`/`ErrUnauthorized` instead of backing off.
+- `WaitPipelineCtx` returns an error for a cancelled pipeline and the last
+  state seen (not a zero `Pipeline`) when the wait is cancelled.
+- The runner answers `GET /api/status/{id}` for an unknown job with 404 (was
+  200 with an `ErrorMsg`), as docs/runner-api.md already specified.
+
+### Fixed
+
+- Cover resolver (#168, #169): album-import cover sidecars no longer pull in
+  a sibling album's artwork and break ties deterministically; `IndexCollection`
+  records only high/medium-confidence covers within two levels and never over
+  a legacy thumbnail; a filehost failure while probing embedded pictures is an
+  error, not "no cover"; `tie media covers` clears the stale thumbnail when the
+  cover changes; the covers docs match the real flags.
+- Scheduler: in-flight external jobs were rarely polled (and never timed out)
+  once a local or finished job was in the live map (#172).
+- tie-runner: a cert push to a runner serving plain HTTP crashed it (second
+  listener on the same port); it now switches to TLS in place (#173).
+- fleetcmd: `init` overwrote an unparsable config; `os.Exit` in library code;
+  `rollout` stamped `--rev` as the version (breaking version-gated reload) and
+  deployed stale builds after a failed fast-forward; flags after positionals
+  were ignored (#164, #165).
+- io/compose: tree entry names readers drop are refused; an `Optional` source
+  is skipped only when absent, not on a filehost outage (#167).
+
+### Added
+
+- tie-exec takes settings from a filehost hash (`-settings-hash`,
+  `$TIE_SETTINGS_HASH`) or inline JSON (`$TIE_SETTINGS`) when no `-settings`
+  file is given, so remote batch backends can deliver them; the app still
+  gets `-settings <file>`. `executor.HandleState.OutputHash` lets an
+  external backend report a job's result (#174).
+- fleetcmd `cert push` requires `--only` or `--all` and refuses a cert/key
+  that do not pair or whose names do not cover every target (#166).
+- `runclient.FindJob` (fleet lookup of a job's owning runner),
+  `CallRunnerCtx`, `GetStatusCtx`, `GetPipelineCtx`, `PipelineError` (#162,
+  #163). In-flight polls are aborted when the watch context is cancelled.
+
 ## [0.9.0] - 2026-11-08
 
 ### Added

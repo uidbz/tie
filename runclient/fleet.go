@@ -256,3 +256,33 @@ func FindPipeline(servers []string, id string) (Keyed[api.Pipeline], error) {
 	}
 	return Keyed[api.Pipeline]{}, fmt.Errorf("pipeline %s not found on any runner", id)
 }
+
+// FindJob locates a job by ID across the given runners and returns the
+// runner that owns it with the job's current record. Every runner but
+// the owner answers "not found" (404, or the legacy 200 not-found
+// record — GetStatus maps both to ErrNotFound). Errors other than
+// not-found are reported so an unreachable fleet is not mistaken for
+// "the job does not exist"; the returned error then still wraps
+// ErrNotFound only when every reachable runner said so.
+func FindJob(servers []string, jobID string) (Keyed[api.JobStatus], error) {
+	results, errs := fanOut(servers, func(s string) (api.JobStatus, error) {
+		return GetStatus(s, jobID)
+	})
+	// Deterministic choice when (unexpectedly) several runners answer:
+	// first in the given server order.
+	for _, s := range servers {
+		if st, ok := results[s]; ok {
+			return Keyed[api.JobStatus]{Server: s, Value: st}, nil
+		}
+	}
+	var hard []error
+	for _, s := range servers {
+		if err, ok := errs[s]; ok && !errors.Is(err, ErrNotFound) {
+			hard = append(hard, err)
+		}
+	}
+	if len(hard) > 0 {
+		return Keyed[api.JobStatus]{}, fmt.Errorf("job %s not found on any reachable runner (%w)", jobID, errors.Join(hard...))
+	}
+	return Keyed[api.JobStatus]{}, fmt.Errorf("job %s: %w on any runner", jobID, ErrNotFound)
+}
