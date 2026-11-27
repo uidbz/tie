@@ -7,12 +7,15 @@ package fleetcmd
 
 import (
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -61,20 +64,34 @@ func (cl *api) certPush(apiBase, token, certPEM, keyPEM string) error {
 
 func runCert(args []string) error {
 	if len(args) < 1 {
-		return errors.New(bt("usage: tie-fleet cert status | cert push --only H --crt FILE --key FILE"))
+		return errors.New(bt("usage: tie-fleet cert status | cert push (--only H | --all) --crt FILE --key FILE [--skip-name-check]"))
 	}
 	var cf commonFlags
 	var only, crtFile, keyFile, token string
+	var all, skipNameCheck bool
 	fs := flag.NewFlagSet("cert", flag.ContinueOnError)
 	cf.register(fs)
 	fs.StringVar(&only, "only", "", "restrict to one host")
 	fs.StringVar(&crtFile, "crt", "", "PEM certificate file (push)")
 	fs.StringVar(&keyFile, "key", "", "PEM key file (push)")
 	fs.StringVar(&token, "token", "", bt("AdminToken (else TIE_FLEET_ADMIN_TOKEN env, else the [[Hosts]] token key)"))
+	fs.BoolVar(&all, "all", false, "push: target every fleet host (otherwise --only is required)")
+	fs.BoolVar(&skipNameCheck, "skip-name-check", false, "push: do not require the cert to cover each host's API hostname")
 	if pos, err := parseFlags(fs, args[1:]); err != nil {
 		return err
 	} else if err := noArgs(fs, pos); err != nil {
 		return err
+	}
+
+	if args[0] == "push" {
+		// A push without a target used to go to every host: one
+		// host-specific cert then broke TLS fleet-wide (#166).
+		if only == "" && !all {
+			return fmt.Errorf("%w: cert push needs --only HOST or --all", ErrUsage)
+		}
+		if only != "" && all {
+			return fmt.Errorf("%w: cert push takes --only or --all, not both", ErrUsage)
+		}
 	}
 
 	cfg, err := loadFleetConfig(cf.conf)
@@ -113,6 +130,11 @@ func runCert(args []string) error {
 		if err != nil {
 			return err
 		}
+		// Check every target before pushing to any: a partial rollout of a
+		// cert that does not fit is worse than none.
+		if err := checkCertForHosts(certPEM, keyPEM, hosts, skipNameCheck); err != nil {
+			return err
+		}
 		for _, h := range hosts {
 			tok := token
 			if tok == "" {
@@ -131,6 +153,48 @@ func runCert(args []string) error {
 		}
 		return nil
 	default:
-		return errors.New(bt("usage: tie-fleet cert status | cert push --only H --crt FILE --key FILE"))
+		return errors.New(bt("usage: tie-fleet cert status | cert push (--only H | --all) --crt FILE --key FILE [--skip-name-check]"))
 	}
+}
+
+// checkCertForHosts verifies a cert/key pair before it is pushed: the key
+// must match the certificate, and (unless skipNameCheck) the certificate
+// must be valid for each target host's API hostname, so a host-specific
+// cert cannot be pushed to the wrong hosts.
+func checkCertForHosts(certPEM, keyPEM []byte, hosts []Host, skipNameCheck bool) error {
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return fmt.Errorf("cert/key do not form a valid pair: %w", err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("parsing certificate: %w", err)
+	}
+	if skipNameCheck {
+		return nil
+	}
+	var bad []string
+	for _, h := range hosts {
+		u, err := url.Parse(h.API)
+		if err != nil || u.Hostname() == "" {
+			bad = append(bad, fmt.Sprintf("%s (API %q has no hostname)", h.Name, h.API))
+			continue
+		}
+		if err := leaf.VerifyHostname(u.Hostname()); err != nil {
+			bad = append(bad, fmt.Sprintf("%s (%s)", h.Name, u.Hostname()))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf("certificate (names %v) is not valid for: %s; nothing pushed (use --skip-name-check to override)",
+			append(leaf.DNSNames, ipStrings(leaf)...), strings.Join(bad, ", "))
+	}
+	return nil
+}
+
+func ipStrings(c *x509.Certificate) []string {
+	var out []string
+	for _, ip := range c.IPAddresses {
+		out = append(out, ip.String())
+	}
+	return out
 }

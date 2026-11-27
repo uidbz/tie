@@ -85,9 +85,10 @@ commands:
   hosts approve|remove <id>    approve a pending joiner / tombstone a host
                                (seed from the 'seed' key in tie-fleet.toml)
   cert status                  TLS cert expiry per runner (warns <30 days)
-  cert push --only H --crt F --key F
+  cert push (--only H | --all) --crt F --key F [--skip-name-check]
                                remote cert install + hot swap (POST /api/cert,
-                               no restart)
+                               no restart); refuses a cert that does not cover
+                               every target's API hostname
   reload [--only H] [--token T] [--restart]
                                hot config reload (no container restart): POST
                                /api/reload with the AdminToken (--token,
