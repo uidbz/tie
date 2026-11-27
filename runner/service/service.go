@@ -206,6 +206,16 @@ func (m *Manager) StartService(service string) (string, error) {
 		return "", fmt.Errorf("service already running")
 	}
 
+	// Sweep stale or zombie corpses before docker run: a failed or
+	// stopped start leaves the container name claimed, and dockerd can
+	// never stop a zombie PID, so nothing else ever clears it and every
+	// later start dies with a name Conflict. rm -f removes corpses; a
+	// missing container is the normal case, so errors are ignored.
+	if out, err := m.exec("rm", "-f", containerName).CombinedOutput(); err == nil {
+		slog.Info("Removed stale service container before start",
+			"service", service, "output", strings.TrimSpace(string(out)))
+	}
+
 	img, found := m.cfg.Images.Get(service)
 	if !found {
 		return "", fmt.Errorf("image not deployed on this runner: %s", service)
@@ -280,10 +290,16 @@ func (m *Manager) StopTask(task string) (string, error) {
 	m.Deactivate(task)
 
 	if output, err := m.exec("stop", containerName).CombinedOutput(); err != nil {
-		slog.Error("Failed to stop task", "task", task, "error", err, "output", string(output))
-		return "", fmt.Errorf("failed to stop service: %s", string(output))
+		// A zombie container PID can never be stopped (dockerd cannot
+		// signal a dead init), so a stop failure must not abort the
+		// request: the forced removal below is what actually frees the
+		// name and the port.
+		slog.Warn("docker stop failed, forcing removal", "task", task, "error", err, "output", string(output))
 	}
-	m.exec("rm", containerName).Run()
+	if out, rmErr := m.exec("rm", "-f", containerName).CombinedOutput(); rmErr != nil {
+		slog.Error("Failed to remove service container", "task", task, "error", rmErr, "output", string(out))
+		return "", fmt.Errorf("failed to stop service: %s", string(out))
+	}
 
 	// Release the port back to the dynamic pool, unless it is a fixed-port
 	// TCP service whose port stays reserved across stop/start cycles.

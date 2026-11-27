@@ -143,6 +143,47 @@ func TestPortPoolBindProbe(t *testing.T) {
 	}
 }
 
+// TestStopTaskForceRemovesZombie: dockerd cannot signal a zombie init,
+// so docker stop fails forever for such a container. The stop failure
+// must not abort StopTask — forced removal is what frees the name and
+// the port.
+func TestStopTaskForceRemovesZombie(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+case "$1" in
+  run) exit 0;;
+  stop) echo "cannot kill zombie" >&2; exit 1;;
+  rm) exit 0;;
+  inspect) echo "true 0";;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := New(Config{
+		Images:            images.New(nil, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080}),
+		Bin:               bin,
+		Ports:             NewPortPool(2000, 2002),
+		ExtDir:            t.TempDir(),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  25 * time.Millisecond,
+	})
+	if _, err := m.StartService("svc:v1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.StopTask("svc:v1"); err != nil {
+		t.Fatalf("stop must complete despite an unstoppably zombie: %v", err)
+	}
+	if _, ok := m.RunningPort("svc:v1"); ok {
+		t.Error("task still running after zombie stop")
+	}
+	if port, err := m.cfg.Ports.Next(); err != nil || port != 2000 {
+		t.Errorf("port %d %v: zombie stop must release the port", port, err)
+	}
+}
+
 func TestStartServiceArgs(t *testing.T) {
 	m, argsLog := testManager(t, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080})
 
@@ -153,7 +194,9 @@ func TestStartServiceArgs(t *testing.T) {
 	if msg != "Service svc:v1 started on port 2000" {
 		t.Errorf("message = %q", msg)
 	}
-	want := "run\n-d\n--name\nsvc-v1\n--pull\nalways\n--mount\ntype=bind,src=" +
+	// The stale-corpse sweep runs before the start (issue fix: a zombie
+	// or half-removed container claims the name forever otherwise).
+	want := "rm\n-f\nsvc-v1\nrun\n-d\n--name\nsvc-v1\n--pull\nalways\n--mount\ntype=bind,src=" +
 		m.extDir("svc-v1") + ",dst=/ext\n-p\n2000:8080\nregistry.example/tie/svc:v1\n"
 	if got := calls(t, argsLog); got != want {
 		t.Errorf("docker invocation:\n got %q\nwant %q", got, want)
