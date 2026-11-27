@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -314,7 +315,9 @@ func (m *Manager) StopTask(task string) (string, error) {
 
 // Restore reserves the fixed ports of deployed TCP services, registers
 // every service task, and starts the autostart ones. Run it at startup,
-// after the image registry has been loaded.
+// after the image registry has been loaded. A service container that
+// survived a runner restart is adopted instead of recreated (see
+// adoptRunning).
 func (m *Manager) Restore() {
 	for _, img := range m.cfg.Images.List() {
 		if img.ServiceExternalPort > 0 {
@@ -326,12 +329,68 @@ func (m *Manager) Restore() {
 			continue
 		}
 		m.RegisterTask(img.Name, api.TaskTypeService)
+		if m.adoptRunning(img) {
+			continue
+		}
 		if img.ServiceAutostart {
 			if _, err := m.StartService(img.Name); err != nil {
 				slog.Error("Autostart failed", "service", img.Name, "error", err)
 			}
 		}
 	}
+}
+
+// adoptRunning re-attaches the runner to a service container that
+// survived a runner restart: docker run -d containers outlive the
+// runner process, so an upgrade (SIGTERM + new binary + start) can keep
+// every service serving clients without a blip. Returns true when the
+// container was adopted (task state and published host port restored).
+//
+// Policy:
+//   - running, and the published port equals a pinned ServiceExternalPort
+//     (or the entry has no pin): adopt; the port is marked reserved so
+//     the dynamic pool never hands it out a second time.
+//   - running but published on a different port than an operator pin:
+//     the pin is a client contract, so recreate on the pinned port.
+//   - present but not running: remove the corpse (a stale name would
+//     make the next docker run fail) and fall back to autostart.
+//   - absent (host reboot etc.): fall back to autostart.
+func (m *Manager) adoptRunning(img images.Image) bool {
+	containerName := executor.ContainerName(img.Name)
+	internal := fmt.Sprint(img.ServiceInternalPort)
+	// The internal port is substituted into the template BEFORE docker
+	// sees it. A placeholder left inside {{...}} would reach the daemon
+	// as an invalid key ("INTERNAL" is not a port map entry) and the
+	// inspect would fail — adoption would silently never happen.
+	out, err := m.exec("inspect", "-f",
+		fmt.Sprintf(`{{if .State.Running}}{{with (index .NetworkSettings.Ports "%s/tcp")}}{{(index . 0).HostPort}}{{end}}{{end}}`, internal),
+		containerName).CombinedOutput()
+	if err != nil {
+		return false // container absent: nothing to adopt
+	}
+	portStr := strings.TrimSpace(string(out))
+	if portStr == "" {
+		// present but not running (or unexpected port map): clear it out
+		m.exec("rm", "-f", containerName).Run()
+		slog.Info("Stale service container removed for autostart", "service", img.Name)
+		return false
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		slog.Warn("Cannot parse published port, not adopting", "service", img.Name, "inspect_output", portStr)
+		return false
+	}
+	if img.ServiceExternalPort > 0 && port != img.ServiceExternalPort {
+		slog.Info("Running container is off its pinned port, recreating",
+			"service", img.Name, "actual_port", port, "pinned_port", img.ServiceExternalPort)
+		m.exec("stop", containerName).Run()
+		m.exec("rm", "-f", containerName).Run()
+		return false
+	}
+	m.cfg.Ports.Reserve(port)
+	m.Activate(img.Name, api.TaskTypeService, port)
+	slog.Info("Adopted running service container", "service", img.Name, "external_port", port, "internal_port", internal)
+	return true
 }
 
 // StopAll stops every running service (graceful shutdown).

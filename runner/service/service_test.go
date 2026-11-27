@@ -184,6 +184,88 @@ esac
 	}
 }
 
+// TestRestoreAdoptsRunningContainers: docker run -d containers outlive
+// the runner process, so boot must re-register the running container
+// (published port restored, port reserved from the dynamic pool)
+// instead of recreating it.
+func TestRestoreAdoptsRunningContainers(t *testing.T) {
+	bin, argsLog, _ := writeFakeCLI(t, "2001") // inspect answers: HostPort 2001
+	m := New(Config{
+		Images:            images.New(nil, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080}),
+		Bin:               bin,
+		Registry:          "registry.example/tie",
+		ExtDir:            t.TempDir(),
+		Ports:             NewPortPool(2000, 2002),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  50 * time.Millisecond,
+	})
+	m.Restore()
+	if port, ok := m.RunningPort("svc:v1"); !ok || port != 2001 {
+		t.Fatalf("adopted port = %d %v, want 2001", port, ok)
+	}
+	if strings.Contains(calls(t, argsLog), "run\n") {
+		t.Errorf("adopted service must not be recreated:\n%s", calls(t, argsLog))
+	}
+	// The adopted port must never be handed out by the dynamic pool.
+	for i := 0; i < 3; i++ {
+		if port, err := m.cfg.Ports.Next(); err == nil && port == 2001 {
+			t.Fatal("adopted port leaked into the dynamic pool")
+		}
+	}
+}
+
+// TestRestoreRecreatesOffPinnedPort: an operator ServiceExternalPort pin
+// is a client contract — a running container off its pin gets recreated
+// on the pinned port.
+func TestRestoreRecreatesOffPinnedPort(t *testing.T) {
+	bin, argsLog, _ := writeFakeCLI(t, "2001") // running on 2001
+	m := New(Config{
+		Images: images.New(nil, images.Image{
+			Name: "svc:v1", IsService: true, ServiceInternalPort: 8080,
+			ServiceExternalPort: 2002, ServiceAutostart: true,
+		}),
+		Bin:               bin,
+		ExtDir:            t.TempDir(),
+		Ports:             NewPortPool(2000, 2002),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  50 * time.Millisecond,
+	})
+	m.Restore()
+	got := calls(t, argsLog)
+	for _, want := range []string{"stop\nsvc-v1\n", "rm\n-f\nsvc-v1\n", "-p\n2002:8080\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("off-pinned container must be stopped, removed and recreated (missing %q):\n%s", want, got)
+		}
+	}
+}
+
+// TestRestoreRemovesStaleCorpse: a present-but-not-running container
+// must be removed so autostart's docker run can claim the name.
+func TestRestoreRemovesStaleCorpse(t *testing.T) {
+	bin, argsLog, _ := writeFakeCLI(t, "") // inspect present, not running
+	m := New(Config{
+		Images: images.New(nil, images.Image{
+			Name: "svc:v1", IsService: true, ServiceInternalPort: 8080, ServiceAutostart: true,
+		}),
+		Bin:               bin,
+		ExtDir:            t.TempDir(),
+		Ports:             NewPortPool(2000, 2002),
+		ReadinessDelay:    5 * time.Millisecond,
+		ReadinessInterval: 5 * time.Millisecond,
+		ReadinessTimeout:  50 * time.Millisecond,
+	})
+	m.Restore()
+	got := calls(t, argsLog)
+	if !strings.Contains(got, "rm\n-f\nsvc-v1\n") {
+		t.Errorf("stale corpse not removed:\n%s", got)
+	}
+	if !strings.Contains(got, "run\n") {
+		t.Errorf("autostart must run after the corpse sweep:\n%s", got)
+	}
+}
+
 func TestStartServiceArgs(t *testing.T) {
 	m, argsLog := testManager(t, images.Image{Name: "svc:v1", IsService: true, ServiceInternalPort: 8080})
 
