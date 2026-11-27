@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/), and the project aims
 to follow semantic versioning.
 
-## [Unreleased]
+## [0.10.0] - 2026-11-27
 
 ### Changed
 
@@ -47,6 +47,9 @@ to follow semantic versioning.
 
 ### Added
 
+- tie-filehost replication primitives: `GET /-/keys/{store}` (cursor-paginated
+  keylist in shard order) and `POST /-/has` (batch membership), with
+  `fhclient.Client.Keys`/`Has` (#159).
 - tie-exec takes settings from a filehost hash (`-settings-hash`,
   `$TIE_SETTINGS_HASH`) or inline JSON (`$TIE_SETTINGS`) when no `-settings`
   file is given, so remote batch backends can deliver them; the app still
