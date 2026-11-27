@@ -47,6 +47,22 @@ func (s *Server) deployHandler(w http.ResponseWriter, r *http.Request) {
 	switch req.Command {
 	case "test":
 		slog.Info("Deploy test requested", "name", req.Name, "job_type", req.JobType)
+
+		if req.JobType == executor.WEBSERVICE || req.JobType == executor.TCPSERVICE {
+			errorResponse(w, "Services require --prod")
+			return
+		}
+
+		// No test input was uploaded (empty TestInput on the client):
+		// build and report, but do not run the freshly built image
+		// against a meaningless empty input.
+		if req.TestInputHash == "" {
+			jsonResponse(w, api.DeployResponse{
+				Message: buildOutput + "\nNo test input configured - image built but not test-run.",
+			})
+			return
+		}
+
 		jobReq := api.JobRequest{
 			JobType:   req.JobType,
 			Handler:   req.Name,
@@ -54,11 +70,6 @@ func (s *Server) deployHandler(w http.ResponseWriter, r *http.Request) {
 			AppHash:   req.AppHash,
 			Debug:     req.Debug,
 			Settings:  req.TestSettingsData,
-		}
-
-		if req.JobType == executor.WEBSERVICE || req.JobType == executor.TCPSERVICE {
-			errorResponse(w, "Services require --prod")
-			return
 		}
 
 		// A test job is a non-prod job on this runner: it exercises the
