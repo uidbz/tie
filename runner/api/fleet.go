@@ -25,6 +25,10 @@ type CapabilityReply struct {
 	// DeployedImageCount lets admins spot a runner that missed an image
 	// replication: the count should match across the fleet.
 	DeployedImageCount int
+	// ScheduledJobCount is the number of recurring job schedules this
+	// runner evaluates (a shell-level feature; runners without one
+	// report 0). Fleet visibility for scheduled work.
+	ScheduledJobCount int
 }
 
 // FleetReply is the response of GET /api/fleet: every runner URL that makes
